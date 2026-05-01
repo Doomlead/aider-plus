@@ -121,6 +121,41 @@ aider --model o3-mini --api-key openai=<key>
 
 See the [installation instructions](https://aider.chat/docs/install.html) and [usage documentation](https://aider.chat/docs/usage.html) for more details.
 
+## Headless scripting & Discord integrations
+
+Aider now includes a bot-friendly headless mode and Python integration helpers for building front-ends like Discord bots.
+
+### Run in headless mode
+
+Use `--headless` (or `--bot-mode`) to run non-interactively with sensible automation defaults:
+
+- Disables pretty terminal UI output.
+- Disables streaming output.
+- Auto-approves prompts (`--yes-always` behavior).
+
+```bash
+aider --headless --model sonnet /path/to/repo
+```
+
+### Build integrations with Python
+
+The core `Coder` API now supports async-friendly and structured workflows:
+
+- `run_async(...)` for non-blocking execution.
+- `run_structured(...)` / `run_structured_async(...)` for JSON-friendly results.
+- Event hooks (eg `thinking`, `applying_edits`, `response_complete`) to stream progress updates to chat tools.
+
+### Discord integration scaffold
+
+Use `aider.integrations.discord` as a starting point for production bots:
+
+- `DiscordAiderBot` async facade around `Coder`.
+- `DiscordSessionManager` for per-channel/user/repo session handling.
+- `RepositoryPolicy` for repository whitelist enforcement.
+- `DiscordAiderConfig` safety controls for user allow/deny lists, prompt size limits and request timeouts.
+
+`discord.py` is imported lazily so core aider installs/tests do not require Discord dependencies unless you use this integration module.
+
 ## More Information
 
 ### Documentation
@@ -177,4 +212,3 @@ See the [installation instructions](https://aider.chat/docs/install.html) and [u
 - *"Been using aider as my daily driver for over a year ... I absolutely love the tool, like beyond words."* — [koleok on Discord](https://discord.com/channels/1131200896827654144/1273248471394291754/1356727448372252783)
 - *"Aider ... is the tool to benchmark against."* — [BeetleB on Hacker News](https://news.ycombinator.com/item?id=43930201)
 - *"aider is really cool"* — [kache on X](https://x.com/yacineMTB/status/1911224442430124387)
-

@@ -27,21 +27,28 @@ class AgentContext:
     project_instructions: str
 
 
-    def get_dynamic_messages(self) -> list[dict]:
-        """Return only the new messages for this turn (user message + recent tool results)."""
-        dynamic_messages: list[dict] = []
+    def get_user_turn_content(self) -> str:
+        """Return a single user-turn payload for the current loop step."""
+        parts: list[str] = []
 
         if self.recent_conversation:
-            dynamic_messages.extend(self.recent_conversation[-4:])
+            convo_lines = []
+            for msg in self.recent_conversation[-4:]:
+                role = msg.get("role", "unknown")
+                content = str(msg.get("content", "")).strip()
+                if content:
+                    convo_lines.append(f"- {role}: {content[:400]}")
+            if convo_lines:
+                parts.append("Recent conversation:\n" + "\n".join(convo_lines))
 
         if self.recent_coder_results:
-            dynamic_messages.append({
-                "role": "user",
-                "content": "Recent coder/tool results:\n" + json.dumps(self.recent_coder_results),
-            })
+            parts.append(
+                "Recent coder/tool results:\n"
+                + json.dumps(self.recent_coder_results, separators=(",", ":"))
+            )
 
-        dynamic_messages.append({"role": "user", "content": self.user_message})
-        return dynamic_messages
+        parts.append(f"Current user request:\n{self.user_message}")
+        return "\n\n".join(parts)
 
 
 class AiderAgentLoop:
@@ -158,12 +165,14 @@ class AiderAgentLoop:
         context = self.build_context(user_message)
         await self._emit("context_built", {"context": asdict(context)})
 
-        messages: list[dict] = self.coder.format_messages().all_messages()
-        messages.extend(context.get_dynamic_messages())
+        self.coder.cur_messages += [
+            {"role": "user", "content": context.get_user_turn_content()},
+        ]
 
         last_coder_result = None
         for idx in range(max(1, min(self.config.max_iterations, 3))):
             await self._emit("thinking", {"iteration": idx + 1})
+            messages = self.coder.format_messages().all_messages()
             completion = await self._call_llm(messages)
             message = completion.choices[0].message
             tool_calls = getattr(message, "tool_calls", None) or []
@@ -202,8 +211,10 @@ class AiderAgentLoop:
                     "name": "aider_coder",
                     "content": json.dumps(last_coder_result),
                 }
-                messages.append({"role": "assistant", "content": message.content or "", "tool_calls": tool_calls})
-                messages.append(tool_message)
+                self.coder.cur_messages.append(
+                    {"role": "assistant", "content": message.content or "", "tool_calls": tool_calls}
+                )
+                self.coder.cur_messages.append(tool_message)
                 break
 
             if not handled_tool:

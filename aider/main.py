@@ -543,6 +543,13 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         args.assistant_output_color = "blue"
         args.code_theme = "default"
 
+    if args.headless:
+        args.pretty = False
+        args.stream = False
+        args.yes_always = True
+        args.fancy_input = False
+        args.multiline = False
+
     if return_coder and args.yes_always is None:
         args.yes_always = True
 
@@ -1004,6 +1011,7 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
             auto_copy_context=args.copy_paste,
             auto_accept_architect=args.auto_accept_architect,
             add_gitignore_files=args.add_gitignore_files,
+            bot_mode=args.headless,
         )
     except UnknownEditFormat as err:
         io.tool_error(str(err))

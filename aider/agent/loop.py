@@ -165,9 +165,11 @@ class AiderAgentLoop:
         context = self.build_context(user_message)
         await self._emit("context_built", {"context": asdict(context)})
 
-        self.coder.cur_messages += [
-            {"role": "user", "content": context.get_user_turn_content()},
-        ]
+        user_turn_content = context.get_user_turn_content()
+        if hasattr(self.coder, "add_message"):
+            self.coder.add_message("user", user_turn_content)
+        else:
+            self.coder.cur_messages.append({"role": "user", "content": user_turn_content})
 
         last_coder_result = None
         for idx in range(max(1, min(self.config.max_iterations, 3))):

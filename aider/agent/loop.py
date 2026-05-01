@@ -166,10 +166,7 @@ class AiderAgentLoop:
         await self._emit("context_built", {"context": asdict(context)})
 
         user_turn_content = context.get_user_turn_content()
-        if hasattr(self.coder, "add_message"):
-            self.coder.add_message("user", user_turn_content)
-        else:
-            self.coder.cur_messages.append({"role": "user", "content": user_turn_content})
+        self.coder.run(user_turn_content)
 
         last_coder_result = None
         for idx in range(max(1, min(self.config.max_iterations, 3))):
@@ -206,17 +203,6 @@ class AiderAgentLoop:
                     include_diff=include_diff,
                 )
                 last_coder_result = coder_result.to_dict()
-
-                tool_message = {
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "name": "aider_coder",
-                    "content": json.dumps(last_coder_result),
-                }
-                self.coder.cur_messages.append(
-                    {"role": "assistant", "content": message.content or "", "tool_calls": tool_calls}
-                )
-                self.coder.cur_messages.append(tool_message)
                 break
 
             if not handled_tool:

@@ -139,18 +139,6 @@ class DiscordAiderBot:
 
         coder = await self.get_or_create_session(key, repo_path, model=model)
 
-        if callback:
-            def _sync_event_handler(_coder, event_name, payload):
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(callback(event_name, payload))
-                except RuntimeError:
-                    pass
-
-            coder.add_event_handler("thinking", _sync_event_handler)
-            coder.add_event_handler("applying_edits", _sync_event_handler)
-            coder.add_event_handler("response_complete", _sync_event_handler)
-
         agent = AiderAgentLoop(coder=coder, callback=callback)
         task = asyncio.create_task(agent.run(prompt))
 

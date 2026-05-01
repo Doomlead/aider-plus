@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -13,6 +13,44 @@ from aider.llm import litellm
 class AgentLoopConfig:
     max_iterations: int = 3
     max_repo_files: int = 50
+
+
+@dataclass
+class AgentContext:
+    """Structured context bundle consumed by the LLM call."""
+
+    system_prompt: str
+    user_message: str
+    recent_conversation: list[dict]
+    recent_coder_results: list[dict]
+    repository: dict[str, Any]
+    project_instructions: str
+
+    def as_messages_for_coder(self, coder) -> list[dict]:
+        """Build messages using coder-native formatting to preserve cacheable prefixes."""
+        dynamic_context = {
+            "recent_conversation": self.recent_conversation,
+            "recent_coder_results": self.recent_coder_results,
+            "project_instructions": self.project_instructions,
+        }
+        user_content = (
+            f"User request:\n{self.user_message}\n\n"
+            f"Recent dynamic context (non-cacheable):\n{json.dumps(dynamic_context)}"
+        )
+
+        original_cur = list(getattr(coder, "cur_messages", []) or [])
+        original_done = list(getattr(coder, "done_messages", []) or [])
+        original_sys = getattr(coder, "main_system", "")
+        try:
+            coder.main_system = self.system_prompt
+            coder.done_messages = original_done
+            coder.cur_messages = [{"role": "user", "content": user_content}]
+            chunks = coder.format_messages()
+            return chunks.all_messages()
+        finally:
+            coder.main_system = original_sys
+            coder.cur_messages = original_cur
+            coder.done_messages = original_done
 
 
 class AiderAgentLoop:
@@ -57,12 +95,40 @@ class AiderAgentLoop:
             history.append({"role": msg.get("role"), "content": msg.get("content", "")[:1000]})
         return history
 
+    def _build_coder_results_context(self) -> List[dict]:
+        coder_results = []
+        for msg in (self.coder.done_messages or [])[-10:]:
+            if msg.get("role") != "tool":
+                continue
+            content = msg.get("content", "")
+            if not content:
+                continue
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict):
+                    coder_results.append(parsed)
+                else:
+                    coder_results.append({"raw": str(parsed)[:2000]})
+            except (json.JSONDecodeError, TypeError):
+                coder_results.append({"raw": str(content)[:2000]})
+        return coder_results[-3:]
+
     def _system_prompt(self) -> str:
         return (
             "You are an autonomous software development company agent. "
             "You can reply directly, ask clarifying questions, or call the aider_coder tool "
-            "to prototype and implement changes. Prefer short plans and iterative execution. "
+            "to prototype and implement changes. Prefer short plans, explicit assumptions, and iterative execution. "
             "When uncertain, ask for clarification before editing."
+        )
+
+    def build_context(self, user_message: str) -> AgentContext:
+        return AgentContext(
+            system_prompt=self._system_prompt(),
+            user_message=user_message,
+            recent_conversation=self._build_history_context(),
+            recent_coder_results=self._build_coder_results_context(),
+            repository=self._build_repo_context(),
+            project_instructions=getattr(self.coder, "main_system", ""),
         )
 
     def _tools(self) -> list[dict]:
@@ -86,30 +152,22 @@ class AiderAgentLoop:
         ]
 
     async def _call_llm(self, messages: list[dict]) -> Any:
+        extra_params = dict(getattr(self.coder.main_model, "extra_params", {}) or {})
         kwargs = {
             "model": self.coder.main_model.name,
             "messages": messages,
             "tools": self._tools(),
             "tool_choice": "auto",
             "temperature": 0,
+            **extra_params,
         }
         return await asyncio.to_thread(litellm.completion, **kwargs)
 
     async def run(self, user_message: str) -> Dict[str, Any]:
-        repo_context = self._build_repo_context()
-        history_context = self._build_history_context()
-        instructions = getattr(self.coder, "main_system", "")
+        context = self.build_context(user_message)
+        await self._emit("context_built", {"context": asdict(context)})
 
-        context_blob = {
-            "repo": repo_context,
-            "recent_history": history_context,
-            "project_instructions": instructions,
-        }
-
-        messages: list[dict] = [
-            {"role": "system", "content": self._system_prompt()},
-            {"role": "user", "content": f"Context:\n{json.dumps(context_blob)}\n\nUser request:\n{user_message}"},
-        ]
+        messages: list[dict] = context.as_messages_for_coder(self.coder)
 
         last_coder_result = None
         for idx in range(max(1, min(self.config.max_iterations, 3))):

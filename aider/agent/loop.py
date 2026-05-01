@@ -26,17 +26,31 @@ class AgentContext:
     repository: dict[str, Any]
     project_instructions: str
 
-    def as_messages(self) -> list[dict]:
-        payload = {
+    def as_messages_for_coder(self, coder) -> list[dict]:
+        """Build messages using coder-native formatting to preserve cacheable prefixes."""
+        dynamic_context = {
             "recent_conversation": self.recent_conversation,
             "recent_coder_results": self.recent_coder_results,
-            "repository": self.repository,
             "project_instructions": self.project_instructions,
         }
-        return [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": f"Context:\n{json.dumps(payload)}\n\nUser request:\n{self.user_message}"},
-        ]
+        user_content = (
+            f"User request:\n{self.user_message}\n\n"
+            f"Recent dynamic context (non-cacheable):\n{json.dumps(dynamic_context)}"
+        )
+
+        original_cur = list(getattr(coder, "cur_messages", []) or [])
+        original_done = list(getattr(coder, "done_messages", []) or [])
+        original_sys = getattr(coder, "main_system", "")
+        try:
+            coder.main_system = self.system_prompt
+            coder.done_messages = original_done
+            coder.cur_messages = [{"role": "user", "content": user_content}]
+            chunks = coder.format_messages()
+            return chunks.all_messages()
+        finally:
+            coder.main_system = original_sys
+            coder.cur_messages = original_cur
+            coder.done_messages = original_done
 
 
 class AiderAgentLoop:
@@ -138,12 +152,14 @@ class AiderAgentLoop:
         ]
 
     async def _call_llm(self, messages: list[dict]) -> Any:
+        extra_params = dict(getattr(self.coder.main_model, "extra_params", {}) or {})
         kwargs = {
             "model": self.coder.main_model.name,
             "messages": messages,
             "tools": self._tools(),
             "tool_choice": "auto",
             "temperature": 0,
+            **extra_params,
         }
         return await asyncio.to_thread(litellm.completion, **kwargs)
 
@@ -151,7 +167,7 @@ class AiderAgentLoop:
         context = self.build_context(user_message)
         await self._emit("context_built", {"context": asdict(context)})
 
-        messages: list[dict] = context.as_messages()
+        messages: list[dict] = context.as_messages_for_coder(self.coder)
 
         last_coder_result = None
         for idx in range(max(1, min(self.config.max_iterations, 3))):

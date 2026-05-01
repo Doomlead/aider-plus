@@ -7,12 +7,16 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from aider.llm import litellm
+from aider import models
 
 
 @dataclass
 class AgentLoopConfig:
     max_iterations: int = 3
     max_repo_files: int = 50
+    use_architect_mode: bool = True
+    architect_model: str | None = None
+    editor_model: str | None = None
 
 
 @dataclass
@@ -58,6 +62,25 @@ class AiderAgentLoop:
         self.coder = coder
         self.callback = callback
         self.config = config or AgentLoopConfig()
+        self.editor_coder = self._build_editor_coder()
+        self.architect_coder = self._build_architect_coder()
+
+    def _build_editor_coder(self):
+        if not self.config.editor_model:
+            return self.coder
+        return self.coder.clone(main_model=models.Model(self.config.editor_model))
+
+    def _build_architect_coder(self):
+        kwargs: dict[str, Any] = {
+            "edit_format": "ask",
+            "map_tokens": 0,
+            "suggest_shell_commands": False,
+            "cache_prompts": False,
+            "num_cache_warming_pings": 0,
+        }
+        if self.config.architect_model:
+            kwargs["main_model"] = models.Model(self.config.architect_model)
+        return self.coder.clone(**kwargs)
 
     async def _emit(self, event_name: str, payload: dict):
         if self.callback:
@@ -113,9 +136,10 @@ class AiderAgentLoop:
 
     def _system_prompt(self) -> str:
         return (
-            "You are an autonomous software development company agent. "
-            "You can reply directly, ask clarifying questions, or call the aider_coder tool "
-            "to prototype and implement changes. Prefer short plans, explicit assumptions, and iterative execution. "
+            "You are an autonomous software development orchestration agent. "
+            "For coding tasks, invoke aider_coder so work executes in two phases: "
+            "Architect planning first, then Editor implementation. "
+            "Prefer explicit assumptions, short plans, and iterative execution. "
             "When uncertain, ask for clarification before editing."
         )
 
@@ -166,16 +190,13 @@ class AiderAgentLoop:
         await self._emit("context_built", {"context": asdict(context)})
 
         user_turn_content = context.get_user_turn_content()
-        add_user_message = getattr(self.coder, "add_user_message", None)
-        if callable(add_user_message):
-            add_user_message(user_turn_content)
-        else:
-            self.coder.cur_messages.append({"role": "user", "content": user_turn_content})
-
         last_coder_result = None
         for idx in range(max(1, min(self.config.max_iterations, 3))):
             await self._emit("thinking", {"iteration": idx + 1})
-            messages = self.coder.format_messages().all_messages()
+            messages = [
+                {"role": "system", "content": context.system_prompt},
+                {"role": "user", "content": user_turn_content},
+            ]
             completion = await self._call_llm(messages)
             message = completion.choices[0].message
             tool_calls = getattr(message, "tool_calls", None) or []
@@ -200,11 +221,10 @@ class AiderAgentLoop:
                 include_diff = bool(args.get("include_diff", False))
                 composed_task = task if not constraints else f"{task}\n\nConstraints:\n{constraints}"
 
-                await self._emit("applying_edits", {"iteration": idx + 1, "task": task})
-                coder_result = await self.coder.run_structured_async(
-                    composed_task,
-                    preproc=True,
+                coder_result = await self._run_architect_then_editor(
+                    task=composed_task,
                     include_diff=include_diff,
+                    iteration=idx + 1,
                 )
                 last_coder_result = coder_result.to_dict()
                 break
@@ -218,3 +238,33 @@ class AiderAgentLoop:
             "agent_iterations": min(self.config.max_iterations, 3),
             "coder_result": last_coder_result,
         }
+
+    async def _run_architect_then_editor(self, *, task: str, include_diff: bool, iteration: int):
+        if not self.config.use_architect_mode:
+            await self._emit("executing_edits", {"iteration": iteration, "task": task})
+            return await self.editor_coder.run_structured_async(task, preproc=True, include_diff=include_diff)
+
+        await self._emit("planning_with_architect", {"iteration": iteration, "task": task})
+        architect_prompt = (
+            "Create a concise, implementation-ready plan for the editor. "
+            "List assumptions, target files, and step-by-step edits.\n\n"
+            f"User request:\n{task}"
+        )
+        plan_result = await self.architect_coder.run_structured_async(
+            architect_prompt,
+            preproc=True,
+            include_diff=False,
+        )
+        plan_text = plan_result.summary or ""
+
+        editor_instruction = (
+            f"Original request:\n{task}\n\n"
+            f"Architect plan/proposal:\n{plan_text}\n\n"
+            "Implement the request faithfully following the plan."
+        )
+        await self._emit("executing_edits", {"iteration": iteration, "task": task, "plan": plan_text})
+        return await self.editor_coder.run_structured_async(
+            editor_instruction,
+            preproc=True,
+            include_diff=include_diff,
+        )

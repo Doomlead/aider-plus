@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Dict, Optional, Set
 
 from aider.agent import AiderAgentLoop
+from aider.agent.loop import AgentLoopConfig
 from aider.coders import Coder
 from aider.main import main as aider_main
 
@@ -48,6 +49,9 @@ class DiscordAiderConfig:
     allow_users: Set[int] = field(default_factory=set)
     deny_users: Set[int] = field(default_factory=set)
     repository_policy: RepositoryPolicy = field(default_factory=RepositoryPolicy)
+    use_architect_mode: bool = True
+    architect_model: Optional[str] = None
+    editor_model: Optional[str] = None
 
 
 class DiscordSessionManager:
@@ -139,7 +143,15 @@ class DiscordAiderBot:
 
         coder = await self.get_or_create_session(key, repo_path, model=model)
 
-        agent = AiderAgentLoop(coder=coder, callback=callback)
+        agent = AiderAgentLoop(
+            coder=coder,
+            callback=callback,
+            config=AgentLoopConfig(
+                use_architect_mode=self.config.use_architect_mode,
+                architect_model=self.config.architect_model,
+                editor_model=self.config.editor_model,
+            ),
+        )
         task = asyncio.create_task(agent.run(prompt))
 
         try:

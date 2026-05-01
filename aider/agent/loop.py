@@ -7,12 +7,16 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from aider.llm import litellm
+from aider import models
 
 
 @dataclass
 class AgentLoopConfig:
     max_iterations: int = 3
     max_repo_files: int = 50
+    use_architect_mode: bool = True
+    architect_model: str | None = None
+    editor_model: str | None = None
 
 
 @dataclass
@@ -26,30 +30,29 @@ class AgentContext:
     repository: dict[str, Any]
     project_instructions: str
 
-    def prepare_messages_for_llm(self, coder) -> list[dict]:
-        """Delegate full message construction to Aider's native formatter."""
-        dynamic_context = {
-            "recent_conversation": self.recent_conversation,
-            "recent_coder_results": self.recent_coder_results,
-            "project_instructions": self.project_instructions,
-        }
-        user_content = (
-            f"User request:\n{self.user_message}\n\n"
-            f"Recent dynamic context (non-cacheable):\n{json.dumps(dynamic_context)}"
-        )
 
-        original_cur = list(getattr(coder, "cur_messages", []) or [])
-        original_done = list(getattr(coder, "done_messages", []) or [])
-        original_sys = getattr(coder, "main_system", "")
-        try:
-            coder.main_system = self.system_prompt
-            coder.done_messages = list(self.recent_conversation)
-            coder.cur_messages = [{"role": "user", "content": user_content}]
-            return coder.format_messages().all_messages()
-        finally:
-            coder.main_system = original_sys
-            coder.cur_messages = original_cur
-            coder.done_messages = original_done
+    def get_user_turn_content(self) -> str:
+        """Return a single user-turn payload for the current loop step."""
+        parts: list[str] = []
+
+        if self.recent_conversation:
+            convo_lines = []
+            for msg in self.recent_conversation[-4:]:
+                role = msg.get("role", "unknown")
+                content = str(msg.get("content", "")).strip()
+                if content:
+                    convo_lines.append(f"- {role}: {content[:400]}")
+            if convo_lines:
+                parts.append("Recent conversation:\n" + "\n".join(convo_lines))
+
+        if self.recent_coder_results:
+            parts.append(
+                "Recent coder/tool results:\n"
+                + json.dumps(self.recent_coder_results, separators=(",", ":"))
+            )
+
+        parts.append(f"Current user request:\n{self.user_message}")
+        return "\n\n".join(parts)
 
 
 class AiderAgentLoop:
@@ -59,6 +62,25 @@ class AiderAgentLoop:
         self.coder = coder
         self.callback = callback
         self.config = config or AgentLoopConfig()
+        self.editor_coder = self._build_editor_coder()
+        self.architect_coder = self._build_architect_coder()
+
+    def _build_editor_coder(self):
+        if not self.config.editor_model:
+            return self.coder
+        return self.coder.clone(main_model=models.Model(self.config.editor_model))
+
+    def _build_architect_coder(self):
+        kwargs: dict[str, Any] = {
+            "edit_format": "ask",
+            "map_tokens": 0,
+            "suggest_shell_commands": False,
+            "cache_prompts": False,
+            "num_cache_warming_pings": 0,
+        }
+        if self.config.architect_model:
+            kwargs["main_model"] = models.Model(self.config.architect_model)
+        return self.coder.clone(**kwargs)
 
     async def _emit(self, event_name: str, payload: dict):
         if self.callback:
@@ -114,9 +136,10 @@ class AiderAgentLoop:
 
     def _system_prompt(self) -> str:
         return (
-            "You are an autonomous software development company agent. "
-            "You can reply directly, ask clarifying questions, or call the aider_coder tool "
-            "to prototype and implement changes. Prefer short plans, explicit assumptions, and iterative execution. "
+            "You are an autonomous software development orchestration agent. "
+            "For coding tasks, invoke aider_coder so work executes in two phases: "
+            "Architect planning first, then Editor implementation. "
+            "Prefer explicit assumptions, short plans, and iterative execution. "
             "When uncertain, ask for clarification before editing."
         )
 
@@ -166,11 +189,14 @@ class AiderAgentLoop:
         context = self.build_context(user_message)
         await self._emit("context_built", {"context": asdict(context)})
 
-        messages: list[dict] = context.prepare_messages_for_llm(self.coder)
-
+        user_turn_content = context.get_user_turn_content()
         last_coder_result = None
         for idx in range(max(1, min(self.config.max_iterations, 3))):
             await self._emit("thinking", {"iteration": idx + 1})
+            messages = [
+                {"role": "system", "content": context.system_prompt},
+                {"role": "user", "content": user_turn_content},
+            ]
             completion = await self._call_llm(messages)
             message = completion.choices[0].message
             tool_calls = getattr(message, "tool_calls", None) or []
@@ -195,22 +221,12 @@ class AiderAgentLoop:
                 include_diff = bool(args.get("include_diff", False))
                 composed_task = task if not constraints else f"{task}\n\nConstraints:\n{constraints}"
 
-                await self._emit("applying_edits", {"iteration": idx + 1, "task": task})
-                coder_result = await self.coder.run_structured_async(
-                    composed_task,
-                    preproc=True,
+                coder_result = await self._run_architect_then_editor(
+                    task=composed_task,
                     include_diff=include_diff,
+                    iteration=idx + 1,
                 )
                 last_coder_result = coder_result.to_dict()
-
-                tool_message = {
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "name": "aider_coder",
-                    "content": json.dumps(last_coder_result),
-                }
-                messages.append({"role": "assistant", "content": message.content or "", "tool_calls": tool_calls})
-                messages.append(tool_message)
                 break
 
             if not handled_tool:
@@ -222,3 +238,33 @@ class AiderAgentLoop:
             "agent_iterations": min(self.config.max_iterations, 3),
             "coder_result": last_coder_result,
         }
+
+    async def _run_architect_then_editor(self, *, task: str, include_diff: bool, iteration: int):
+        if not self.config.use_architect_mode:
+            await self._emit("executing_edits", {"iteration": iteration, "task": task})
+            return await self.editor_coder.run_structured_async(task, preproc=True, include_diff=include_diff)
+
+        await self._emit("planning_with_architect", {"iteration": iteration, "task": task})
+        architect_prompt = (
+            "Create a concise, implementation-ready plan for the editor. "
+            "List assumptions, target files, and step-by-step edits.\n\n"
+            f"User request:\n{task}"
+        )
+        plan_result = await self.architect_coder.run_structured_async(
+            architect_prompt,
+            preproc=True,
+            include_diff=False,
+        )
+        plan_text = plan_result.summary or ""
+
+        editor_instruction = (
+            f"Original request:\n{task}\n\n"
+            f"Architect plan/proposal:\n{plan_text}\n\n"
+            "Implement the request faithfully following the plan."
+        )
+        await self._emit("executing_edits", {"iteration": iteration, "task": task, "plan": plan_text})
+        return await self.editor_coder.run_structured_async(
+            editor_instruction,
+            preproc=True,
+            include_diff=include_diff,
+        )

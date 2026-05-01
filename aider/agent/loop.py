@@ -27,7 +27,7 @@ class AgentContext:
     project_instructions: str
 
     def as_messages_for_coder(self, coder) -> list[dict]:
-        """Build messages using coder-native formatting to preserve cacheable prefixes."""
+        """Build cache-friendly messages using coder-native prefix construction."""
         dynamic_context = {
             "recent_conversation": self.recent_conversation,
             "recent_coder_results": self.recent_coder_results,
@@ -42,11 +42,23 @@ class AgentContext:
         original_done = list(getattr(coder, "done_messages", []) or [])
         original_sys = getattr(coder, "main_system", "")
         try:
+            # Build Aider's stable/cacheable prefix using native chunk formatting.
             coder.main_system = self.system_prompt
-            coder.done_messages = original_done
-            coder.cur_messages = [{"role": "user", "content": user_content}]
-            chunks = coder.format_messages()
-            return chunks.all_messages()
+            coder.done_messages = []
+            coder.cur_messages = []
+            prefix_chunks = coder.format_messages()
+            prefix_messages = (
+                prefix_chunks.system
+                + prefix_chunks.examples
+                + prefix_chunks.readonly_files
+                + prefix_chunks.repo
+                + prefix_chunks.chat_files
+            )
+
+            # Keep dynamic content after the cache-friendly prefix.
+            dynamic_messages = list(self.recent_conversation)
+            dynamic_messages.append({"role": "user", "content": user_content})
+            return prefix_messages + dynamic_messages
         finally:
             coder.main_system = original_sys
             coder.cur_messages = original_cur

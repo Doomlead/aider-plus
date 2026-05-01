@@ -684,6 +684,16 @@ def get_parser(default_config_files, git_root):
         default=False,
     )
     group.add_argument(
+        "--headless",
+        "--bot-mode",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Enable non-interactive mode defaults suitable for bots/integrations"
+            " (disables pretty output/streaming and auto-approves prompts)"
+        ),
+    )
+    group.add_argument(
         "--show-repo-map",
         action="store_true",
         help="Print the repo map and exit (debug)",

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import base64
+import asyncio
 import hashlib
 import json
 import locale
@@ -15,6 +16,7 @@ import time
 import traceback
 from collections import defaultdict
 from datetime import datetime
+from dataclasses import dataclass, field
 
 # Optional dependency: used to convert locale codes (eg ``en_US``)
 # into human-readable language names (eg ``English``).
@@ -24,7 +26,7 @@ except ImportError:  # Babel not installed – we will fall back to a small mapp
     Locale = None
 from json.decoder import JSONDecodeError
 from pathlib import Path
-from typing import List
+from typing import Callable, Dict, List, Optional
 
 from rich.console import Console
 
@@ -68,6 +70,28 @@ class MissingAPIKeyError(ValueError):
 
 class FinishReasonLength(Exception):
     pass
+
+
+@dataclass
+class CoderResult:
+    summary: str
+    files_changed: List[str] = field(default_factory=list)
+    commit_hash: Optional[str] = None
+    commit_message: Optional[str] = None
+    diff: Optional[str] = None
+    lint_passed: Optional[bool] = None
+    tests_passed: Optional[bool] = None
+
+    def to_dict(self):
+        return dict(
+            summary=self.summary,
+            files_changed=self.files_changed,
+            commit_hash=self.commit_hash,
+            commit_message=self.commit_message,
+            diff=self.diff,
+            lint_passed=self.lint_passed,
+            tests_passed=self.tests_passed,
+        )
 
 
 def wrap_fence(name):
@@ -338,6 +362,8 @@ class Coder:
         file_watcher=None,
         auto_copy_context=False,
         auto_accept_architect=True,
+        bot_mode=False,
+        event_handlers=None,
     ):
         # Fill in a dummy Analytics if needed, but it is never .enable()'d
         self.analytics = analytics if analytics is not None else Analytics()
@@ -352,6 +378,14 @@ class Coder:
 
         self.auto_copy_context = auto_copy_context
         self.auto_accept_architect = auto_accept_architect
+        self.bot_mode = bot_mode
+        self.event_handlers: Dict[str, List[Callable]] = defaultdict(list)
+        if event_handlers:
+            for event_name, handlers in event_handlers.items():
+                if callable(handlers):
+                    self.event_handlers[event_name].append(handlers)
+                else:
+                    self.event_handlers[event_name].extend(handlers)
 
         self.ignore_mentions = ignore_mentions
         if not self.ignore_mentions:
@@ -425,6 +459,11 @@ class Coder:
 
         if cache_prompts and self.main_model.cache_control:
             self.add_cache_headers = True
+
+        if self.bot_mode:
+            self.stream = False
+            self.show_diffs = False
+            self.io.pretty = False
 
         self.show_diffs = show_diffs
 
@@ -890,6 +929,44 @@ class Coder:
                     self.keyboard_interrupt()
         except EOFError:
             return
+
+    async def run_async(self, with_message=None, preproc=True):
+        return await asyncio.to_thread(self.run, with_message, preproc)
+
+    def run_structured(self, with_message, preproc=True, include_diff=False):
+        summary = self.run(with_message=with_message, preproc=preproc) or ""
+        files_changed = sorted(self.aider_edited_files or [])
+        diff = None
+        if include_diff and self.repo and files_changed:
+            try:
+                diff = self.repo.get_diffs(files_changed)
+            except Exception:
+                diff = None
+
+        result = CoderResult(
+            summary=summary,
+            files_changed=files_changed,
+            commit_hash=self.last_aider_commit_hash,
+            commit_message=getattr(self, "last_aider_commit_message", None),
+            diff=diff,
+            lint_passed=self.lint_outcome,
+            tests_passed=self.test_outcome,
+        )
+        return result
+
+    async def run_structured_async(self, with_message, preproc=True, include_diff=False):
+        return await asyncio.to_thread(self.run_structured, with_message, preproc, include_diff)
+
+    def add_event_handler(self, event_name, handler):
+        self.event_handlers[event_name].append(handler)
+
+    def _emit_event(self, event_name, **payload):
+        handlers = self.event_handlers.get(event_name, [])
+        for handler in handlers:
+            try:
+                handler(self, event_name, payload)
+            except Exception as err:
+                self.io.tool_warning(f"Event handler error for {event_name}: {err}")
 
     def copy_context(self):
         if self.auto_copy_context:
@@ -1418,6 +1495,7 @@ class Coder:
 
     def send_message(self, inp):
         self.event("message_send_starting")
+        self._emit_event("thinking", message=inp)
 
         # Notify IO that LLM processing is starting
         self.io.llm_started()
@@ -1585,6 +1663,7 @@ class Coder:
         edited = self.apply_updates()
 
         if edited:
+            self._emit_event("applying_edits", files=sorted(edited))
             self.aider_edited_files.update(edited)
             saved_message = self.auto_commit(edited)
 
@@ -1608,6 +1687,7 @@ class Coder:
 
         shared_output = self.run_shell_commands()
         if shared_output:
+            self._emit_event("shell_commands", output=shared_output)
             self.cur_messages += [
                 dict(role="user", content=shared_output),
                 dict(role="assistant", content="Ok"),
@@ -1621,6 +1701,13 @@ class Coder:
                 if ok:
                     self.reflected_message = test_errors
                     return
+
+        self._emit_event(
+            "response_complete",
+            summary=self.partial_response_content,
+            files_changed=sorted(self.aider_edited_files),
+            commit_hash=self.last_aider_commit_hash,
+        )
 
     def reply_completed(self):
         pass

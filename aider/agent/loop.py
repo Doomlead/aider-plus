@@ -26,30 +26,22 @@ class AgentContext:
     repository: dict[str, Any]
     project_instructions: str
 
-    def prepare_messages_for_llm(self, coder) -> list[dict]:
-        """Delegate full message construction to Aider's native formatter."""
-        dynamic_context = {
-            "recent_conversation": self.recent_conversation,
-            "recent_coder_results": self.recent_coder_results,
-            "project_instructions": self.project_instructions,
-        }
-        user_content = (
-            f"User request:\n{self.user_message}\n\n"
-            f"Recent dynamic context (non-cacheable):\n{json.dumps(dynamic_context)}"
-        )
 
-        original_cur = list(getattr(coder, "cur_messages", []) or [])
-        original_done = list(getattr(coder, "done_messages", []) or [])
-        original_sys = getattr(coder, "main_system", "")
-        try:
-            coder.main_system = self.system_prompt
-            coder.done_messages = list(self.recent_conversation)
-            coder.cur_messages = [{"role": "user", "content": user_content}]
-            return coder.format_messages().all_messages()
-        finally:
-            coder.main_system = original_sys
-            coder.cur_messages = original_cur
-            coder.done_messages = original_done
+    def get_dynamic_messages(self) -> list[dict]:
+        """Return only the new messages for this turn (user message + recent tool results)."""
+        dynamic_messages: list[dict] = []
+
+        if self.recent_conversation:
+            dynamic_messages.extend(self.recent_conversation[-4:])
+
+        if self.recent_coder_results:
+            dynamic_messages.append({
+                "role": "user",
+                "content": "Recent coder/tool results:\n" + json.dumps(self.recent_coder_results),
+            })
+
+        dynamic_messages.append({"role": "user", "content": self.user_message})
+        return dynamic_messages
 
 
 class AiderAgentLoop:
@@ -166,7 +158,8 @@ class AiderAgentLoop:
         context = self.build_context(user_message)
         await self._emit("context_built", {"context": asdict(context)})
 
-        messages: list[dict] = context.prepare_messages_for_llm(self.coder)
+        messages: list[dict] = self.coder.format_messages().all_messages()
+        messages.extend(context.get_dynamic_messages())
 
         last_coder_result = None
         for idx in range(max(1, min(self.config.max_iterations, 3))):

@@ -165,9 +165,7 @@ class AiderAgentLoop:
         context = self.build_context(user_message)
         await self._emit("context_built", {"context": asdict(context)})
 
-        self.coder.cur_messages += [
-            {"role": "user", "content": context.get_user_turn_content()},
-        ]
+        self.coder.add_user_message(context.get_user_turn_content())
 
         last_coder_result = None
         for idx in range(max(1, min(self.config.max_iterations, 3))):
@@ -205,16 +203,12 @@ class AiderAgentLoop:
                 )
                 last_coder_result = coder_result.to_dict()
 
-                tool_message = {
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "name": "aider_coder",
-                    "content": json.dumps(last_coder_result),
-                }
-                self.coder.cur_messages.append(
-                    {"role": "assistant", "content": message.content or "", "tool_calls": tool_calls}
+                self.coder.add_assistant_message(message.content or "", tool_calls=tool_calls)
+                self.coder.add_tool_result_message(
+                    tool_call_id=call.id,
+                    name="aider_coder",
+                    content=json.dumps(last_coder_result),
                 )
-                self.coder.cur_messages.append(tool_message)
                 break
 
             if not handled_tool:

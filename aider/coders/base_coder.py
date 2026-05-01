@@ -1786,6 +1786,20 @@ class Coder:
         """Cleanup when the Coder object is destroyed."""
         self.ok_to_warm_cache = False
 
+    def add_user_message(self, content):
+        self.cur_messages += [dict(role="user", content=content)]
+
+    def add_assistant_message(self, content=None, tool_calls=None):
+        msg = dict(role="assistant", content=content)
+        if tool_calls is not None:
+            msg["tool_calls"] = tool_calls
+        self.cur_messages += [msg]
+
+    def add_tool_result_message(self, *, tool_call_id, name, content):
+        self.cur_messages += [
+            dict(role="tool", tool_call_id=tool_call_id, name=name, content=content)
+        ]
+
     def add_assistant_reply_to_cur_messages(self):
         if self.partial_response_content:
             self.cur_messages += [dict(role="assistant", content=self.partial_response_content)]

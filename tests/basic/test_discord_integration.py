@@ -21,22 +21,23 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
         bot = DiscordAiderBot(config=DiscordAiderConfig(max_runtime_seconds=30))
 
         key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo")
-        fake_result = MagicMock()
-        fake_result.to_dict.return_value = {"summary": "done", "files_changed": ["foo.py"]}
-
         fake_coder = MagicMock()
-        fake_coder.run_structured_async = AsyncMock(return_value=fake_result)
 
         with patch.object(bot, "get_or_create_session", AsyncMock(return_value=fake_coder)):
-            output = await bot.run_instruction(
-                key=key,
-                repo_path="/tmp/repo",
-                user_id=3,
-                prompt="Fix the bug",
-            )
+            with patch("aider.integrations.discord.AiderAgentLoop") as loop_cls:
+                loop = MagicMock()
+                loop.run = AsyncMock(return_value={"summary": "done", "files_changed": ["foo.py"]})
+                loop_cls.return_value = loop
+
+                output = await bot.run_instruction(
+                    key=key,
+                    repo_path="/tmp/repo",
+                    user_id=3,
+                    prompt="Fix the bug",
+                )
 
         self.assertEqual(output["summary"], "done")
-        fake_coder.run_structured_async.assert_awaited_once()
+        loop.run.assert_awaited_once()
 
     async def test_denied_user(self):
         bot = DiscordAiderBot(config=DiscordAiderConfig(deny_users={99}))

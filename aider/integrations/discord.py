@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, Optional, Set
 
+from aider.agent import AiderAgentLoop
 from aider.coders import Coder
 from aider.main import main as aider_main
 
@@ -150,16 +151,15 @@ class DiscordAiderBot:
             coder.add_event_handler("applying_edits", _sync_event_handler)
             coder.add_event_handler("response_complete", _sync_event_handler)
 
-        task = asyncio.create_task(
-            coder.run_structured_async(prompt, preproc=True, include_diff=include_diff)
-        )
+        agent = AiderAgentLoop(coder=coder, callback=callback)
+        task = asyncio.create_task(agent.run(prompt))
 
         try:
             result = await asyncio.wait_for(task, timeout=self.config.max_runtime_seconds)
         except asyncio.TimeoutError as err:
             raise TimeoutError("Aider request timed out") from err
 
-        return result.to_dict()
+        return result
 
 
 def build_discord_client(*args, **kwargs):

@@ -1,10 +1,12 @@
 import time
 import unittest
 from unittest.mock import MagicMock
+from unittest.mock import patch
 
 from aider.commands import Commands
 from aider.io import InputOutput
 from aider.scrape import Scraper
+from aider.scrape import aider_user_agent
 
 
 class TestScrape(unittest.TestCase):
@@ -169,6 +171,24 @@ class TestScrape(unittest.TestCase):
 
         # Assert that html_to_markdown was called with the HTML content
         scraper.html_to_markdown.assert_called_once_with(html_content)
+
+    def test_scrape_with_httpx_uses_valid_mozilla_user_agent(self):
+        scraper = Scraper(print_error=MagicMock(), playwright_available=False)
+
+        with patch("httpx.Client") as mock_client:
+            mock_response = MagicMock()
+            mock_response.text = "ok"
+            mock_response.headers = {"content-type": "text/plain; charset=utf-8"}
+            mock_response.raise_for_status = MagicMock()
+            mock_client.return_value.__enter__.return_value.get.return_value = mock_response
+
+            scraper.scrape_with_httpx("https://example.com")
+
+            _, kwargs = mock_client.call_args
+            self.assertEqual(
+                kwargs["headers"]["User-Agent"],
+                f"Mozilla/5.0 ({aider_user_agent})",
+            )
 
 
 if __name__ == "__main__":

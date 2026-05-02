@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from aider.llm import litellm
 from aider import models
+from aider.agent.tools import Tool, ToolRegistry
 
 
 @dataclass
@@ -64,6 +65,30 @@ class AiderAgentLoop:
         self.config = config or AgentLoopConfig()
         self.editor_coder = self._build_editor_coder()
         self.architect_coder = self._build_architect_coder()
+        self.tool_registry = ToolRegistry()
+        self.tool_registry.register(
+            Tool(
+                name="aider_coder",
+                description="Use Aider to plan and make code changes in the repository",
+                func=self._run_architect_then_editor,
+                parameters={
+                    "type": "function",
+                    "function": {
+                        "name": "aider_coder",
+                        "description": "Run aider headless coder on a natural language coding task.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "task": {"type": "string"},
+                                "constraints": {"type": "string"},
+                                "include_diff": {"type": "boolean"},
+                            },
+                            "required": ["task"],
+                        },
+                    },
+                },
+            )
+        )
 
     def _build_editor_coder(self):
         if not self.config.editor_model:
@@ -153,32 +178,12 @@ class AiderAgentLoop:
             project_instructions=getattr(self.coder, "main_system", ""),
         )
 
-    def _tools(self) -> list[dict]:
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "aider_coder",
-                    "description": "Run aider headless coder on a natural language coding task.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "task": {"type": "string"},
-                            "constraints": {"type": "string"},
-                            "include_diff": {"type": "boolean"},
-                        },
-                        "required": ["task"],
-                    },
-                },
-            }
-        ]
-
     async def _call_llm(self, messages: list[dict]) -> Any:
         extra_params = dict(getattr(self.coder.main_model, "extra_params", {}) or {})
         kwargs = {
             "model": self.coder.main_model.name,
             "messages": messages,
-            "tools": self._tools(),
+            "tools": self.tool_registry.get_tool_definitions(),
             "tool_choice": "auto",
             "temperature": 0,
             **extra_params,
@@ -212,20 +217,21 @@ class AiderAgentLoop:
 
             handled_tool = False
             for call in tool_calls:
-                if call.function.name != "aider_coder":
-                    continue
-                handled_tool = True
                 args = json.loads(call.function.arguments or "{}")
                 task = args.get("task", "")
                 constraints = args.get("constraints", "")
                 include_diff = bool(args.get("include_diff", False))
                 composed_task = task if not constraints else f"{task}\n\nConstraints:\n{constraints}"
-
-                coder_result = await self._run_architect_then_editor(
-                    task=composed_task,
-                    include_diff=include_diff,
-                    iteration=idx + 1,
-                )
+                exec_args = {
+                    "task": composed_task,
+                    "include_diff": include_diff,
+                    "iteration": idx + 1,
+                }
+                try:
+                    coder_result = await self.tool_registry.execute(call.function.name, exec_args)
+                except ValueError:
+                    continue
+                handled_tool = True
                 last_coder_result = coder_result.to_dict()
                 break
 

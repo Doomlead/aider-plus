@@ -194,7 +194,7 @@ class Scraper:
     def scrape_with_httpx(self, url):
         import httpx
 
-        headers = {"User-Agent": f"Mozilla./5.0 ({aider_user_agent})"}
+        headers = {"User-Agent": f"Mozilla/5.0 ({aider_user_agent})"}
         try:
             with httpx.Client(
                 headers=headers, verify=self.verify_ssl, follow_redirects=True

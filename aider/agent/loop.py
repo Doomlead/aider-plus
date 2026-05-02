@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from aider.memory import ConversationMemory, Message, ProjectMemory
+
 from aider.llm import litellm
 from aider import models
 from aider.agent.tools import Tool, ToolRegistry
@@ -30,15 +32,18 @@ class AgentContext:
     recent_coder_results: list[dict]
     repository: dict[str, Any]
     project_instructions: str
+    conversation_buffer: list[Message]
+    project_memory: dict[str, Any]
 
 
     def get_user_turn_content(self) -> str:
         """Return a single user-turn payload for the current loop step."""
         parts: list[str] = []
 
-        if self.recent_conversation:
+        recent = self.conversation_buffer or self.recent_conversation
+        if recent:
             convo_lines = []
-            for msg in self.recent_conversation[-4:]:
+            for msg in recent[-4:]:
                 role = msg.get("role", "unknown")
                 content = str(msg.get("content", "")).strip()
                 if content:
@@ -51,6 +56,9 @@ class AgentContext:
                 "Recent coder/tool results:\n"
                 + json.dumps(self.recent_coder_results, separators=(",", ":"))
             )
+
+        if self.project_memory:
+            parts.append("Project memory:\n" + json.dumps(self.project_memory, separators=(",", ":")))
 
         parts.append(f"Current user request:\n{self.user_message}")
         return "\n\n".join(parts)
@@ -169,6 +177,12 @@ class AiderAgentLoop:
         )
 
     def build_context(self, user_message: str) -> AgentContext:
+        conversation_memory = getattr(self.coder, "conversation_memory", None)
+        project_memory = getattr(self.coder, "project_memory", None)
+
+        conversation_buffer = conversation_memory.get() if isinstance(conversation_memory, ConversationMemory) else self._build_history_context()
+        project_state = project_memory.data if isinstance(project_memory, ProjectMemory) else {}
+
         return AgentContext(
             system_prompt=self._system_prompt(),
             user_message=user_message,
@@ -176,6 +190,8 @@ class AiderAgentLoop:
             recent_coder_results=self._build_coder_results_context(),
             repository=self._build_repo_context(),
             project_instructions=getattr(self.coder, "main_system", ""),
+            conversation_buffer=conversation_buffer,
+            project_memory=project_state,
         )
 
     async def _call_llm(self, messages: list[dict]) -> Any:
@@ -191,6 +207,10 @@ class AiderAgentLoop:
         return await asyncio.to_thread(litellm.completion, **kwargs)
 
     async def run(self, user_message: str) -> Dict[str, Any]:
+        conversation_memory = getattr(self.coder, "conversation_memory", None)
+        if isinstance(conversation_memory, ConversationMemory):
+            conversation_memory.add(role="user", content=user_message)
+
         context = self.build_context(user_message)
         await self._emit("context_built", {"context": asdict(context)})
 
@@ -209,6 +229,8 @@ class AiderAgentLoop:
             if not tool_calls:
                 final_text = message.content or ""
                 await self._emit("response_complete", {"iteration": idx + 1})
+                if isinstance(conversation_memory, ConversationMemory):
+                    conversation_memory.add(role="assistant", content=final_text)
                 return {
                     "summary": final_text,
                     "agent_iterations": idx + 1,

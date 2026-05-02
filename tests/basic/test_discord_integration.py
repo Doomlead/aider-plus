@@ -39,6 +39,29 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output["summary"], "done")
         loop.run.assert_awaited_once()
 
+
+    async def test_run_instruction_reloads_memory_on_ping(self):
+        bot = DiscordAiderBot(config=DiscordAiderConfig(max_runtime_seconds=30))
+
+        key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo")
+        fake_coder = MagicMock()
+
+        with patch.object(bot, "get_or_create_session", AsyncMock(return_value=fake_coder)):
+            with patch.object(bot, "on_reconnect_or_ping") as ping_hook:
+                with patch("aider.integrations.discord.AiderAgentLoop") as loop_cls:
+                    loop = MagicMock()
+                    loop.run = AsyncMock(return_value={"summary": "done"})
+                    loop_cls.return_value = loop
+
+                    await bot.run_instruction(
+                        key=key,
+                        repo_path="/tmp/repo",
+                        user_id=3,
+                        prompt="Fix the bug",
+                    )
+
+        ping_hook.assert_called_once_with(key)
+
     async def test_denied_user(self):
         bot = DiscordAiderBot(config=DiscordAiderConfig(deny_users={99}))
         key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=99, repo_path="/tmp/repo")

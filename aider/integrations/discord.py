@@ -15,6 +15,7 @@ from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
 from aider.coders import Coder
 from aider.main import main as aider_main
+from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ class DiscordSessionManager:
     def __init__(self):
         self._sessions: Dict[DiscordSessionKey, Coder] = {}
         self._last_used: Dict[DiscordSessionKey, float] = {}
+        self._project_memories: Dict[DiscordSessionKey, ProjectMemory] = {}
 
     def get(self, key: DiscordSessionKey) -> Optional[Coder]:
         coder = self._sessions.get(key)
@@ -72,8 +74,22 @@ class DiscordSessionManager:
         self._last_used[key] = time.time()
 
     def remove(self, key: DiscordSessionKey):
+        self.persist_project_memory(key)
         self._sessions.pop(key, None)
         self._last_used.pop(key, None)
+
+    def attach_project_memory(self, key: DiscordSessionKey, project_memory: ProjectMemory):
+        self._project_memories[key] = project_memory
+
+    def persist_project_memory(self, key: DiscordSessionKey):
+        project_memory = self._project_memories.get(key)
+        coder = self._sessions.get(key)
+        if project_memory and coder:
+            conversation_memory = getattr(coder, "conversation_memory", None)
+            if isinstance(conversation_memory, ConversationMemory):
+                consolidate_conversation(conversation_memory, project_memory)
+        if project_memory:
+            project_memory.persist()
 
     def list_keys(self):
         return list(self._sessions.keys())
@@ -120,9 +136,17 @@ class DiscordAiderBot:
         self.config.repository_policy.validate(repo_path)
         existing = self.sessions.get(key)
         if existing:
+            project_memory = getattr(existing, "project_memory", None)
+            if isinstance(project_memory, ProjectMemory):
+                project_memory.load()
             return existing
 
         coder = await asyncio.to_thread(self._build_coder, repo_path, model)
+        coder.conversation_memory = ConversationMemory()
+        project_memory = ProjectMemory(repo_path)
+        project_memory.load()
+        coder.project_memory = project_memory
+        self.sessions.attach_project_memory(key, project_memory)
         self.sessions.put(key, coder)
         return coder
 
@@ -142,6 +166,7 @@ class DiscordAiderBot:
             raise ValueError("Prompt too large")
 
         coder = await self.get_or_create_session(key, repo_path, model=model)
+        self.on_reconnect_or_ping(key)
 
         agent = AiderAgentLoop(
             coder=coder,
@@ -159,7 +184,25 @@ class DiscordAiderBot:
         except asyncio.TimeoutError as err:
             raise TimeoutError("Aider request timed out") from err
 
+        project_memory = getattr(coder, "project_memory", None)
+        if isinstance(project_memory, ProjectMemory):
+            project_memory.update({"last_prompt": prompt, "last_result": result.get("summary", "")})
+
         return result
+
+    def on_disconnect(self, key: DiscordSessionKey):
+        """Persist project memory when a Discord session disconnects."""
+        self.sessions.persist_project_memory(key)
+
+    def on_reconnect_or_ping(self, key: DiscordSessionKey):
+        """Refresh project memory so new runs receive persisted context."""
+        coder = self.sessions.get(key)
+        if not coder:
+            return
+        project_memory = getattr(coder, "project_memory", None)
+        if isinstance(project_memory, ProjectMemory):
+            project_memory.load()
+
 
 
 def build_discord_client(*args, **kwargs):

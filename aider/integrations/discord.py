@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, Optional, Set
 
 from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
+from aider.company.departments.engineering import EngineeringDepartment
+from aider.company.schemas import CompanyTask
 from aider.coders import Coder
 from aider.main import main as aider_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
@@ -168,7 +171,7 @@ class DiscordAiderBot:
         coder = await self.get_or_create_session(key, repo_path, model=model)
         self.on_reconnect_or_ping(key)
 
-        agent = AiderAgentLoop(
+        agent_loop = AiderAgentLoop(
             coder=coder,
             callback=callback,
             config=AgentLoopConfig(
@@ -177,16 +180,44 @@ class DiscordAiderBot:
                 editor_model=self.config.editor_model,
             ),
         )
-        task = asyncio.create_task(agent.run(prompt))
+        engineering = EngineeringDepartment(
+            project_memory=coder.project_memory,
+            agent_loop=agent_loop,
+            conversation_memory=coder.conversation_memory,
+        )
+        task = CompanyTask(
+            task_id=str(uuid.uuid4()),
+            origin="ceo",
+            target="engineering",
+            artifact_type="raw_prompt",
+            payload=prompt,
+            blocking=False,
+        )
+
+        run_task = asyncio.create_task(engineering.process(task))
 
         try:
-            result = await asyncio.wait_for(task, timeout=self.config.max_runtime_seconds)
+            deliverable = await asyncio.wait_for(run_task, timeout=self.config.max_runtime_seconds)
         except asyncio.TimeoutError as err:
             raise TimeoutError("Aider request timed out") from err
 
+        result_content = deliverable.payload
+        files = deliverable.metadata.get("files", [])
+        commits = deliverable.metadata.get("commits", [])
+        diffs = deliverable.metadata.get("diffs", [])
+        result = {
+            "summary": result_content,
+            "content": result_content,
+            "files_changed": files,
+            "files": files,
+            "commits": commits,
+            "diffs": diffs,
+            "status": deliverable.status,
+        }
+
         project_memory = getattr(coder, "project_memory", None)
         if isinstance(project_memory, ProjectMemory):
-            project_memory.update({"last_prompt": prompt, "last_result": result.get("summary", "")})
+            project_memory.update({"last_prompt": prompt, "last_result": result_content})
 
         return result
 

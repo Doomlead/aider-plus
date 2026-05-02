@@ -24,10 +24,10 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
         fake_coder = MagicMock()
 
         with patch.object(bot, "get_or_create_session", AsyncMock(return_value=fake_coder)):
-            with patch("aider.integrations.discord.AiderAgentLoop") as loop_cls:
-                loop = MagicMock()
-                loop.run = AsyncMock(return_value={"summary": "done", "files_changed": ["foo.py"]})
-                loop_cls.return_value = loop
+            with patch("aider.integrations.discord.EngineeringDepartment") as eng_cls:
+                engineering = MagicMock()
+                engineering.process = AsyncMock(return_value=MagicMock(payload="done", status="success", metadata={"files": ["foo.py"], "commits": [], "diffs": []}))
+                eng_cls.return_value = engineering
 
                 output = await bot.run_instruction(
                     key=key,
@@ -37,7 +37,8 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(output["summary"], "done")
-        loop.run.assert_awaited_once()
+        self.assertEqual(output["files_changed"], ["foo.py"])
+        engineering.process.assert_awaited_once()
 
 
     async def test_run_instruction_reloads_memory_on_ping(self):
@@ -48,10 +49,10 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(bot, "get_or_create_session", AsyncMock(return_value=fake_coder)):
             with patch.object(bot, "on_reconnect_or_ping") as ping_hook:
-                with patch("aider.integrations.discord.AiderAgentLoop") as loop_cls:
-                    loop = MagicMock()
-                    loop.run = AsyncMock(return_value={"summary": "done"})
-                    loop_cls.return_value = loop
+                with patch("aider.integrations.discord.EngineeringDepartment") as eng_cls:
+                    engineering = MagicMock()
+                    engineering.process = AsyncMock(return_value=MagicMock(payload="done", status="success", metadata={}))
+                    eng_cls.return_value = engineering
 
                     await bot.run_instruction(
                         key=key,

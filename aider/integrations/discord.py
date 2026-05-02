@@ -14,6 +14,7 @@ from typing import Awaitable, Callable, Dict, Optional, Set
 
 from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
+from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.schemas import CompanyTask
 from aider.coders import Coder
@@ -107,6 +108,7 @@ class DiscordAiderBot:
     def __init__(self, config: Optional[DiscordAiderConfig] = None):
         self.config = config or DiscordAiderConfig()
         self.sessions = DiscordSessionManager()
+        self.orchestrator: Optional[CompanyOrchestrator] = None
 
     def check_access(self, user_id: int):
         if user_id in self.config.deny_users:
@@ -185,6 +187,8 @@ class DiscordAiderBot:
             agent_loop=agent_loop,
             conversation_memory=coder.conversation_memory,
         )
+        self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
+        self.orchestrator.register(engineering)
         task = CompanyTask(
             task_id=str(uuid.uuid4()),
             origin="ceo",
@@ -194,7 +198,7 @@ class DiscordAiderBot:
             blocking=False,
         )
 
-        run_task = asyncio.create_task(engineering.process(task))
+        run_task = asyncio.create_task(self._run_engineering_task(engineering, task))
 
         try:
             deliverable = await asyncio.wait_for(run_task, timeout=self.config.max_runtime_seconds)
@@ -220,6 +224,20 @@ class DiscordAiderBot:
             project_memory.update({"last_prompt": prompt, "last_result": result_content})
 
         return result
+
+    async def _run_engineering_task(
+        self,
+        engineering: EngineeringDepartment,
+        task: CompanyTask,
+    ):
+        deliverable = await engineering.process(task)
+        if self.orchestrator:
+            for handler in self.orchestrator._handlers:
+                try:
+                    await handler(deliverable)
+                except Exception:
+                    pass
+        return deliverable
 
     def on_disconnect(self, key: DiscordSessionKey):
         """Persist project memory when a Discord session disconnects."""

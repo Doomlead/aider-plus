@@ -31,7 +31,7 @@ from aider.history import ChatSummary
 from aider.io import InputOutput
 from aider.llm import litellm  # noqa: F401; properly init litellm on launch
 from aider.models import ModelSettings
-from aider.onboarding import offer_openrouter_oauth, select_default_model
+from aider.onboarding import offer_openrouter_oauth, onboarding_paths, run_onboarding, select_default_model
 from aider.repo import ANY_GIT_ERROR, GitRepo
 from aider.report import report_uncaught_exceptions
 from aider.versioncheck import check_version, install_from_main_branch, install_upgrade
@@ -453,6 +453,9 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
 
     if argv is None:
         argv = sys.argv[1:]
+    if argv and argv[0] in {"onboard", "init"}:
+        io = InputOutput(pretty=True, yes=False, input=input, output=output)
+        return run_onboarding(io)
 
     if git is None:
         git_root = None
@@ -502,6 +505,16 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
 
     # Parse again to include any arguments that might have been defined in .env
     args = parser.parse_args(argv)
+
+    conf_present = any(Path(p).exists() for p in default_config_files) or onboarding_paths()[
+        "config_path"
+    ].exists()
+    if not conf_present and not args.just_check_update:
+        print("👋 First run detected. Try `aider onboard` for guided setup.")
+        print(
+            "You are now talking to the Company — an AI software development team powered by"
+            " Architect + Editor."
+        )
 
     if args.shell_completions:
         # Ensure parser.prog is set for shtab, though it should be by default

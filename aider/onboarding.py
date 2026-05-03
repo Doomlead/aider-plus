@@ -45,6 +45,7 @@ def run_onboarding(io: InputOutput | None = None) -> int:
         ("openai_api_key", "OPENAI_API_KEY"),
         ("anthropic_api_key", "ANTHROPIC_API_KEY"),
         ("openrouter_api_key", "OPENROUTER_API_KEY"),
+        ("discord_bot_token", "DISCORD_BOT_TOKEN"),
     ]
     config: dict[str, str | bool] = {"use_architect_mode": True}
     for field, env_name in provider_keys:

@@ -1,18 +1,82 @@
 import base64
 import hashlib
 import http.server
+import json
 import os
 import secrets
 import socketserver
 import threading
 import time
 import webbrowser
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import requests
 
 from aider import urls
 from aider.io import InputOutput
+
+
+def onboarding_paths():
+    home = Path.home()
+    config_dir = home / ".aider"
+    return {
+        "config_dir": config_dir,
+        "config_path": config_dir / "config.json",
+        "workspace_path": config_dir / "workspace",
+        "memory_dir": config_dir / "memory",
+    }
+
+
+def run_onboarding(io: InputOutput | None = None) -> int:
+    io = io or InputOutput(pretty=True, yes=False)
+    paths = onboarding_paths()
+    config_path = paths["config_path"]
+    config_exists = config_path.exists() or Path(".aider.conf.yml").exists()
+
+    io.tool_output("👋 Welcome to Aider Company Onboarding")
+    if config_exists:
+        io.tool_warning(f"Existing config found at {config_path} or .aider.conf.yml.")
+        if not io.confirm_ask("Do you want to continue and update onboarding settings?", default="y"):
+            io.tool_output("Onboarding cancelled.")
+            return 0
+
+    provider_keys = [
+        ("openai_api_key", "OPENAI_API_KEY"),
+        ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+        ("openrouter_api_key", "OPENROUTER_API_KEY"),
+        ("discord_bot_token", "DISCORD_BOT_TOKEN"),
+    ]
+    config: dict[str, str | bool] = {"use_architect_mode": True}
+    for field, env_name in provider_keys:
+        current = os.environ.get(env_name, "")
+        prompt = f"Enter {env_name} (leave blank to skip)"
+        value = input(f"{prompt}: ").strip()
+        config[field] = value or current or ""
+
+    default_workspace = str(paths["workspace_path"])
+    workspace = input(f"Workspace directory [{default_workspace}]: ").strip()
+    workspace = workspace or default_workspace
+    config["workspace_dir"] = workspace
+
+    repo_guess = str(Path.cwd())
+    repo_choice = input(f"Repository path to initialize [{repo_guess}]: ").strip()
+    config["default_repo"] = repo_choice or repo_guess
+
+    paths["config_dir"].mkdir(parents=True, exist_ok=True)
+    paths["memory_dir"].mkdir(parents=True, exist_ok=True)
+    Path(workspace).expanduser().mkdir(parents=True, exist_ok=True)
+    project_memory = Path(config["default_repo"]).expanduser() / ".aider" / "project_memory.json"
+    project_memory.parent.mkdir(parents=True, exist_ok=True)
+    if not project_memory.exists():
+        project_memory.write_text(json.dumps({"initialized_by": "aider onboard"}, indent=2), encoding="utf-8")
+
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    io.tool_warning(f"Saved onboarding config to {config_path}.")
+    io.tool_warning("API keys are stored in plain text. Consider moving keys to environment variables.")
+    io.tool_output("✅ Onboarding complete.")
+    io.tool_output("Next steps: Run `aider` to start the company agent.")
+    return 0
 
 
 def check_openrouter_tier(api_key):

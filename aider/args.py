@@ -661,6 +661,12 @@ def get_parser(default_config_files, git_root):
         default=False,
     )
     group.add_argument(
+        "--desktop-gui",
+        action="store_true",
+        help="Run aider in a native desktop GUI (default: False)",
+        default=False,
+    )
+    group.add_argument(
         "--copy-paste",
         action=argparse.BooleanOptionalAction,
         default=False,

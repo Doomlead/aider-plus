@@ -230,6 +230,14 @@ def write_streamlit_credentials():
         print("Streamlit credentials already exist.")
 
 
+def launch_desktop_gui():
+    from aider.desktop_gui import desktop_gui_main
+
+    print()
+    print("Launching desktop GUI...")
+    desktop_gui_main()
+
+
 def launch_gui(args):
     from streamlit.web import cli
 
@@ -682,6 +690,12 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         analytics.enable()
 
     analytics.event("launched")
+
+    if args.desktop_gui and not return_coder:
+        analytics.event("desktop gui session")
+        launch_desktop_gui()
+        analytics.event("exit", reason="Desktop GUI session ended")
+        return
 
     if args.gui and not return_coder:
         if not check_streamlit_install(io):

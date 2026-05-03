@@ -286,3 +286,27 @@ Because this is a fork, upstream docs remain highly relevant:
 - https://aider.chat/docs/install.html
 - https://aider.chat/docs/usage.html
 - https://aider.chat/docs/llms.html
+
+
+## Aider Plus commit additions summary
+
+Below is a concise summary of what each Aider Plus commit introduced (based on commit messages):
+
+- `46f43ae` — Removed an obsolete `prepare_messages_for_llm` stub.
+- `d121a2d` — Refactored the agent loop to use coder-managed message formatting.
+- `bd3c1a2` — Switched agent loop message preparation to coder message APIs when available.
+- `d34e119` — Simplified loop message flow by routing through `coder.run`.
+- `8883c2c` — Improved user-message handoff inside the agent loop.
+- `af4656f` — Added architect/editor orchestration flow to the agent loop.
+- `44a901d` — Added a minimal `ToolRegistry` for agent tool execution.
+- `5979780` — Fixed malformed HTTP scraper `User-Agent` header handling.
+- `4154d4b` — Added dream-consolidation support for Discord session memory.
+- `edda09f` — Added initial company-orchestration code sketches.
+- `5f80841` — Refactored Discord execution flow to use `EngineeringDepartment` tasks.
+- `5c14ef7` — Wired Discord bot flow through `CompanyOrchestrator` scaffolding.
+- `98cc4a0` — Added guided onboarding flow and first-run prompts.
+- `01b0222` — Added onboarding prompt support for Discord bot token setup.
+- `3b19a1e` — Rewrote README with a full Aider Plus capabilities overview.
+- `f03bb9e` — Updated README details to reflect current project state.
+
+(Associated merge commits primarily integrate these feature commits and branch changes.)

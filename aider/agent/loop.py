@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from aider.memory import ConversationMemory, Message, ProjectMemory
+from aider.onboarding import onboarding_paths
 
 from aider.llm import litellm
 from aider import models
@@ -71,6 +72,7 @@ class AiderAgentLoop:
         self.coder = coder
         self.callback = callback
         self.config = config or AgentLoopConfig()
+        self._ensure_onboarded_state()
         self.editor_coder = self._build_editor_coder()
         self.architect_coder = self._build_architect_coder()
         self.tool_registry = ToolRegistry()
@@ -97,6 +99,26 @@ class AiderAgentLoop:
                 },
             )
         )
+
+    def _ensure_onboarded_state(self):
+        if not getattr(self.coder, "conversation_memory", None):
+            self.coder.conversation_memory = ConversationMemory()
+
+        repo = getattr(self.coder, "repo", None)
+        repo_root = getattr(repo, "root", None) if repo else None
+        if not repo_root:
+            return
+
+        if not getattr(self.coder, "project_memory", None):
+            pm = ProjectMemory(repo_root)
+            pm.load()
+            self.coder.project_memory = pm
+        elif isinstance(self.coder.project_memory, ProjectMemory):
+            self.coder.project_memory.load()
+
+        cfg_exists = onboarding_paths()["config_path"].exists() or Path(".aider.conf.yml").exists()
+        if not cfg_exists:
+            print("Tip: run `aider onboard` for guided Company setup.")
 
     def _build_editor_coder(self):
         if not self.config.editor_model:

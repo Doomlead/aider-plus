@@ -214,6 +214,15 @@ def check_streamlit_install(io):
     )
 
 
+def check_desktop_install(io):
+    return utils.check_pip_install_extra(
+        io,
+        "webview",
+        "You need to install desktop GUI dependencies",
+        ["pywebview"],
+    )
+
+
 def write_streamlit_credentials():
     from streamlit.file_util import get_streamlit_file_path
 
@@ -682,6 +691,21 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         analytics.enable()
 
     analytics.event("launched")
+
+    if args.desktop and not return_coder:
+        if not check_streamlit_install(io):
+            analytics.event("exit", reason="Streamlit not installed")
+            return
+        if not check_desktop_install(io):
+            analytics.event("exit", reason="Desktop dependencies not installed")
+            return
+
+        from aider.desktop import launch_desktop_gui
+
+        analytics.event("desktop gui session")
+        launch_desktop_gui(argv, write_streamlit_credentials)
+        analytics.event("exit", reason="Desktop GUI session ended")
+        return
 
     if args.gui and not return_coder:
         if not check_streamlit_install(io):

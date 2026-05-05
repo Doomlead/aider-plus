@@ -16,6 +16,7 @@ from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.departments.engineering import EngineeringDepartment
+from aider.company.departments.product import ProductDepartment
 from aider.company.schemas import CompanyTask
 from aider.coders import Coder
 from aider.main import main as aider_main
@@ -108,6 +109,8 @@ class DiscordAiderBot:
     def __init__(self, config: Optional[DiscordAiderConfig] = None):
         self.config = config or DiscordAiderConfig()
         self.sessions = DiscordSessionManager()
+        self.engineering: Optional[EngineeringDepartment] = None
+        self.product: Optional[ProductDepartment] = None
         self.orchestrator: Optional[CompanyOrchestrator] = None
 
     def check_access(self, user_id: int):
@@ -155,6 +158,69 @@ class DiscordAiderBot:
         self.sessions.put(key, coder)
         return coder
 
+    def _initialize_company_session(
+        self,
+        coder: Coder,
+        callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
+    ) -> EngineeringDepartment:
+        agent_loop = AiderAgentLoop(
+            coder=coder,
+            callback=callback,
+            config=AgentLoopConfig(
+                use_architect_mode=self.config.use_architect_mode,
+                architect_model=self.config.architect_model,
+                editor_model=self.config.editor_model,
+            ),
+        )
+        self.engineering = EngineeringDepartment(
+            project_memory=coder.project_memory,
+            agent_loop=agent_loop,
+            conversation_memory=coder.conversation_memory,
+        )
+        self.product = ProductDepartment(
+            project_memory=coder.project_memory,
+            conversation_memory=None,
+        )
+        self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
+        self.orchestrator.register(self.product)
+        self.orchestrator.register(self.engineering)
+        return self.engineering
+
+    async def prototype(
+        self,
+        *,
+        key: DiscordSessionKey,
+        repo_path: str,
+        user_id: int,
+        prompt: str,
+        model: Optional[str] = None,
+        callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
+    ):
+        self.check_access(user_id)
+        if len(prompt) > self.config.max_prompt_chars:
+            raise ValueError("Prompt too large")
+
+        coder = await self.get_or_create_session(key, repo_path, model=model)
+        self.on_reconnect_or_ping(key)
+        self._initialize_company_session(coder, callback=callback)
+
+        task = CompanyTask(
+            task_id=str(uuid.uuid4()),
+            origin="ceo",
+            target="product",
+            artifact_type="raw_prompt",
+            payload=prompt,
+            blocking=False,
+        )
+        deliverable = await self._run_product_task(task)
+        return {
+            "summary": deliverable.payload,
+            "content": deliverable.payload,
+            "artifact_type": deliverable.artifact_type,
+            "status": deliverable.status,
+            "handoff_to": deliverable.metadata.get("handoff_to"),
+        }
+
     async def run_instruction(
         self,
         *,
@@ -173,22 +239,7 @@ class DiscordAiderBot:
         coder = await self.get_or_create_session(key, repo_path, model=model)
         self.on_reconnect_or_ping(key)
 
-        agent_loop = AiderAgentLoop(
-            coder=coder,
-            callback=callback,
-            config=AgentLoopConfig(
-                use_architect_mode=self.config.use_architect_mode,
-                architect_model=self.config.architect_model,
-                editor_model=self.config.editor_model,
-            ),
-        )
-        engineering = EngineeringDepartment(
-            project_memory=coder.project_memory,
-            agent_loop=agent_loop,
-            conversation_memory=coder.conversation_memory,
-        )
-        self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
-        self.orchestrator.register(engineering)
+        engineering = self._initialize_company_session(coder, callback=callback)
         task = CompanyTask(
             task_id=str(uuid.uuid4()),
             origin="ceo",
@@ -224,6 +275,13 @@ class DiscordAiderBot:
             project_memory.update({"last_prompt": prompt, "last_result": result_content})
 
         return result
+
+    async def _run_product_task(self, task: CompanyTask):
+        if not self.product or not self.orchestrator:
+            raise RuntimeError("Product department is not initialized")
+        deliverable = await self.product.process(task)
+        await self.orchestrator._route(deliverable)
+        return deliverable
 
     async def _run_engineering_task(
         self,
@@ -272,4 +330,23 @@ def build_discord_client(*args, **kwargs):
         intents.guilds = True
         intents.message_content = True
 
-    return commands.Bot(*args, intents=intents, **kwargs)
+    session_manager = kwargs.pop("session_manager", None)
+    bot = commands.Bot(*args, intents=intents, **kwargs)
+
+    if session_manager is not None:
+
+        @bot.command(name="prototype")
+        async def prototype(ctx, *, prompt: str):
+            session = session_manager.get(ctx.channel.id)
+            task = CompanyTask(
+                task_id=str(uuid.uuid4()),
+                origin="ceo",
+                target="product",
+                artifact_type="raw_prompt",
+                payload=prompt,
+                blocking=False,
+            )
+            await session.orchestrator.submit(task)
+            await ctx.send("📋 Product is drafting requirements...")
+
+    return bot

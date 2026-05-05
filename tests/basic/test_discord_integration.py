@@ -63,6 +63,33 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
 
         ping_hook.assert_called_once_with(key)
 
+    async def test_prototype_generates_prd_and_routes_handoff(self):
+        bot = DiscordAiderBot(config=DiscordAiderConfig(max_runtime_seconds=30))
+
+        key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo")
+        fake_coder = MagicMock()
+
+        with patch.object(bot, "get_or_create_session", AsyncMock(return_value=fake_coder)):
+            output = await bot.prototype(
+                key=key,
+                repo_path="/tmp/repo",
+                user_id=3,
+                prompt="Build a dashboard",
+            )
+
+        self.assertEqual(output["artifact_type"], "prd")
+        self.assertEqual(output["handoff_to"], "engineering")
+        self.assertIn("# PRD", output["summary"])
+        self.assertIn("Build a dashboard", output["summary"])
+
+        self.assertEqual(bot.engineering.inbox.qsize(), 1)
+        routed_task = bot.engineering.inbox.get_nowait()
+        self.assertEqual(routed_task.origin, "product")
+        self.assertEqual(routed_task.target, "engineering")
+        self.assertEqual(routed_task.payload, output["summary"])
+        self.assertFalse(routed_task.blocking)
+
+
     async def test_denied_user(self):
         bot = DiscordAiderBot(config=DiscordAiderConfig(deny_users={99}))
         key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=99, repo_path="/tmp/repo")

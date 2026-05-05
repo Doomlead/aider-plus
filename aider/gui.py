@@ -2,7 +2,9 @@
 
 import os
 import random
+import re
 import sys
+from pathlib import Path
 
 import streamlit as st
 
@@ -149,7 +151,13 @@ class GUI:
     def do_sidebar(self):
         with st.sidebar:
             st.title("Aider")
+            if st.button("⚙️ Settings", key="open_settings"):
+                self.state.show_settings = not self.state.show_settings
             # self.cmds_tab, self.settings_tab = st.tabs(["Commands", "Settings"])
+
+            if self.state.show_settings:
+                self.do_settings_tab()
+                st.divider()
 
             # self.do_recommended_actions()
             self.do_add_to_chat()
@@ -164,7 +172,100 @@ class GUI:
             )
 
     def do_settings_tab(self):
-        pass
+        st.subheader("Settings")
+        st.caption("Configure API keys, model defaults, and provider settings.")
+
+        env_values = self._read_env_values(self.env_path)
+        conf_values = self._read_conf_values(self.conf_path)
+
+        with st.form("settings_form", clear_on_submit=False):
+            model = st.text_input("Main model", value=conf_values.get("model", ""))
+            weak_model = st.text_input("Weak model", value=conf_values.get("weak-model", ""))
+            editor_model = st.text_input("Editor model", value=conf_values.get("editor-model", ""))
+            openai_key = st.text_input(
+                "OpenAI API key",
+                value=env_values.get("OPENAI_API_KEY", ""),
+                type="password",
+            )
+            anthropic_key = st.text_input(
+                "Anthropic API key",
+                value=env_values.get("ANTHROPIC_API_KEY", ""),
+                type="password",
+            )
+            openrouter_key = st.text_input(
+                "OpenRouter API key",
+                value=env_values.get("OPENROUTER_API_KEY", ""),
+                type="password",
+            )
+            provider_keys = st.text_area(
+                "Other provider keys (one per line, eg GEMINI_API_KEY=...)", value=""
+            )
+            submitted = st.form_submit_button("Save settings")
+
+        if submitted:
+            updates = {}
+            if openai_key:
+                updates["OPENAI_API_KEY"] = openai_key.strip()
+            if anthropic_key:
+                updates["ANTHROPIC_API_KEY"] = anthropic_key.strip()
+            if openrouter_key:
+                updates["OPENROUTER_API_KEY"] = openrouter_key.strip()
+            for line in provider_keys.splitlines():
+                line = line.strip()
+                if not line or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k and v:
+                    updates[k.strip()] = v.strip()
+
+            self._write_env_updates(self.env_path, updates)
+            self._write_conf_updates(
+                self.conf_path,
+                {"model": model.strip(), "weak-model": weak_model.strip(), "editor-model": editor_model.strip()},
+            )
+            self.info(f"Saved settings to `{self.env_path}` and `{self.conf_path}`.")
+
+    def _read_env_values(self, path: Path):
+        vals = {}
+        if not path.exists():
+            return vals
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            vals[key.strip()] = val.strip().strip('"').strip("'")
+        return vals
+
+    def _write_env_updates(self, path: Path, updates: dict):
+        if not updates:
+            return
+        existing = {}
+        if path.exists():
+            existing = self._read_env_values(path)
+        existing.update(updates)
+        lines = [f"{k}={v}" for k, v in sorted(existing.items())]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _read_conf_values(self, path: Path):
+        vals = {}
+        if not path.exists():
+            return vals
+        for line in path.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"^\s*([a-zA-Z0-9_-]+)\s*:\s*(.+?)\s*$", line)
+            if m:
+                vals[m.group(1)] = m.group(2).strip().strip('"').strip("'")
+        return vals
+
+    def _write_conf_updates(self, path: Path, updates: dict):
+        existing = {}
+        if path.exists():
+            existing = self._read_conf_values(path)
+        for key, value in updates.items():
+            if value:
+                existing[key] = value
+        lines = [f"{k}: {v}" for k, v in sorted(existing.items())]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def do_recommended_actions(self):
         text = "Aider works best when your code is stored in a git repo.  \n"
@@ -338,8 +439,12 @@ class GUI:
         self.state.init("web_content_num", 0)
         self.state.init("prompt")
         self.state.init("scraper")
+        self.state.init("show_settings", False)
 
         self.state.init("initial_inchat_files", self.coder.get_inchat_relative_files())
+        root = Path(self.coder.root)
+        self.state.init("env_path", root / ".env")
+        self.state.init("conf_path", root / ".aider.conf.yml")
 
         if "input_history" not in self.state.keys:
             input_history = list(self.coder.io.get_input_history())
@@ -367,6 +472,8 @@ class GUI:
         self.coder.pretty = False
 
         self.initialize_state()
+        self.env_path = self.state.env_path
+        self.conf_path = self.state.conf_path
 
         self.do_messages_container()
         self.do_sidebar()

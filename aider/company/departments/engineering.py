@@ -3,7 +3,7 @@ from typing import Optional
 from aider.company.department import Department
 from aider.company.schemas import CompanyTask, Deliverable
 from aider.agent.loop import AiderAgentLoop
-from aider.memory import ProjectMemory, ConversationMemory, Message
+from aider.memory import ProjectMemory, ConversationMemory
 
 
 class EngineeringDepartment(Department):
@@ -20,32 +20,77 @@ class EngineeringDepartment(Department):
         self.tools = ["aider_coder"]
 
     async def process(self, task: CompanyTask) -> Deliverable:
-        # 1. Append user turn to departmental conversation memory
-        self.conversation.add(Message(role="user", content=task.payload))
+        # Keep the agent loop self-contained: it builds context from its own
+        # coder-backed conversation/project memory when run with raw task text.
+        record_department_memory = not self._uses_agent_conversation_memory()
+        if record_department_memory:
+            self.conversation.add(role="user", content=task.payload)
 
-        # 2. Build AgentContext using YOUR existing logic pattern
-        #    (Keep this identical to how your Discord bot builds it today)
-        context = self.agent_loop.build_context(
-            conversation_buffer=list(self.conversation.messages),
-            project_memory=self.memory,
-        )
+        result = await self.agent_loop.run(task.payload)
 
-        # 3. Run your proven Aider loop (Architect → Editor)
-        result = await self.agent_loop.run(context)
+        content = self._result_content(result)
+        if content and record_department_memory:
+            self.conversation.add(role="assistant", content=content)
 
-        # 4. Capture assistant output back into memory
-        if result.content:
-            self.conversation.add(Message(role="assistant", content=result.content))
-
+        metadata = self._result_metadata(result)
         return Deliverable(
             task_id=task.task_id,
             department=self.name,
             artifact_type="code",
-            payload=result.content or "",
-            status="success" if not getattr(result, "error", None) else "failure",
-            metadata={
-                "files": getattr(result, "files", []),
-                "commits": getattr(result, "commits", []),
-                "diffs": getattr(result, "diffs", []),
-            }
+            payload=content,
+            status="failure" if self._result_error(result) else "success",
+            metadata=metadata,
         )
+
+    def _uses_agent_conversation_memory(self) -> bool:
+        coder = getattr(self.agent_loop, "coder", None)
+        return self.conversation is getattr(coder, "conversation_memory", None)
+
+    @staticmethod
+    def _result_content(result) -> str:
+        if isinstance(result, dict):
+            coder_result = result.get("coder_result") or {}
+            return (
+                result.get("content")
+                or result.get("summary")
+                or coder_result.get("summary")
+                or ""
+            )
+        return getattr(result, "content", None) or getattr(result, "summary", "") or ""
+
+    @staticmethod
+    def _result_error(result):
+        if isinstance(result, dict):
+            return result.get("error")
+        return getattr(result, "error", None)
+
+    @staticmethod
+    def _result_metadata(result) -> dict:
+        if isinstance(result, dict):
+            coder_result = result.get("coder_result") or {}
+            files = (
+                result.get("files")
+                or result.get("files_changed")
+                or coder_result.get("files_changed")
+                or []
+            )
+            commits = result.get("commits") or []
+            commit_hash = coder_result.get("commit_hash")
+            if commit_hash and commit_hash not in commits:
+                commits = [*commits, commit_hash]
+            diffs = result.get("diffs") or []
+            diff = coder_result.get("diff")
+            if diff and diff not in diffs:
+                diffs = [*diffs, diff]
+            return {"files": files, "commits": commits, "diffs": diffs}
+
+        files = getattr(result, "files", None) or getattr(result, "files_changed", []) or []
+        commits = getattr(result, "commits", []) or []
+        commit_hash = getattr(result, "commit_hash", None)
+        if commit_hash and commit_hash not in commits:
+            commits = [*commits, commit_hash]
+        diffs = getattr(result, "diffs", []) or []
+        diff = getattr(result, "diff", None)
+        if diff and diff not in diffs:
+            diffs = [*diffs, diff]
+        return {"files": files, "commits": commits, "diffs": diffs}

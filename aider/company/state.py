@@ -70,6 +70,55 @@ class CompanyStateManager:
         self._memory.update({"playbook": playbook})
         self._memory.persist()
 
+    def get_observability(self) -> dict:
+        observability = self._memory.data.get("observability", {})
+        if not isinstance(observability, dict):
+            observability = {}
+        observability.setdefault("turns_per_phase", {})
+        observability.setdefault("token_usage_per_department", {})
+        return observability
+
+    def record_phase_turn(self, phase: Optional[str], department: str) -> None:
+        phase_name = phase or "unassigned"
+        observability = self.get_observability()
+        turns = observability.setdefault("turns_per_phase", {})
+        phase_turns = turns.setdefault(phase_name, {})
+        phase_turns[department] = int(phase_turns.get(department, 0) or 0) + 1
+        self._memory.update({"observability": observability})
+        self._memory.persist()
+
+    def record_department_tokens(self, department: str, token_usage: Any) -> None:
+        tokens = self._normalize_token_usage(token_usage)
+        if tokens <= 0:
+            return
+        observability = self.get_observability()
+        usage = observability.setdefault("token_usage_per_department", {})
+        usage[department] = int(usage.get(department, 0) or 0) + tokens
+        self._memory.update({"observability": observability})
+        self._memory.persist()
+
+    @staticmethod
+    def _normalize_token_usage(token_usage: Any) -> int:
+        if isinstance(token_usage, int):
+            return token_usage
+        if not isinstance(token_usage, dict):
+            return 0
+        for key in ("total_tokens", "tokens", "total"):
+            value = token_usage.get(key)
+            if isinstance(value, int):
+                return value
+        total = 0
+        for key in (
+            "prompt_tokens",
+            "completion_tokens",
+            "input_tokens",
+            "output_tokens",
+        ):
+            value = token_usage.get(key)
+            if isinstance(value, int):
+                total += value
+        return total
+
     def get_audit_log(self) -> List[dict]:
         records = self._memory.data.get("audit_log", [])
         if not isinstance(records, list):

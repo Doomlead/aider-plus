@@ -65,7 +65,9 @@ class EngineeringDepartment(Department):
             if hasattr(submitted, "__await__"):
                 await submitted
         else:
-            await self.receive(clarification_task)
+            raise RuntimeError(
+                "Department communication requires an orchestrator boundary"
+            )
         return f"Clarification request sent to Product: {question}"
 
     def _uses_agent_conversation_memory(self) -> bool:
@@ -152,7 +154,9 @@ class EngineeringDepartment(Department):
             diff = coder_result.get("diff")
             if diff and diff not in diffs:
                 diffs = [*diffs, diff]
-            return {"files": files, "commits": commits, "diffs": diffs}
+            metadata = dict(result.get("metadata") or {})
+            metadata.update({"files": files, "commits": commits, "diffs": diffs})
+            return metadata
 
         files = (
             getattr(result, "files", None) or getattr(result, "files_changed", []) or []

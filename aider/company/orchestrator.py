@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from aider.memory import ProjectMemory
@@ -90,6 +91,7 @@ class CompanyOrchestrator:
                 "artifact_type": d.artifact_type,
             },
         )
+        self._record_token_usage(d)
         await self._emit(d)
 
         if await self._route_project_state(d):
@@ -241,6 +243,7 @@ class CompanyOrchestrator:
         await department.receive(task)
 
     async def submit(self, task: CompanyTask) -> Optional[Deliverable]:
+        self.state.record_phase_turn(self.state.get_current_phase(), task.target)
         self._log_event(
             "task_submitted",
             task.payload,
@@ -430,7 +433,7 @@ class CompanyOrchestrator:
 
     async def _request_release_approval(self, d: Deliverable) -> None:
         task = CompanyTask(
-            task_id=d.task_id,
+            task_id=f"{d.task_id}:release",
             origin="qa",
             target="engineering",
             artifact_type="test_report",
@@ -460,6 +463,69 @@ class CompanyOrchestrator:
                 )
             )
         await self._route_release_rejection(task, decision)
+
+    def _record_token_usage(self, d: Deliverable) -> None:
+        token_usage = d.metadata.get("token_usage") or d.metadata.get("usage")
+        if token_usage is None and isinstance(d.payload, dict):
+            token_usage = d.payload.get("token_usage") or d.payload.get("usage")
+        self.state.record_department_tokens(d.department, token_usage)
+
+    def company_status(self) -> str:
+        project = self.active_project
+        observability = self.state.get_observability()
+        pending = self.state.get_pending_approvals()
+        lines = ["Company Dashboard"]
+        if project is None:
+            lines.append("Project: none")
+            lines.append(
+                f"Persisted phase: {self.memory.data.get('current_project_phase', 'unknown')}"
+            )
+        else:
+            lines.extend(
+                [
+                    f"Project: {project.name} ({project.project_id})",
+                    f"Phase: {project.phase}",
+                    f"Requires design: {project.requires_design}",
+                    f"Revision count: {project.revision_count}",
+                ]
+            )
+            artifacts = []
+            if project.prd:
+                artifacts.append("PRD")
+            if project.design_spec:
+                artifacts.append("Design spec")
+            if project.engineering_result:
+                artifacts.append(f"Engineering: {project.engineering_result.status}")
+            if project.qa_result:
+                artifacts.append(f"QA: {project.qa_result.status}")
+            if project.deploy_result:
+                artifacts.append(f"Deployment: {project.deploy_result.status}")
+            lines.append(
+                "Artifacts: " + (", ".join(artifacts) if artifacts else "none")
+            )
+        lines.append(
+            "Departments: " + (", ".join(sorted(self.departments)) or "none")
+        )
+        lines.append(f"Pending approvals: {len(pending)}")
+        if pending:
+            for approval in pending:
+                lines.append(
+                    "  - "
+                    + str(approval.get("gate_name", "approval"))
+                    + " task="
+                    + str(approval.get("task_id", "unknown"))
+                )
+        lines.append(
+            "Turns per phase: "
+            + json.dumps(observability.get("turns_per_phase", {}), sort_keys=True)
+        )
+        lines.append(
+            "Token usage per department: "
+            + json.dumps(
+                observability.get("token_usage_per_department", {}), sort_keys=True
+            )
+        )
+        return "\n".join(lines)
 
     def _pending_approval_record(self, task: CompanyTask) -> dict:
         event = self._approval_required_event(task)

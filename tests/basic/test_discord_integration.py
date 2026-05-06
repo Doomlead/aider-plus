@@ -1,12 +1,14 @@
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from aider.company.schemas import CompanyTask
+from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
 from aider.integrations.discord import (
     DiscordAiderBot,
     DiscordAiderConfig,
     DiscordSessionKey,
     RepositoryPolicy,
+    format_approval_required_message,
 )
 
 
@@ -15,6 +17,26 @@ class TestRepositoryPolicy(unittest.TestCase):
         policy = RepositoryPolicy(allowed_roots={"/tmp/allowed"})
         with self.assertRaises(PermissionError):
             policy.validate("/tmp/not-allowed/repo")
+
+
+class TestDiscordApprovalFormatting(unittest.TestCase):
+    def test_formats_approval_required_message(self):
+        event = EventMessage(
+            event=CompanyEvent.APPROVAL_REQUIRED,
+            task_id="task-1",
+            payload={
+                "project_name": "fastapi-billing",
+                "gate_name": "prd_approval",
+                "artifact_preview": "Build a subscription billing dashboard",
+            },
+        )
+
+        message = format_approval_required_message(event)
+
+        self.assertIn("📋 **Product Department Deliverable Ready**", message)
+        self.assertIn("Project: `fastapi-billing`", message)
+        self.assertIn("Gate: PRD Approval → Engineering", message)
+        self.assertIn("> Build a subscription billing dashboard", message)
 
 
 class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
@@ -120,7 +142,7 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
             callback=None,
         )
 
-    async def test_run_prototype_routes_product_handoff_to_engineering(self):
+    async def test_run_prototype_emits_approval_before_engineering_handoff(self):
         bot = DiscordAiderBot(config=DiscordAiderConfig(max_runtime_seconds=30))
 
         key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo")
@@ -133,15 +155,33 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
                 engineering.receive = AsyncMock()
                 eng_cls.return_value = engineering
 
+                seen_events = []
+
+                async def company_event_callback(event):
+                    seen_events.append(event)
+
                 output = await bot.run_prototype(
                     key=key,
-                    repo_path="/tmp/repo",
+                    repo_path="/tmp/fastapi-billing",
                     user_id=3,
                     prompt="Build a dashboard",
+                    company_event_callback=company_event_callback,
                 )
+                await asyncio.sleep(0)
 
         self.assertEqual(output["artifact_type"], "prd")
         self.assertIn("Build a dashboard", output["summary"])
+        engineering.receive.assert_not_awaited()
+        approval_events = [
+            event for event in seen_events
+            if isinstance(event, EventMessage) and event.event == CompanyEvent.APPROVAL_REQUIRED
+        ]
+        self.assertEqual(len(approval_events), 1)
+        self.assertEqual(approval_events[0].payload["project_name"], "fastapi-billing")
+        self.assertEqual(approval_events[0].payload["gate_name"], "prd_approval")
+
+        bot.orchestrator.approve(output["task_id"])
+        await asyncio.sleep(0)
         engineering.receive.assert_awaited_once()
         routed_task = engineering.receive.await_args.args[0]
         self.assertIsInstance(routed_task, CompanyTask)

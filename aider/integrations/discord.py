@@ -17,7 +17,7 @@ from aider.agent.loop import AgentLoopConfig
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
-from aider.company.schemas import CompanyTask
+from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
 from aider.coders import Coder
 from aider.main import main as aider_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
@@ -58,6 +58,22 @@ class DiscordAiderConfig:
     use_architect_mode: bool = True
     architect_model: Optional[str] = None
     editor_model: Optional[str] = None
+
+
+def format_approval_required_message(event: EventMessage) -> str:
+    payload = event.payload
+    project_name = payload.get("project_name") or "unknown-project"
+    gate_name = payload.get("gate_name", "prd_approval")
+    gate_label = gate_name.replace("prd", "PRD").replace("_", " ").title().replace("Prd", "PRD")
+    preview = str(payload.get("artifact_preview", "")).strip()
+    quoted_preview = "\n".join(f"> {line}" if line else ">" for line in preview.splitlines())
+    return (
+        "📋 **Product Department Deliverable Ready**\n"
+        f"Project: `{project_name}`\n"
+        f"Gate: {gate_label} → Engineering\n\n"
+        "**Preview:**\n"
+        f"{quoted_preview}"
+    )
 
 
 class DiscordSessionManager:
@@ -163,6 +179,7 @@ class DiscordAiderBot:
         self,
         coder: Coder,
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
+        company_event_callback: Optional[Callable[[object], Awaitable[None]]] = None,
     ) -> EngineeringDepartment:
         agent_loop = AiderAgentLoop(
             coder=coder,
@@ -185,6 +202,8 @@ class DiscordAiderBot:
         self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
         self.orchestrator.register(self.product)
         self.orchestrator.register(self.engineering)
+        if company_event_callback:
+            self.orchestrator.on_deliverable(company_event_callback)
         return self.engineering
 
     async def receive_human_input(
@@ -226,6 +245,7 @@ class DiscordAiderBot:
         prompt: str,
         model: Optional[str] = None,
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
+        company_event_callback: Optional[Callable[[object], Awaitable[None]]] = None,
     ):
         """Start a new project by routing the prompt through Product before Engineering."""
         self.check_access(user_id)
@@ -234,7 +254,11 @@ class DiscordAiderBot:
 
         coder = await self.get_or_create_session(key, repo_path, model=model)
         self.on_reconnect_or_ping(key)
-        self._init_company_session(coder, callback=callback)
+        self._init_company_session(
+            coder,
+            callback=callback,
+            company_event_callback=company_event_callback,
+        )
 
         task = CompanyTask(
             task_id=str(uuid.uuid4()),
@@ -243,11 +267,12 @@ class DiscordAiderBot:
             artifact_type="raw_prompt",
             payload=prompt,
             blocking=False,
+            context={"project_name": Path(repo_path).name},
         )
 
         deliverable = await self.product.process(task)
         if self.orchestrator:
-            await self.orchestrator._route(deliverable)
+            asyncio.create_task(self.orchestrator._route(deliverable))
 
         return {
             "task_id": task.task_id,
@@ -366,6 +391,69 @@ def build_discord_client(*args, **kwargs):
 
     bot = commands.Bot(*args, intents=intents, **kwargs)
 
+    class ApprovalFeedbackModal(discord.ui.Modal):
+        def __init__(self, orchestrator: CompanyOrchestrator, task_id: str):
+            super().__init__(title="Request PRD Changes")
+            self.orchestrator = orchestrator
+            self.task_id = task_id
+            self.feedback = discord.ui.TextInput(
+                label="Feedback for Product",
+                style=discord.TextStyle.paragraph,
+                required=True,
+                max_length=1500,
+            )
+            self.add_item(self.feedback)
+
+        async def on_submit(self, interaction):
+            self.orchestrator.request_changes(self.task_id, str(self.feedback.value))
+            await interaction.response.send_message(
+                "📝 Change request sent back to Product.",
+                ephemeral=True,
+            )
+
+    class ApprovalView(discord.ui.View):
+        def __init__(self, orchestrator: CompanyOrchestrator, task_id: str):
+            super().__init__(timeout=None)
+            self.orchestrator = orchestrator
+            self.task_id = task_id
+
+        @discord.ui.button(label="Approve", emoji="✅", style=discord.ButtonStyle.success)
+        async def approve_button(self, interaction, button):
+            self.orchestrator.approve(self.task_id)
+            for child in self.children:
+                child.disabled = True
+            await interaction.response.edit_message(
+                content="✅ PRD approved. Engineering handoff has started.",
+                view=self,
+            )
+
+        @discord.ui.button(label="Reject", emoji="❌", style=discord.ButtonStyle.danger)
+        async def reject_button(self, interaction, button):
+            self.orchestrator.reject(self.task_id)
+            for child in self.children:
+                child.disabled = True
+            await interaction.response.edit_message(
+                content="❌ PRD rejected and routed back to Product.",
+                view=self,
+            )
+
+        @discord.ui.button(label="Request Changes", emoji="📝", style=discord.ButtonStyle.secondary)
+        async def request_changes_button(self, interaction, button):
+            await interaction.response.send_modal(
+                ApprovalFeedbackModal(self.orchestrator, self.task_id)
+            )
+
+    async def send_company_event(ctx, event):
+        if not isinstance(event, EventMessage) or event.event != CompanyEvent.APPROVAL_REQUIRED:
+            return
+        orchestrator = aider_bot.orchestrator
+        if orchestrator is None:
+            return
+        await ctx.send(
+            format_approval_required_message(event),
+            view=ApprovalView(orchestrator, event.task_id),
+        )
+
     if aider_bot is not None:
 
         @bot.command(name="prototype")
@@ -390,6 +478,7 @@ def build_discord_client(*args, **kwargs):
                 user_id=getattr(getattr(ctx, "author", None), "id", 0) or 0,
                 prompt=prompt,
                 model=model,
+                company_event_callback=lambda event: send_company_event(ctx, event),
             )
             await ctx.send("📋 Product is drafting requirements...")
 

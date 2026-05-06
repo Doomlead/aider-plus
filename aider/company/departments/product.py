@@ -11,7 +11,10 @@ class ProductDepartment(Department):
 
         # Lightweight PRD generation. Replace with real LLM call later.
         original_request = self._original_request(task.payload)
-        prd = f"# PRD\n\n## Vision\n{original_request}\n\n## Requirements\n- TBD\n"
+        prd = self._build_prd(task.payload, original_request)
+        context = dict(task.context)
+        if context:
+            context["original_request"] = original_request
         return Deliverable(
             task_id=task.task_id,
             department=self.name,
@@ -21,8 +24,11 @@ class ProductDepartment(Department):
             metadata={
                 "handoff_to": "engineering",
                 "next_artifact_type": "prd",
-                "blocking": False,
+                "blocking": True,
+                "gate_name": "prd_approval",
                 "original_request": original_request,
+                "revision_count": self._revision_count(task.payload),
+                "context": context,
             },
         )
 
@@ -49,8 +55,32 @@ class ProductDepartment(Department):
     @staticmethod
     def _original_request(payload) -> str:
         if isinstance(payload, dict):
-            return payload.get("original_request") or payload.get("prompt") or str(payload)
+            return (
+                payload.get("original_request")
+                or payload.get("prompt")
+                or payload.get("previous_prd")
+                or str(payload)
+            )
         return str(payload)
+
+    @classmethod
+    def _build_prd(cls, payload, original_request: str) -> str:
+        if not isinstance(payload, dict) or "previous_prd" not in payload:
+            return f"# PRD\n\n## Vision\n{original_request}\n\n## Requirements\n- TBD\n"
+
+        feedback = payload.get("ceo_feedback", "Please revise before engineering starts")
+        revision_count = cls._revision_count(payload)
+        return (
+            f"{payload.get('previous_prd')}\n"
+            f"\n## CEO Feedback (Revision {revision_count})\n{feedback}\n"
+            "\n## Revision Notes\n- Address CEO feedback before engineering starts.\n"
+        )
+
+    @staticmethod
+    def _revision_count(payload) -> int:
+        if isinstance(payload, dict):
+            return int(payload.get("revision_count", 0) or 0)
+        return 0
 
     @staticmethod
     def _clarification_question(payload) -> str:

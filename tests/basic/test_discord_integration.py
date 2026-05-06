@@ -2,6 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from aider.company.project import Project
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
 from aider.integrations.discord import (
     DiscordAiderBot,
@@ -108,6 +109,9 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(output["artifact_type"], "prd")
+        self.assertIsInstance(bot.active_project, Project)
+        self.assertEqual(bot.active_project.name, "repo")
+        self.assertEqual(bot.active_project.phase, "prototyping")
         run_prototype.assert_awaited_once_with(
             key=key,
             repo_path="/tmp/repo",
@@ -119,7 +123,7 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
 
     async def test_receive_human_input_routes_active_project_iteration_to_engineering(self):
         bot = DiscordAiderBot(config=DiscordAiderConfig(max_runtime_seconds=30))
-        bot.active_project = object()
+        bot.active_project = Project(project_id="project-1", name="repo")
         key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo")
 
         with patch.object(
@@ -171,6 +175,8 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(output["artifact_type"], "prd")
         self.assertIn("Build a dashboard", output["summary"])
+        self.assertIsInstance(bot.active_project, Project)
+        self.assertEqual(bot.orchestrator.active_project, bot.active_project)
         engineering.receive.assert_not_awaited()
         approval_events = [
             event for event in seen_events
@@ -182,6 +188,7 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
 
         bot.orchestrator.approve(output["task_id"])
         await asyncio.sleep(0)
+        self.assertEqual(bot.active_project.phase, "development")
         engineering.receive.assert_awaited_once()
         routed_task = engineering.receive.await_args.args[0]
         self.assertIsInstance(routed_task, CompanyTask)

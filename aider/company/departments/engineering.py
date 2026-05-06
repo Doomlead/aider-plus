@@ -75,12 +75,21 @@ class EngineeringDepartment(Department):
         original_request = task.payload.get("original_request")
         prd_content = task.payload.get("prd_content")
         clarification_response = task.payload.get("clarification_response")
+        qa_report = task.payload.get("qa_report")
+        ceo_feedback = task.payload.get("ceo_feedback")
+        instruction = task.payload.get("instruction")
         if original_request:
             parts.append(f"Original request:\n{original_request}")
         if prd_content:
             parts.append(f"PRD content:\n{prd_content}")
         if clarification_response:
             parts.append(f"Product clarification:\n{clarification_response}")
+        if qa_report:
+            parts.append(f"QA feedback:\n{qa_report}")
+        if ceo_feedback:
+            parts.append(f"CEO feedback:\n{ceo_feedback}")
+        if instruction:
+            parts.append(f"Instruction:\n{instruction}")
         if not parts:
             parts.append(str(task.payload))
         return "\n\n".join(parts)

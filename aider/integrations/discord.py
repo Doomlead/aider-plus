@@ -513,7 +513,7 @@ def build_discord_client(*args, **kwargs):
                 "This approval was already resolved from another message."
                 if not resolved
                 else (
-                    "✅ Release approved. Project is complete."
+                    "✅ Release approved. DevOps deployment has started."
                     if self.gate_name == "release_approval"
                     else "✅ PRD approved. Engineering handoff has started."
                 )

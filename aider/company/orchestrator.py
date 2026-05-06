@@ -183,7 +183,15 @@ class CompanyOrchestrator:
             self._close_approval_gate(task.task_id)
             decision = self._normalize_decision(decision)
             if not decision.approved:
-                await self._route_rejection(task, decision)
+                if self._is_release_approval(task):
+                    if self.active_project:
+                        self.active_project.phase = "development"
+                    await self._route_release_rejection(task, decision)
+                else:
+                    await self._route_rejection(task, decision)
+                return None
+            if self._is_release_approval(task):
+                await self._submit_devops_after_release(task)
                 return None
             self._advance_after_approval(task)
             task.blocking = False

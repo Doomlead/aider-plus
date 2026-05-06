@@ -11,6 +11,9 @@ class EngineeringDepartment(Department):
     name = "engineering"
     allowed_tools = ["aider_coder", "file_read", "file_write"]
 
+    def get_context_requirements(self) -> list[str]:
+        return ["playbook.coding_standards", "playbook.ux_preferences"]
+
     def __init__(
         self,
         project_memory: ProjectMemory,

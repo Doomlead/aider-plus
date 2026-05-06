@@ -7,6 +7,9 @@ from aider.company.schemas import CompanyTask, Deliverable
 class ProductDepartment(Department):
     name = "product"
 
+    def get_context_requirements(self) -> list[str]:
+        return ["playbook.*", "project.name", "project.phase"]
+
     async def process(self, task: CompanyTask) -> Deliverable:
         if task.origin == "engineering" or task.artifact_type == "memo":
             return self._process_engineering_clarification(task)

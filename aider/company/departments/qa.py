@@ -13,6 +13,9 @@ class QADepartment(Department):
     name = "qa"
     allowed_tools = ["shell", "pytest", "linter"]
 
+    def get_context_requirements(self) -> list[str]:
+        return ["playbook.*", "project.name", "project.phase", "project.prd"]
+
     async def process(self, task: CompanyTask) -> Deliverable:
         engineering_output = (
             task.payload.get("engineering_result", {})
@@ -84,8 +87,10 @@ class QADepartment(Department):
     def _is_test_file(path: str) -> bool:
         name = Path(path).name
         return (
-            name.startswith("test_") and name.endswith(".py")
-        ) or name.endswith("_test.py") or name.endswith(".spec.py")
+            (name.startswith("test_") and name.endswith(".py"))
+            or name.endswith("_test.py")
+            or name.endswith(".spec.py")
+        )
 
     @staticmethod
     def _recommended_checks(test_files: list[str]) -> list[str]:

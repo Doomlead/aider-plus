@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, is_dataclass
-from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
-from aider.company.audit import append_audit_event
 from aider.memory import ProjectMemory
+from aider.company.context import ContextBuilder
 from aider.company.department import Department
 from aider.company.project import Project
+from aider.company.state import CompanyStateManager
 from aider.company.schemas import (
     ApprovalDecision,
     CompanyEvent,
@@ -22,14 +21,26 @@ CompanyMessage = Union[Deliverable, EventMessage]
 
 class CompanyOrchestrator:
     def __init__(self, project_memory: ProjectMemory):
-        self.memory = project_memory
+        self.state = CompanyStateManager(project_memory)
+        self.context_builder = ContextBuilder(self.state)
         self.departments: Dict[str, Department] = {}
         self._handlers: List[Callable[[CompanyMessage], Awaitable[None]]] = []
         self._gates: Dict[str, asyncio.Future] = {}
         self._pending_tasks: Dict[str, CompanyTask] = {}
-        self.active_project: Optional[Project] = None
         self._recovered_gate_tasks: Dict[str, asyncio.Task] = {}
         self._resolved_task_ids: set[str] = set()
+
+    @property
+    def active_project(self) -> Optional[Project]:
+        return self.state.active_project
+
+    @active_project.setter
+    def active_project(self, project: Optional[Project]) -> None:
+        self.state.active_project = project
+
+    @property
+    def memory(self) -> ProjectMemory:
+        return self.state.memory
 
     def register(self, dept: Department) -> None:
         self.departments[dept.name] = dept
@@ -98,7 +109,7 @@ class CompanyOrchestrator:
                 d.content if isinstance(d.content, dict) else {"content": d.content}
             )
             if d.status == "success":
-                project.phase = "development"
+                self.state.set_current_phase("development")
                 if "engineering" in self.departments:
                     await self.submit(self._handoff_task(d, "engineering"))
                 return True
@@ -106,7 +117,7 @@ class CompanyOrchestrator:
         if project.phase == "development" and d.department == "engineering":
             project.engineering_result = d
             if d.status == "success":
-                project.phase = "qa"
+                self.state.set_current_phase("qa")
                 if "qa" in self.departments:
                     await self.submit(self._qa_task(d))
                 return True
@@ -123,7 +134,7 @@ class CompanyOrchestrator:
                 d.department,
                 {"task_id": d.task_id, "status": d.status},
             )
-            project.phase = "release_ready"
+            self.state.set_current_phase("release_ready")
             await self._request_release_approval(d)
             return True
 
@@ -135,13 +146,13 @@ class CompanyOrchestrator:
                 d.department,
                 {"task_id": d.task_id, "status": d.status},
             )
-            project.phase = "post_mortem"
+            self.state.set_current_phase("post_mortem")
             await self._run_post_mortem(d)
             if d.status == "success":
-                project.phase = "done"
+                self.state.set_current_phase("done")
                 return True
 
-            project.phase = "development"
+            self.state.set_current_phase("development")
             if "engineering" in self.departments:
                 await self.submit(self._engineering_infra_revision_task(d))
             return True
@@ -198,6 +209,15 @@ class CompanyOrchestrator:
             context=context,
         )
 
+    async def _dispatch(self, task: CompanyTask) -> None:
+        department = self.departments[task.target]
+        task.context = self.context_builder.build(
+            task,
+            department.get_context_requirements(),
+            self.active_project,
+        )
+        await department.receive(task)
+
     async def submit(self, task: CompanyTask) -> Optional[Deliverable]:
         self._log_event(
             "task_submitted",
@@ -220,7 +240,7 @@ class CompanyOrchestrator:
             if not decision.approved:
                 if self._is_release_approval(task):
                     if self.active_project:
-                        self.active_project.phase = "development"
+                        self.state.set_current_phase("development")
                     await self._route_release_rejection(task, decision)
                 else:
                     await self._route_rejection(task, decision)
@@ -231,18 +251,18 @@ class CompanyOrchestrator:
             self._advance_after_approval(task)
             task.blocking = False
 
-        await self.departments[task.target].receive(task)
+        await self._dispatch(task)
         return None
 
     async def recover_pending_approvals(self) -> None:
         """Recreate in-memory approval gates from ProjectMemory and re-emit their UIs."""
         pending_task_ids = {
             str(approval.get("task_id"))
-            for approval in self._stored_pending_approvals()
+            for approval in self.state.get_pending_approvals()
             if approval.get("status") == "pending" and approval.get("task_id")
         }
         self._resolved_task_ids.difference_update(pending_task_ids)
-        for approval in self._stored_pending_approvals():
+        for approval in self.state.get_pending_approvals():
             if approval.get("status") != "pending":
                 continue
             task = self._task_from_pending_approval(approval)
@@ -263,7 +283,7 @@ class CompanyOrchestrator:
             if not decision.approved:
                 if self._is_release_approval(task):
                     if self.active_project:
-                        self.active_project.phase = "development"
+                        self.state.set_current_phase("development")
                     await self._route_release_rejection(task, decision)
                 else:
                     await self._route_rejection(task, decision)
@@ -273,7 +293,7 @@ class CompanyOrchestrator:
                 return
             self._advance_after_approval(task)
             task.blocking = False
-            await self.departments[task.target].receive(task)
+            await self._dispatch(task)
         finally:
             self._recovered_gate_tasks.pop(task.task_id, None)
 
@@ -281,7 +301,7 @@ class CompanyOrchestrator:
         fut = asyncio.get_event_loop().create_future()
         self._gates[task.task_id] = fut
         self._pending_tasks[task.task_id] = task
-        self._persist_pending_approval(task)
+        self.state.add_pending_approval(self._pending_approval_record(task))
         self._log_event(
             "approval_requested",
             self._artifact_preview(task),
@@ -298,7 +318,7 @@ class CompanyOrchestrator:
     def _close_approval_gate(self, task_id: str) -> None:
         self._gates.pop(task_id, None)
         self._pending_tasks.pop(task_id, None)
-        self._remove_pending_approval(task_id)
+        self.state.remove_pending_approval(task_id)
 
     def _approval_required_event(self, task: CompanyTask) -> EventMessage:
         context = task.context if isinstance(task.context, dict) else {}
@@ -435,11 +455,11 @@ class CompanyOrchestrator:
 
     async def _submit_devops_after_release(self, task: CompanyTask) -> None:
         if self.active_project:
-            self.active_project.phase = "deploying"
+            self.state.set_current_phase("deploying")
         if "devops" in self.departments:
             await self.submit(self._devops_task(task))
         elif self.active_project:
-            self.active_project.phase = "done"
+            self.state.set_current_phase("done")
 
     async def _request_release_approval(self, d: Deliverable) -> None:
         task = CompanyTask(
@@ -468,28 +488,8 @@ class CompanyOrchestrator:
             return
 
         if self.active_project:
-            self.active_project.phase = "development"
+            self.state.set_current_phase("development")
         await self._route_release_rejection(task, decision)
-
-    def _persist_pending_approval(self, task: CompanyTask) -> None:
-        approval = self._pending_approval_record(task)
-        approvals = [
-            item
-            for item in self._stored_pending_approvals()
-            if item.get("task_id") != task.task_id
-        ]
-        approvals.append(approval)
-        self.memory.update({"pending_approvals": approvals})
-        self.memory.persist()
-
-    def _remove_pending_approval(self, task_id: str) -> None:
-        approvals = [
-            item
-            for item in self._stored_pending_approvals()
-            if item.get("task_id") != task_id
-        ]
-        self.memory.update({"pending_approvals": approvals})
-        self.memory.persist()
 
     def _pending_approval_record(self, task: CompanyTask) -> dict:
         event = self._approval_required_event(task)
@@ -498,16 +498,10 @@ class CompanyOrchestrator:
             "gate_name": event.payload.get("gate_name"),
             "department": task.origin,
             "artifact_preview": event.payload.get("artifact_preview", ""),
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": self.state.pending_approval_timestamp(),
             "status": "pending",
             "task": self._serialize_task(task),
         }
-
-    def _stored_pending_approvals(self) -> List[dict]:
-        approvals = self.memory.data.get("pending_approvals", [])
-        if not isinstance(approvals, list):
-            return []
-        return [item for item in approvals if isinstance(item, dict)]
 
     def _task_from_pending_approval(self, approval: dict) -> Optional[CompanyTask]:
         task_data = approval.get("task")
@@ -555,22 +549,10 @@ class CompanyOrchestrator:
             "origin": task.origin,
             "target": task.target,
             "artifact_type": task.artifact_type,
-            "payload": self._json_safe(task.payload),
+            "payload": self.state.json_safe(task.payload),
             "blocking": task.blocking,
-            "context": self._json_safe(task.context),
+            "context": self.state.json_safe(task.context),
         }
-
-    @classmethod
-    def _json_safe(cls, value: Any) -> Any:
-        if is_dataclass(value):
-            return cls._json_safe(asdict(value))
-        if isinstance(value, dict):
-            return {str(k): cls._json_safe(v) for k, v in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [cls._json_safe(item) for item in value]
-        if isinstance(value, (str, int, float, bool)) or value is None:
-            return value
-        return str(value)
 
     @staticmethod
     def _is_release_approval(task: CompanyTask) -> bool:
@@ -594,7 +576,9 @@ class CompanyOrchestrator:
             and task.artifact_type == "prd"
         ):
             project.prd = self._prd_content(task)
-            project.phase = "design" if task.target == "ux" else "development"
+            self.state.set_current_phase(
+                "design" if task.target == "ux" else "development"
+            )
 
     async def _route_rejection(
         self, task: CompanyTask, decision: ApprovalDecision
@@ -609,7 +593,7 @@ class CompanyOrchestrator:
             revision_count = previous_metadata.get("revision_count", 0) + 1
 
         if self.active_project and task.origin == "product":
-            self.active_project.phase = "prototyping"
+            self.state.set_current_phase("prototyping")
 
         feedback = (
             decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
@@ -634,7 +618,7 @@ class CompanyOrchestrator:
         )
         if self.active_project and task.origin == "product":
             self.active_project.revision_count = revision_count
-        await self.departments[task.origin].receive(revision_task)
+        await self._dispatch(revision_task)
 
     async def _route_release_rejection(
         self, task: CompanyTask, decision: ApprovalDecision
@@ -644,7 +628,7 @@ class CompanyOrchestrator:
         feedback = (
             decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
         )
-        await self.departments["engineering"].receive(
+        await self._dispatch(
             CompanyTask(
                 task_id=task.task_id,
                 origin="ceo",
@@ -721,9 +705,7 @@ class CompanyOrchestrator:
         if project is None:
             return
 
-        playbook = self.memory.data.get("playbook", {})
-        if not isinstance(playbook, dict):
-            playbook = {}
+        playbook = self.state.get_playbook()
         playbook.setdefault("coding_standards", [])
         playbook.setdefault("ux_preferences", [])
         playbook.setdefault("deployment_gotchas", [])
@@ -740,7 +722,7 @@ class CompanyOrchestrator:
                 f"Previous deployment failed for {project.name}: {d.content}",
             )
 
-        for record in self.memory.data.get("audit_log", []):
+        for record in self.state.get_audit_log():
             if (
                 not isinstance(record, dict)
                 or record.get("event_type") != "approval_resolved"
@@ -756,8 +738,7 @@ class CompanyOrchestrator:
                     f"CEO feedback from a previous approval: {feedback}",
                 )
 
-        self.memory.update({"playbook": playbook})
-        self.memory.persist()
+        self.state.save_playbook(playbook)
         self._log_event(
             "post_mortem_completed",
             {"project_id": project.project_id, "phase": project.phase},
@@ -797,18 +778,8 @@ class CompanyOrchestrator:
         department: str = "orchestrator",
         metadata: Optional[dict] = None,
     ) -> None:
-        project_id = (
-            self.active_project.project_id
-            if self.active_project
-            else str(
-                self.memory.data.get("project_id")
-                or getattr(self.memory, "repo_path", "")
-            )
-        )
         try:
-            append_audit_event(
-                self.memory,
-                project_id=project_id,
+            self.state.append_audit_event(
                 department=department,
                 event_type=event_type,
                 payload=payload,

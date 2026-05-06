@@ -9,6 +9,7 @@ from aider.memory import ProjectMemory, ConversationMemory
 
 class EngineeringDepartment(Department):
     name = "engineering"
+    allowed_tools = ["aider_coder", "file_read", "file_write"]
 
     def __init__(
         self,
@@ -19,6 +20,8 @@ class EngineeringDepartment(Department):
         super().__init__(project_memory, conversation_memory)
         self.agent_loop = agent_loop
         self.tools = ["aider_coder"]
+        if hasattr(self.agent_loop, "tool_registry"):
+            self.agent_loop.tool_registry.set_department(self)
 
     async def process(self, task: CompanyTask) -> Deliverable:
         # Keep the agent loop self-contained: it builds context from its own

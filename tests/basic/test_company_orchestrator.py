@@ -28,6 +28,44 @@ class QADepartment(Department):
 
 
 class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
+
+    async def test_handle_approval_response_deduplicates_duplicate_ui_clicks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory = ProjectMemory(tmpdir)
+            orchestrator = CompanyOrchestrator(project_memory=memory)
+            engineering = EngineeringDepartment(
+                project_memory=memory,
+                agent_loop=SimpleNamespace(
+                    run=AsyncMock(return_value={"summary": "done"})
+                ),
+            )
+            engineering.receive = AsyncMock()
+            orchestrator.register(engineering)
+            task = CompanyTask(
+                task_id="duplicate-approval-1",
+                origin="product",
+                target="engineering",
+                artifact_type="prd",
+                payload="Build the feature",
+                blocking=True,
+            )
+
+            submit_task = asyncio.create_task(orchestrator.submit(task))
+            await asyncio.sleep(0)
+
+            first = await orchestrator.handle_approval_response(
+                "duplicate-approval-1", True, source="discord"
+            )
+            second = await orchestrator.handle_approval_response(
+                "duplicate-approval-1", True, source="discord"
+            )
+            await submit_task
+
+            self.assertTrue(first)
+            self.assertFalse(second)
+            engineering.receive.assert_awaited_once()
+            self.assertIn("duplicate-approval-1", orchestrator._resolved_task_ids)
+
     async def test_product_prd_handoff_injects_prd_content_for_engineering(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             memory = ProjectMemory(tmpdir)

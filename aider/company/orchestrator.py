@@ -28,6 +28,7 @@ class CompanyOrchestrator:
         self._pending_tasks: Dict[str, CompanyTask] = {}
         self.active_project: Optional[Project] = None
         self._recovered_gate_tasks: Dict[str, asyncio.Task] = {}
+        self._resolved_task_ids: set[str] = set()
 
     def register(self, dept: Department) -> None:
         self.departments[dept.name] = dept
@@ -152,6 +153,12 @@ class CompanyOrchestrator:
 
     async def recover_pending_approvals(self) -> None:
         """Recreate in-memory approval gates from ProjectMemory and re-emit their UIs."""
+        pending_task_ids = {
+            str(approval.get("task_id"))
+            for approval in self._stored_pending_approvals()
+            if approval.get("status") == "pending" and approval.get("task_id")
+        }
+        self._resolved_task_ids.difference_update(pending_task_ids)
         for approval in self._stored_pending_approvals():
             if approval.get("status") != "pending":
                 continue
@@ -503,9 +510,36 @@ class CompanyOrchestrator:
             )
         )
 
-    def approve(self, task_id: str) -> None:
+    async def handle_approval_response(
+        self,
+        task_id: str,
+        approved: bool,
+        source: str = "discord",
+        reason: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> bool:
+        """Resolve an approval gate once, ignoring duplicate approval UIs."""
+        if task_id in self._resolved_task_ids:
+            return False
+        if task_id not in self._gates or self._gates[task_id].done():
+            self._resolved_task_ids.add(task_id)
+            return False
+
+        self._resolved_task_ids.add(task_id)
+        response_metadata = {"approved_by": source}
+        if metadata:
+            response_metadata.update(metadata)
+        if approved:
+            self.approve(task_id, metadata=response_metadata)
+        else:
+            self.reject(task_id, reason=reason or "Rejected by CEO", metadata=response_metadata)
+        return True
+
+    def approve(self, task_id: str, metadata: Optional[dict] = None) -> None:
         if task_id in self._gates and not self._gates[task_id].done():
-            self._gates[task_id].set_result(ApprovalDecision(approved=True))
+            self._gates[task_id].set_result(
+                ApprovalDecision(approved=True, metadata=metadata or {})
+            )
 
     def reject(
         self,

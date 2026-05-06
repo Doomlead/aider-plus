@@ -11,7 +11,7 @@ from aider.onboarding import onboarding_paths
 
 from aider.llm import litellm
 from aider import models
-from aider.agent.tools import Tool, ToolRegistry
+from aider.agent.tools import Tool, ToolPermissionError, ToolRegistry
 
 
 @dataclass
@@ -273,6 +273,14 @@ class AiderAgentLoop:
                 }
                 try:
                     coder_result = await self.tool_registry.execute(call.function.name, exec_args)
+                except ToolPermissionError as err:
+                    await self._emit("permission_violation", err.to_dict())
+                    return {
+                        "summary": err.to_dict()["message"],
+                        "agent_iterations": idx + 1,
+                        "coder_result": None,
+                        "error": err.to_dict(),
+                    }
                 except ValueError:
                     continue
                 handled_tool = True

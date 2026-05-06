@@ -1,3 +1,4 @@
+import uuid
 from typing import Optional
 
 from aider.company.department import Department
@@ -22,11 +23,12 @@ class EngineeringDepartment(Department):
     async def process(self, task: CompanyTask) -> Deliverable:
         # Keep the agent loop self-contained: it builds context from its own
         # coder-backed conversation/project memory when run with raw task text.
+        task_text = self._task_text(task)
         record_department_memory = not self._uses_agent_conversation_memory()
         if record_department_memory:
-            self.conversation.add(role="user", content=task.payload)
+            self.conversation.add(role="user", content=task_text)
 
-        result = await self.agent_loop.run(task.payload)
+        result = await self.agent_loop.run(task_text)
 
         content = self._result_content(result)
         if content and record_department_memory:
@@ -42,9 +44,46 @@ class EngineeringDepartment(Department):
             metadata=metadata,
         )
 
+    async def request_spec_clarification(self, question: str) -> str:
+        """Ask Product to clarify an ambiguous or incomplete PRD detail."""
+        clarification_task = CompanyTask(
+            task_id=uuid.uuid4().hex[:8],
+            origin=self.name,
+            target="product",
+            artifact_type="memo",
+            payload={"question": question},
+            blocking=False,
+        )
+        if self._submit_task is not None:
+            submitted = self._submit_task(clarification_task)
+            if hasattr(submitted, "__await__"):
+                await submitted
+        else:
+            await self.receive(clarification_task)
+        return f"Clarification request sent to Product: {question}"
+
     def _uses_agent_conversation_memory(self) -> bool:
         coder = getattr(self.agent_loop, "coder", None)
         return self.conversation is getattr(coder, "conversation_memory", None)
+
+    @staticmethod
+    def _task_text(task: CompanyTask) -> str:
+        if not isinstance(task.payload, dict):
+            return str(task.payload)
+
+        parts = []
+        original_request = task.payload.get("original_request")
+        prd_content = task.payload.get("prd_content")
+        clarification_response = task.payload.get("clarification_response")
+        if original_request:
+            parts.append(f"Original request:\n{original_request}")
+        if prd_content:
+            parts.append(f"PRD content:\n{prd_content}")
+        if clarification_response:
+            parts.append(f"Product clarification:\n{clarification_response}")
+        if not parts:
+            parts.append(str(task.payload))
+        return "\n\n".join(parts)
 
     @staticmethod
     def _result_content(result) -> str:

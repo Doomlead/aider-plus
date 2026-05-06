@@ -83,6 +83,11 @@ class EngineeringDepartment(Department):
         deploy_report = task.payload.get("deploy_report")
         ceo_feedback = task.payload.get("ceo_feedback")
         instruction = task.payload.get("instruction")
+        playbook_guidance = (
+            task.context.get("playbook_guidance")
+            if isinstance(task.context, dict)
+            else None
+        )
         if original_request:
             parts.append(f"Original request:\n{original_request}")
         if prd_content:
@@ -99,6 +104,11 @@ class EngineeringDepartment(Department):
             parts.append(f"CEO feedback:\n{ceo_feedback}")
         if instruction:
             parts.append(f"Instruction:\n{instruction}")
+        if playbook_guidance:
+            parts.append(
+                "Project playbook guidance:\n"
+                + "\n".join(f"- {item}" for item in playbook_guidance)
+            )
         if not parts:
             parts.append(str(task.payload))
         return "\n\n".join(parts)

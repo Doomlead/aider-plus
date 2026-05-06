@@ -10,6 +10,7 @@ from aider.company.schemas import CompanyTask, Deliverable
 
 class Department(ABC):
     name: str = "abstract"
+    allowed_tools: List[str] = []
 
     def __init__(
         self,
@@ -22,6 +23,9 @@ class Department(ABC):
         self.tools: List[str] = []
         self._on_deliverable: Optional[Callable[[Deliverable], None]] = None
         self._submit_task: Optional[Callable[[CompanyTask], Awaitable[Optional[Deliverable]]]] = None
+
+    def can_use_tool(self, tool_name: str) -> bool:
+        return not self.allowed_tools or tool_name in self.allowed_tools
 
     async def receive(self, task: CompanyTask) -> None:
         await self.inbox.put(task)

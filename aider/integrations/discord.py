@@ -462,7 +462,13 @@ def build_discord_client(*args, **kwargs):
             self.add_item(self.feedback)
 
         async def on_submit(self, interaction):
-            self.orchestrator.request_changes(self.task_id, str(self.feedback.value))
+            await self.orchestrator.handle_approval_response(
+                self.task_id,
+                False,
+                source="discord",
+                reason=str(self.feedback.value),
+                metadata={"action": "revise", "feedback": str(self.feedback.value)},
+            )
             destination = (
                 "Engineering" if self.gate_name == "release_approval" else "Product"
             )
@@ -484,25 +490,37 @@ def build_discord_client(*args, **kwargs):
             label="Approve", emoji="✅", style=discord.ButtonStyle.success
         )
         async def approve_button(self, interaction, button):
-            self.orchestrator.approve(self.task_id)
+            resolved = await self.orchestrator.handle_approval_response(
+                self.task_id, True, source="discord"
+            )
             for child in self.children:
                 child.disabled = True
             content = (
-                "✅ Release approved. Project is complete."
-                if self.gate_name == "release_approval"
-                else "✅ PRD approved. Engineering handoff has started."
+                "This approval was already resolved from another message."
+                if not resolved
+                else (
+                    "✅ Release approved. Project is complete."
+                    if self.gate_name == "release_approval"
+                    else "✅ PRD approved. Engineering handoff has started."
+                )
             )
             await interaction.response.edit_message(content=content, view=self)
 
         @discord.ui.button(label="Reject", emoji="❌", style=discord.ButtonStyle.danger)
         async def reject_button(self, interaction, button):
-            self.orchestrator.reject(self.task_id)
+            resolved = await self.orchestrator.handle_approval_response(
+                self.task_id, False, source="discord"
+            )
             for child in self.children:
                 child.disabled = True
             content = (
-                "❌ Release rejected and routed back to Engineering."
-                if self.gate_name == "release_approval"
-                else "❌ PRD rejected and routed back to Product."
+                "This approval was already resolved from another message."
+                if not resolved
+                else (
+                    "❌ Release rejected and routed back to Engineering."
+                    if self.gate_name == "release_approval"
+                    else "❌ PRD rejected and routed back to Product."
+                )
             )
             await interaction.response.edit_message(content=content, view=self)
 

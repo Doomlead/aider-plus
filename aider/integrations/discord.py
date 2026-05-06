@@ -15,6 +15,7 @@ from typing import Awaitable, Callable, Dict, Optional, Set
 from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
 from aider.company.orchestrator import CompanyOrchestrator
+from aider.company.project import Project
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
@@ -128,7 +129,7 @@ class DiscordAiderBot:
         self.orchestrator: Optional[CompanyOrchestrator] = None
         self.engineering: Optional[EngineeringDepartment] = None
         self.product: Optional[ProductDepartment] = None
-        self.active_project = None
+        self.active_project: Optional[Project] = None
 
     def check_access(self, user_id: int):
         if user_id in self.config.deny_users:
@@ -200,6 +201,7 @@ class DiscordAiderBot:
             conversation_memory=None,
         )
         self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
+        self.orchestrator.active_project = self.active_project
         self.orchestrator.register(self.product)
         self.orchestrator.register(self.engineering)
         if company_event_callback:
@@ -218,6 +220,11 @@ class DiscordAiderBot:
     ):
         """Unified human entry point: bootstrap via Product, then iterate in Engineering."""
         if not self.active_project:
+            self.active_project = Project(
+                project_id=str(uuid.uuid4()),
+                name=Path(repo_path).name,
+                phase="prototyping",
+            )
             return await self.run_prototype(
                 key=key,
                 repo_path=repo_path,
@@ -259,6 +266,15 @@ class DiscordAiderBot:
             callback=callback,
             company_event_callback=company_event_callback,
         )
+
+        if not self.active_project:
+            self.active_project = Project(
+                project_id=str(uuid.uuid4()),
+                name=Path(repo_path).name,
+                phase="prototyping",
+            )
+        if self.orchestrator:
+            self.orchestrator.active_project = self.active_project
 
         task = CompanyTask(
             task_id=str(uuid.uuid4()),

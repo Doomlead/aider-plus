@@ -5,6 +5,7 @@ from typing import Awaitable, Callable, Dict, List, Optional, Union
 
 from aider.memory import ProjectMemory
 from aider.company.department import Department
+from aider.company.project import Project
 from aider.company.schemas import (
     ApprovalDecision,
     CompanyEvent,
@@ -23,6 +24,7 @@ class CompanyOrchestrator:
         self._handlers: List[Callable[[CompanyMessage], Awaitable[None]]] = []
         self._gates: Dict[str, asyncio.Future] = {}
         self._pending_tasks: Dict[str, CompanyTask] = {}
+        self.active_project: Optional[Project] = None
 
     def register(self, dept: Department) -> None:
         self.departments[dept.name] = dept
@@ -47,12 +49,49 @@ class CompanyOrchestrator:
     async def _route(self, d: Deliverable) -> None:
         await self._emit(d)
 
+        if await self._route_project_state(d):
+            return
+
         # Auto-route handoffs if specified in metadata. Product PRDs are
         # promoted into structured engineering task context so Engineering
         # receives the generated PRD, not just the original user prompt.
         next_target = d.metadata.get("handoff_to")
         if next_target and next_target in self.departments:
             await self.submit(self._handoff_task(d, next_target))
+
+    async def _route_project_state(self, d: Deliverable) -> bool:
+        project = self.active_project
+        if project is None:
+            return False
+
+        if project.phase == "prototyping" and d.department == "product":
+            if d.artifact_type == "prd" and d.status == "success":
+                project.prd = str(d.content)
+                next_target = d.metadata.get("handoff_to")
+                if next_target and next_target in self.departments:
+                    await self.submit(self._handoff_task(d, next_target))
+                    return True
+            return False
+
+        if project.phase == "development" and d.department == "engineering":
+            project.engineering_result = d
+            if d.status == "success":
+                project.phase = "qa"
+                if "qa" in self.departments:
+                    await self.submit(self._qa_task(d))
+                return True
+
+            if d.status == "failure" and "engineering" in self.departments:
+                await self.submit(self._engineering_revision_task(d))
+                return True
+
+        if project.phase == "qa" and d.department == "qa":
+            project.qa_result = d
+            project.phase = "release_ready"
+            await self._request_release_approval(d)
+            return True
+
+        return False
 
     def _handoff_task(self, d: Deliverable, next_target: str) -> CompanyTask:
         payload = d.payload
@@ -102,31 +141,42 @@ class CompanyOrchestrator:
             if not decision.approved:
                 await self._route_rejection(task, decision)
                 return None
+            self._advance_after_approval(task)
             task.blocking = False
 
         await self.departments[task.target].receive(task)
         return None
 
     def _approval_required_event(self, task: CompanyTask) -> EventMessage:
-        metadata = (
-            dict(task.context.get("prd_metadata", {}))
-            if isinstance(task.context, dict)
-            else {}
-        )
-        prd_content = self._prd_content(task)
+        context = task.context if isinstance(task.context, dict) else {}
+        metadata = dict(context.get("prd_metadata", {}))
+        gate_name = context.get("gate_name") or metadata.get("gate_name", "prd_approval")
+        artifact_preview = context.get("artifact_preview") or self._artifact_preview(task)
         return EventMessage(
             event=CompanyEvent.APPROVAL_REQUIRED,
             task_id=task.task_id,
             payload={
                 "task_id": task.task_id,
-                "gate_name": metadata.get("gate_name", "prd_approval"),
-                "artifact_preview": prd_content[:1500],
-                "approver_role": "ceo",
-                "project_name": task.context.get("project_name"),
-                "handoff_to": task.target,
+                "gate_name": gate_name,
+                "artifact_preview": str(artifact_preview)[:1500],
+                "approver_role": context.get("approver_role", "ceo"),
+                "project_name": context.get("project_name"),
+                "handoff_to": context.get("handoff_to", task.target),
             },
             metadata={"task": task},
         )
+
+    @staticmethod
+    def _artifact_preview(task: CompanyTask) -> str:
+        if isinstance(task.payload, dict):
+            return str(
+                task.payload.get("prd_content")
+                or task.payload.get("previous_prd")
+                or task.payload.get("qa_report")
+                or task.payload.get("engineering_result")
+                or task.payload
+            )
+        return str(task.payload)
 
     @staticmethod
     def _prd_content(task: CompanyTask) -> str:
@@ -138,11 +188,93 @@ class CompanyOrchestrator:
             )
         return str(task.payload)
 
+    def _qa_task(self, d: Deliverable) -> CompanyTask:
+        context = dict(d.metadata.get("context", {}))
+        if self.active_project:
+            context.setdefault("project_name", self.active_project.name)
+        return CompanyTask(
+            task_id=d.task_id,
+            origin="engineering",
+            target="qa",
+            artifact_type="code",
+            payload={
+                "engineering_result": d.content,
+                "engineering_metadata": dict(d.metadata),
+            },
+            blocking=False,
+            context=context,
+        )
+
+    def _engineering_revision_task(self, d: Deliverable) -> CompanyTask:
+        context = dict(d.metadata.get("context", {}))
+        context["engineering_failure"] = d.content
+        return CompanyTask(
+            task_id=d.task_id,
+            origin="orchestrator",
+            target="engineering",
+            artifact_type="raw_prompt",
+            payload={
+                "previous_engineering_result": d.content,
+                "failure_metadata": dict(d.metadata),
+                "instruction": "Address the engineering failure and resubmit the implementation.",
+            },
+            blocking=False,
+            context=context,
+        )
+
+    async def _request_release_approval(self, d: Deliverable) -> None:
+        task = CompanyTask(
+            task_id=d.task_id,
+            origin="qa",
+            target="engineering",
+            artifact_type="test_report",
+            payload={
+                "qa_report": d.content,
+                "qa_metadata": dict(d.metadata),
+            },
+            blocking=True,
+            context={
+                **dict(d.metadata.get("context", {})),
+                "gate_name": "release_approval",
+                "artifact_preview": d.content,
+                "handoff_to": "release",
+            },
+        )
+        fut = asyncio.get_event_loop().create_future()
+        self._gates[task.task_id] = fut
+        self._pending_tasks[task.task_id] = task
+        await self._emit(self._approval_required_event(task))
+        decision = self._normalize_decision(await fut)
+        self._gates.pop(task.task_id, None)
+        self._pending_tasks.pop(task.task_id, None)
+
+        if decision.approved:
+            if self.active_project:
+                self.active_project.phase = "done"
+            return
+
+        if self.active_project:
+            self.active_project.phase = "development"
+        await self._route_release_rejection(task, decision)
+
     @staticmethod
     def _normalize_decision(decision) -> ApprovalDecision:
         if isinstance(decision, ApprovalDecision):
             return decision
         return ApprovalDecision(approved=bool(decision))
+
+    def _advance_after_approval(self, task: CompanyTask) -> None:
+        project = self.active_project
+        if project is None:
+            return
+        if (
+            project.phase == "prototyping"
+            and task.origin == "product"
+            and task.target == "engineering"
+            and task.artifact_type == "prd"
+        ):
+            project.prd = self._prd_content(task)
+            project.phase = "development"
 
     async def _route_rejection(self, task: CompanyTask, decision: ApprovalDecision) -> None:
         if task.origin not in self.departments:
@@ -153,6 +285,9 @@ class CompanyOrchestrator:
         if isinstance(task.payload, dict):
             previous_metadata = dict(task.payload.get("prd_metadata", {}))
             revision_count = previous_metadata.get("revision_count", 0) + 1
+
+        if self.active_project and task.origin == "product":
+            self.active_project.phase = "prototyping"
 
         feedback = decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
         revision_task = CompanyTask(
@@ -173,7 +308,32 @@ class CompanyOrchestrator:
                 "approval_action": decision.metadata.get("action", "reject"),
             },
         )
+        if self.active_project and task.origin == "product":
+            self.active_project.revision_count = revision_count
         await self.departments[task.origin].receive(revision_task)
+
+    async def _route_release_rejection(
+        self, task: CompanyTask, decision: ApprovalDecision
+    ) -> None:
+        if "engineering" not in self.departments:
+            return
+        feedback = decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
+        await self.departments["engineering"].receive(
+            CompanyTask(
+                task_id=task.task_id,
+                origin="ceo",
+                target="engineering",
+                artifact_type="test_report",
+                payload={
+                    "qa_report": task.payload.get("qa_report")
+                    if isinstance(task.payload, dict)
+                    else task.payload,
+                    "ceo_feedback": feedback,
+                },
+                blocking=False,
+                context={**task.context, "ceo_feedback": feedback},
+            )
+        )
 
     def approve(self, task_id: str) -> None:
         if task_id in self._gates and not self._gates[task_id].done():

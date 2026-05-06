@@ -18,6 +18,7 @@ from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
+from aider.company.departments.qa import QADepartment
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
 from aider.coders import Coder
 from aider.main import main as aider_main
@@ -65,13 +66,24 @@ def format_approval_required_message(event: EventMessage) -> str:
     payload = event.payload
     project_name = payload.get("project_name") or "unknown-project"
     gate_name = payload.get("gate_name", "prd_approval")
-    gate_label = gate_name.replace("prd", "PRD").replace("_", " ").title().replace("Prd", "PRD")
+    gate_label = (
+        gate_name.replace("prd", "PRD").replace("_", " ").title().replace("Prd", "PRD")
+    )
+    handoff_to = payload.get("handoff_to") or "engineering"
+    handoff_label = str(handoff_to).replace("_", " ").title()
+    title = (
+        "📋 **Product Department Deliverable Ready**"
+        if gate_name == "prd_approval"
+        else "🧪 **QA Release Approval Required**"
+    )
     preview = str(payload.get("artifact_preview", "")).strip()
-    quoted_preview = "\n".join(f"> {line}" if line else ">" for line in preview.splitlines())
+    quoted_preview = "\n".join(
+        f"> {line}" if line else ">" for line in preview.splitlines()
+    )
     return (
-        "📋 **Product Department Deliverable Ready**\n"
+        f"{title}\n"
         f"Project: `{project_name}`\n"
-        f"Gate: {gate_label} → Engineering\n\n"
+        f"Gate: {gate_label} → {handoff_label}\n\n"
         "**Preview:**\n"
         f"{quoted_preview}"
     )
@@ -100,7 +112,9 @@ class DiscordSessionManager:
         self._sessions.pop(key, None)
         self._last_used.pop(key, None)
 
-    def attach_project_memory(self, key: DiscordSessionKey, project_memory: ProjectMemory):
+    def attach_project_memory(
+        self, key: DiscordSessionKey, project_memory: ProjectMemory
+    ):
         self._project_memories[key] = project_memory
 
     def persist_project_memory(self, key: DiscordSessionKey):
@@ -129,6 +143,7 @@ class DiscordAiderBot:
         self.orchestrator: Optional[CompanyOrchestrator] = None
         self.engineering: Optional[EngineeringDepartment] = None
         self.product: Optional[ProductDepartment] = None
+        self.qa: Optional[QADepartment] = None
         self.active_project: Optional[Project] = None
 
     def check_access(self, user_id: int):
@@ -200,10 +215,15 @@ class DiscordAiderBot:
             project_memory=coder.project_memory,
             conversation_memory=None,
         )
+        self.qa = QADepartment(
+            project_memory=coder.project_memory,
+            conversation_memory=None,
+        )
         self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
         self.orchestrator.active_project = self.active_project
         self.orchestrator.register(self.product)
         self.orchestrator.register(self.engineering)
+        self.orchestrator.register(self.qa)
         if company_event_callback:
             self.orchestrator.on_deliverable(company_event_callback)
         return self.engineering
@@ -266,6 +286,8 @@ class DiscordAiderBot:
             callback=callback,
             company_event_callback=company_event_callback,
         )
+        if self.orchestrator and isinstance(self.orchestrator.memory, ProjectMemory):
+            await self.orchestrator.recover_pending_approvals()
 
         if not self.active_project:
             self.active_project = Project(
@@ -319,6 +341,8 @@ class DiscordAiderBot:
         self.on_reconnect_or_ping(key)
 
         engineering = self._init_company_session(coder, callback=callback)
+        if self.orchestrator and isinstance(self.orchestrator.memory, ProjectMemory):
+            await self.orchestrator.recover_pending_approvals()
         task = CompanyTask(
             task_id=str(uuid.uuid4()),
             origin="ceo",
@@ -331,7 +355,9 @@ class DiscordAiderBot:
         run_task = asyncio.create_task(self._run_engineering_task(engineering, task))
 
         try:
-            deliverable = await asyncio.wait_for(run_task, timeout=self.config.max_runtime_seconds)
+            deliverable = await asyncio.wait_for(
+                run_task, timeout=self.config.max_runtime_seconds
+            )
         except asyncio.TimeoutError as err:
             raise TimeoutError("Aider request timed out") from err
 
@@ -351,7 +377,9 @@ class DiscordAiderBot:
 
         project_memory = getattr(coder, "project_memory", None)
         if isinstance(project_memory, ProjectMemory):
-            project_memory.update({"last_prompt": prompt, "last_result": result_content})
+            project_memory.update(
+                {"last_prompt": prompt, "last_result": result_content}
+            )
 
         return result
 
@@ -408,12 +436,25 @@ def build_discord_client(*args, **kwargs):
     bot = commands.Bot(*args, intents=intents, **kwargs)
 
     class ApprovalFeedbackModal(discord.ui.Modal):
-        def __init__(self, orchestrator: CompanyOrchestrator, task_id: str):
-            super().__init__(title="Request PRD Changes")
+        def __init__(
+            self, orchestrator: CompanyOrchestrator, task_id: str, gate_name: str
+        ):
+            title = (
+                "Request Release Changes"
+                if gate_name == "release_approval"
+                else "Request PRD Changes"
+            )
+            label = (
+                "Feedback for Engineering"
+                if gate_name == "release_approval"
+                else "Feedback for Product"
+            )
+            super().__init__(title=title)
             self.orchestrator = orchestrator
             self.task_id = task_id
+            self.gate_name = gate_name
             self.feedback = discord.ui.TextInput(
-                label="Feedback for Product",
+                label=label,
                 style=discord.TextStyle.paragraph,
                 required=True,
                 max_length=1500,
@@ -422,52 +463,73 @@ def build_discord_client(*args, **kwargs):
 
         async def on_submit(self, interaction):
             self.orchestrator.request_changes(self.task_id, str(self.feedback.value))
+            destination = (
+                "Engineering" if self.gate_name == "release_approval" else "Product"
+            )
             await interaction.response.send_message(
-                "📝 Change request sent back to Product.",
+                f"📝 Change request sent back to {destination}.",
                 ephemeral=True,
             )
 
     class ApprovalView(discord.ui.View):
-        def __init__(self, orchestrator: CompanyOrchestrator, task_id: str):
+        def __init__(
+            self, orchestrator: CompanyOrchestrator, task_id: str, gate_name: str
+        ):
             super().__init__(timeout=None)
             self.orchestrator = orchestrator
             self.task_id = task_id
+            self.gate_name = gate_name
 
-        @discord.ui.button(label="Approve", emoji="✅", style=discord.ButtonStyle.success)
+        @discord.ui.button(
+            label="Approve", emoji="✅", style=discord.ButtonStyle.success
+        )
         async def approve_button(self, interaction, button):
             self.orchestrator.approve(self.task_id)
             for child in self.children:
                 child.disabled = True
-            await interaction.response.edit_message(
-                content="✅ PRD approved. Engineering handoff has started.",
-                view=self,
+            content = (
+                "✅ Release approved. Project is complete."
+                if self.gate_name == "release_approval"
+                else "✅ PRD approved. Engineering handoff has started."
             )
+            await interaction.response.edit_message(content=content, view=self)
 
         @discord.ui.button(label="Reject", emoji="❌", style=discord.ButtonStyle.danger)
         async def reject_button(self, interaction, button):
             self.orchestrator.reject(self.task_id)
             for child in self.children:
                 child.disabled = True
-            await interaction.response.edit_message(
-                content="❌ PRD rejected and routed back to Product.",
-                view=self,
+            content = (
+                "❌ Release rejected and routed back to Engineering."
+                if self.gate_name == "release_approval"
+                else "❌ PRD rejected and routed back to Product."
             )
+            await interaction.response.edit_message(content=content, view=self)
 
-        @discord.ui.button(label="Request Changes", emoji="📝", style=discord.ButtonStyle.secondary)
+        @discord.ui.button(
+            label="Request Changes", emoji="📝", style=discord.ButtonStyle.secondary
+        )
         async def request_changes_button(self, interaction, button):
             await interaction.response.send_modal(
-                ApprovalFeedbackModal(self.orchestrator, self.task_id)
+                ApprovalFeedbackModal(self.orchestrator, self.task_id, self.gate_name)
             )
 
     async def send_company_event(ctx, event):
-        if not isinstance(event, EventMessage) or event.event != CompanyEvent.APPROVAL_REQUIRED:
+        if (
+            not isinstance(event, EventMessage)
+            or event.event != CompanyEvent.APPROVAL_REQUIRED
+        ):
             return
         orchestrator = aider_bot.orchestrator
         if orchestrator is None:
             return
         await ctx.send(
             format_approval_required_message(event),
-            view=ApprovalView(orchestrator, event.task_id),
+            view=ApprovalView(
+                orchestrator,
+                event.task_id,
+                event.payload.get("gate_name", "prd_approval"),
+            ),
         )
 
     if aider_bot is not None:
@@ -475,7 +537,9 @@ def build_discord_client(*args, **kwargs):
         @bot.command(name="prototype")
         async def prototype(ctx, *, prompt: str):
             repo_path = (
-                repo_path_resolver(ctx) if repo_path_resolver else getattr(ctx, "repo_path", None)
+                repo_path_resolver(ctx)
+                if repo_path_resolver
+                else getattr(ctx, "repo_path", None)
             )
             if not repo_path:
                 await ctx.send("Repository path is required for /prototype.")

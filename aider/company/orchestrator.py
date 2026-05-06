@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Callable, Dict, List, Optional, Union
+from dataclasses import asdict, is_dataclass
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from aider.memory import ProjectMemory
 from aider.company.department import Department
@@ -25,6 +27,7 @@ class CompanyOrchestrator:
         self._gates: Dict[str, asyncio.Future] = {}
         self._pending_tasks: Dict[str, CompanyTask] = {}
         self.active_project: Optional[Project] = None
+        self._recovered_gate_tasks: Dict[str, asyncio.Task] = {}
 
     def register(self, dept: Department) -> None:
         self.departments[dept.name] = dept
@@ -97,7 +100,11 @@ class CompanyOrchestrator:
         payload = d.payload
         context = dict(d.metadata.get("context", {}))
 
-        if d.department == "product" and next_target == "engineering" and d.artifact_type == "prd":
+        if (
+            d.department == "product"
+            and next_target == "engineering"
+            and d.artifact_type == "prd"
+        ):
             payload = {
                 "original_request": d.metadata.get("original_request"),
                 "prd_content": d.content,
@@ -130,13 +137,9 @@ class CompanyOrchestrator:
             raise ValueError(f"No department: {task.target}")
 
         if task.blocking:
-            fut = asyncio.get_event_loop().create_future()
-            self._gates[task.task_id] = fut
-            self._pending_tasks[task.task_id] = task
-            await self._emit(self._approval_required_event(task))
-            decision = await fut
-            self._gates.pop(task.task_id, None)
-            self._pending_tasks.pop(task.task_id, None)
+            await self._open_approval_gate(task)
+            decision = await self._gates[task.task_id]
+            self._close_approval_gate(task.task_id)
             decision = self._normalize_decision(decision)
             if not decision.approved:
                 await self._route_rejection(task, decision)
@@ -147,11 +150,65 @@ class CompanyOrchestrator:
         await self.departments[task.target].receive(task)
         return None
 
+    async def recover_pending_approvals(self) -> None:
+        """Recreate in-memory approval gates from ProjectMemory and re-emit their UIs."""
+        for approval in self._stored_pending_approvals():
+            if approval.get("status") != "pending":
+                continue
+            task = self._task_from_pending_approval(approval)
+            if task is None or task.task_id in self._gates:
+                continue
+            fut = asyncio.get_event_loop().create_future()
+            self._gates[task.task_id] = fut
+            self._pending_tasks[task.task_id] = task
+            await self._emit(self._approval_required_event(task))
+            self._recovered_gate_tasks[task.task_id] = asyncio.create_task(
+                self._complete_recovered_gate(task)
+            )
+
+    async def _complete_recovered_gate(self, task: CompanyTask) -> None:
+        try:
+            decision = self._normalize_decision(await self._gates[task.task_id])
+            self._close_approval_gate(task.task_id)
+            if not decision.approved:
+                if self._is_release_approval(task):
+                    if self.active_project:
+                        self.active_project.phase = "development"
+                    await self._route_release_rejection(task, decision)
+                else:
+                    await self._route_rejection(task, decision)
+                return
+            if self._is_release_approval(task):
+                if self.active_project:
+                    self.active_project.phase = "done"
+                return
+            self._advance_after_approval(task)
+            task.blocking = False
+            await self.departments[task.target].receive(task)
+        finally:
+            self._recovered_gate_tasks.pop(task.task_id, None)
+
+    async def _open_approval_gate(self, task: CompanyTask) -> None:
+        fut = asyncio.get_event_loop().create_future()
+        self._gates[task.task_id] = fut
+        self._pending_tasks[task.task_id] = task
+        self._persist_pending_approval(task)
+        await self._emit(self._approval_required_event(task))
+
+    def _close_approval_gate(self, task_id: str) -> None:
+        self._gates.pop(task_id, None)
+        self._pending_tasks.pop(task_id, None)
+        self._remove_pending_approval(task_id)
+
     def _approval_required_event(self, task: CompanyTask) -> EventMessage:
         context = task.context if isinstance(task.context, dict) else {}
         metadata = dict(context.get("prd_metadata", {}))
-        gate_name = context.get("gate_name") or metadata.get("gate_name", "prd_approval")
-        artifact_preview = context.get("artifact_preview") or self._artifact_preview(task)
+        gate_name = context.get("gate_name") or metadata.get(
+            "gate_name", "prd_approval"
+        )
+        artifact_preview = context.get("artifact_preview") or self._artifact_preview(
+            task
+        )
         return EventMessage(
             event=CompanyEvent.APPROVAL_REQUIRED,
             task_id=task.task_id,
@@ -200,6 +257,7 @@ class CompanyOrchestrator:
             payload={
                 "engineering_result": d.content,
                 "engineering_metadata": dict(d.metadata),
+                "prd_content": self.active_project.prd if self.active_project else "",
             },
             blocking=False,
             context=context,
@@ -240,13 +298,9 @@ class CompanyOrchestrator:
                 "handoff_to": "release",
             },
         )
-        fut = asyncio.get_event_loop().create_future()
-        self._gates[task.task_id] = fut
-        self._pending_tasks[task.task_id] = task
-        await self._emit(self._approval_required_event(task))
-        decision = self._normalize_decision(await fut)
-        self._gates.pop(task.task_id, None)
-        self._pending_tasks.pop(task.task_id, None)
+        await self._open_approval_gate(task)
+        decision = self._normalize_decision(await self._gates[task.task_id])
+        self._close_approval_gate(task.task_id)
 
         if decision.approved:
             if self.active_project:
@@ -256,6 +310,112 @@ class CompanyOrchestrator:
         if self.active_project:
             self.active_project.phase = "development"
         await self._route_release_rejection(task, decision)
+
+    def _persist_pending_approval(self, task: CompanyTask) -> None:
+        approval = self._pending_approval_record(task)
+        approvals = [
+            item
+            for item in self._stored_pending_approvals()
+            if item.get("task_id") != task.task_id
+        ]
+        approvals.append(approval)
+        self.memory.update({"pending_approvals": approvals})
+        self.memory.persist()
+
+    def _remove_pending_approval(self, task_id: str) -> None:
+        approvals = [
+            item
+            for item in self._stored_pending_approvals()
+            if item.get("task_id") != task_id
+        ]
+        self.memory.update({"pending_approvals": approvals})
+        self.memory.persist()
+
+    def _pending_approval_record(self, task: CompanyTask) -> dict:
+        event = self._approval_required_event(task)
+        return {
+            "task_id": task.task_id,
+            "gate_name": event.payload.get("gate_name"),
+            "department": task.origin,
+            "artifact_preview": event.payload.get("artifact_preview", ""),
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "status": "pending",
+            "task": self._serialize_task(task),
+        }
+
+    def _stored_pending_approvals(self) -> List[dict]:
+        approvals = self.memory.data.get("pending_approvals", [])
+        if not isinstance(approvals, list):
+            return []
+        return [item for item in approvals if isinstance(item, dict)]
+
+    def _task_from_pending_approval(self, approval: dict) -> Optional[CompanyTask]:
+        task_data = approval.get("task")
+        if isinstance(task_data, dict):
+            return CompanyTask(
+                task_id=str(task_data.get("task_id") or approval.get("task_id")),
+                origin=str(
+                    task_data.get("origin") or approval.get("department") or "ceo"
+                ),
+                target=str(task_data.get("target") or "engineering"),
+                artifact_type=task_data.get("artifact_type", "general"),
+                payload=task_data.get("payload", approval.get("artifact_preview", "")),
+                blocking=True,
+                context=(
+                    task_data.get("context", {})
+                    if isinstance(task_data.get("context"), dict)
+                    else {}
+                ),
+            )
+
+        task_id = approval.get("task_id")
+        gate_name = approval.get("gate_name", "prd_approval")
+        if not task_id:
+            return None
+        target = "engineering"
+        origin = approval.get("department") or "product"
+        artifact_type = "test_report" if gate_name == "release_approval" else "prd"
+        context = {
+            "gate_name": gate_name,
+            "artifact_preview": approval.get("artifact_preview", ""),
+        }
+        return CompanyTask(
+            task_id=str(task_id),
+            origin=str(origin),
+            target=target,
+            artifact_type=artifact_type,
+            payload=approval.get("artifact_preview", ""),
+            blocking=True,
+            context=context,
+        )
+
+    def _serialize_task(self, task: CompanyTask) -> dict:
+        return {
+            "task_id": task.task_id,
+            "origin": task.origin,
+            "target": task.target,
+            "artifact_type": task.artifact_type,
+            "payload": self._json_safe(task.payload),
+            "blocking": task.blocking,
+            "context": self._json_safe(task.context),
+        }
+
+    @classmethod
+    def _json_safe(cls, value: Any) -> Any:
+        if is_dataclass(value):
+            return cls._json_safe(asdict(value))
+        if isinstance(value, dict):
+            return {str(k): cls._json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [cls._json_safe(item) for item in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    @staticmethod
+    def _is_release_approval(task: CompanyTask) -> bool:
+        context = task.context if isinstance(task.context, dict) else {}
+        return context.get("gate_name") == "release_approval"
 
     @staticmethod
     def _normalize_decision(decision) -> ApprovalDecision:
@@ -276,7 +436,9 @@ class CompanyOrchestrator:
             project.prd = self._prd_content(task)
             project.phase = "development"
 
-    async def _route_rejection(self, task: CompanyTask, decision: ApprovalDecision) -> None:
+    async def _route_rejection(
+        self, task: CompanyTask, decision: ApprovalDecision
+    ) -> None:
         if task.origin not in self.departments:
             return
 
@@ -289,7 +451,9 @@ class CompanyOrchestrator:
         if self.active_project and task.origin == "product":
             self.active_project.phase = "prototyping"
 
-        feedback = decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
+        feedback = (
+            decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
+        )
         revision_task = CompanyTask(
             task_id=task.task_id,
             origin="ceo",
@@ -317,7 +481,9 @@ class CompanyOrchestrator:
     ) -> None:
         if "engineering" not in self.departments:
             return
-        feedback = decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
+        feedback = (
+            decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
+        )
         await self.departments["engineering"].receive(
             CompanyTask(
                 task_id=task.task_id,
@@ -325,9 +491,11 @@ class CompanyOrchestrator:
                 target="engineering",
                 artifact_type="test_report",
                 payload={
-                    "qa_report": task.payload.get("qa_report")
-                    if isinstance(task.payload, dict)
-                    else task.payload,
+                    "qa_report": (
+                        task.payload.get("qa_report")
+                        if isinstance(task.payload, dict)
+                        else task.payload
+                    ),
                     "ceo_feedback": feedback,
                 },
                 blocking=False,
@@ -351,10 +519,14 @@ class CompanyOrchestrator:
             )
 
     def request_changes(self, task_id: str, feedback: str) -> None:
-        self.reject(task_id, reason=feedback, metadata={"action": "revise", "feedback": feedback})
+        self.reject(
+            task_id,
+            reason=feedback,
+            metadata={"action": "revise", "feedback": feedback},
+        )
 
     async def start(self) -> None:
         await asyncio.gather(
             *[dept.run_loop() for dept in self.departments.values()],
-            return_exceptions=True
+            return_exceptions=True,
         )

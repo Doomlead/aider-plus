@@ -9,7 +9,7 @@ from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
-from aider.company.schemas import CompanyEvent, Deliverable, EventMessage
+from aider.company.schemas import CompanyEvent, CompanyTask, Deliverable, EventMessage
 from aider.memory import ConversationMemory, ProjectMemory
 
 
@@ -35,7 +35,9 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             product = ProductDepartment(project_memory=memory)
             engineering = EngineeringDepartment(
                 project_memory=memory,
-                agent_loop=SimpleNamespace(run=AsyncMock(return_value={"summary": "done"})),
+                agent_loop=SimpleNamespace(
+                    run=AsyncMock(return_value={"summary": "done"})
+                ),
             )
             engineering.receive = AsyncMock()
             orchestrator.register(product)
@@ -67,14 +69,17 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
 
             engineering.receive.assert_not_awaited()
             approval_events = [
-                message for message in seen_messages
+                message
+                for message in seen_messages
                 if isinstance(message, EventMessage)
                 and message.event == CompanyEvent.APPROVAL_REQUIRED
             ]
             self.assertEqual(len(approval_events), 1)
             self.assertEqual(approval_events[0].payload["gate_name"], "prd_approval")
             self.assertEqual(approval_events[0].payload["approver_role"], "ceo")
-            self.assertIn("Build a dashboard", approval_events[0].payload["artifact_preview"])
+            self.assertIn(
+                "Build a dashboard", approval_events[0].payload["artifact_preview"]
+            )
 
             orchestrator.approve("task-1")
             await route_task
@@ -85,17 +90,149 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engineering_task.target, "engineering")
         self.assertEqual(engineering_task.artifact_type, "prd")
         self.assertIsNotNone(engineering_task.payload.get("prd_content"))
-        self.assertEqual(engineering_task.payload["prd_content"], product_deliverable.content)
-        self.assertEqual(engineering_task.payload["original_request"], "Build a dashboard")
-        self.assertEqual(engineering_task.context["prd_content"], product_deliverable.content)
+        self.assertEqual(
+            engineering_task.payload["prd_content"], product_deliverable.content
+        )
+        self.assertEqual(
+            engineering_task.payload["original_request"], "Build a dashboard"
+        )
+        self.assertEqual(
+            engineering_task.context["prd_content"], product_deliverable.content
+        )
 
-    async def test_engineering_clarification_routes_product_response_back_to_engineering(self):
+    async def test_blocking_approval_persists_and_clears_pending_approval(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory = ProjectMemory(tmpdir)
+            orchestrator = CompanyOrchestrator(project_memory=memory)
+            engineering = EngineeringDepartment(
+                project_memory=memory,
+                agent_loop=SimpleNamespace(
+                    run=AsyncMock(return_value={"summary": "done"})
+                ),
+            )
+            engineering.receive = AsyncMock()
+            orchestrator.register(engineering)
+
+            task = CompanyTask(
+                task_id="persist-approval-1",
+                origin="product",
+                target="engineering",
+                artifact_type="prd",
+                payload={"prd_content": "Build a subscription billing dashboard"},
+                blocking=True,
+                context={"project_name": "billing", "gate_name": "prd_approval"},
+            )
+
+            submit_task = asyncio.create_task(orchestrator.submit(task))
+            await asyncio.sleep(0)
+
+            self.assertEqual(len(memory.data["pending_approvals"]), 1)
+            pending = memory.data["pending_approvals"][0]
+            self.assertEqual(pending["task_id"], "persist-approval-1")
+            self.assertEqual(pending["gate_name"], "prd_approval")
+            self.assertEqual(pending["department"], "product")
+            self.assertEqual(pending["status"], "pending")
+            self.assertIn("subscription billing dashboard", pending["artifact_preview"])
+
+            loaded = ProjectMemory(tmpdir)
+            loaded.load()
+            self.assertEqual(
+                loaded.data["pending_approvals"][0]["task_id"], "persist-approval-1"
+            )
+
+            orchestrator.approve("persist-approval-1")
+            await submit_task
+
+            self.assertEqual(memory.data["pending_approvals"], [])
+            engineering.receive.assert_awaited_once()
+
+    async def test_recover_pending_approval_recreates_gate_and_reroutes_after_approval(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory = ProjectMemory(tmpdir)
+            memory.update(
+                {
+                    "pending_approvals": [
+                        {
+                            "task_id": "recover-approval-1",
+                            "gate_name": "prd_approval",
+                            "department": "product",
+                            "artifact_preview": "Build a subscription billing dashboard",
+                            "timestamp": "2024-01-15T10:00:00Z",
+                            "status": "pending",
+                            "task": {
+                                "task_id": "recover-approval-1",
+                                "origin": "product",
+                                "target": "engineering",
+                                "artifact_type": "prd",
+                                "payload": {
+                                    "prd_content": "# PRD\n\nBuild a subscription billing dashboard",
+                                    "original_request": "Build a dashboard",
+                                },
+                                "blocking": True,
+                                "context": {
+                                    "project_name": "billing",
+                                    "prd_metadata": {"gate_name": "prd_approval"},
+                                },
+                            },
+                        }
+                    ]
+                }
+            )
+            memory.persist()
+
+            recovered_memory = ProjectMemory(tmpdir)
+            recovered_memory.load()
+            orchestrator = CompanyOrchestrator(project_memory=recovered_memory)
+            engineering = EngineeringDepartment(
+                project_memory=recovered_memory,
+                agent_loop=SimpleNamespace(
+                    run=AsyncMock(return_value={"summary": "done"})
+                ),
+            )
+            engineering.receive = AsyncMock()
+            orchestrator.register(engineering)
+            seen_messages = []
+
+            async def handler(message):
+                seen_messages.append(message)
+
+            orchestrator.on_deliverable(handler)
+
+            await orchestrator.recover_pending_approvals()
+
+            self.assertIn("recover-approval-1", orchestrator._gates)
+            approval_events = [
+                message
+                for message in seen_messages
+                if isinstance(message, EventMessage)
+                and message.event == CompanyEvent.APPROVAL_REQUIRED
+            ]
+            self.assertEqual(len(approval_events), 1)
+            self.assertEqual(approval_events[0].task_id, "recover-approval-1")
+            self.assertEqual(approval_events[0].payload["gate_name"], "prd_approval")
+
+            orchestrator.approve("recover-approval-1")
+            await orchestrator._recovered_gate_tasks["recover-approval-1"]
+
+            engineering.receive.assert_awaited_once()
+            routed_task = engineering.receive.await_args.args[0]
+            self.assertEqual(routed_task.task_id, "recover-approval-1")
+            self.assertFalse(routed_task.blocking)
+            self.assertEqual(recovered_memory.data["pending_approvals"], [])
+
+    async def test_engineering_clarification_routes_product_response_back_to_engineering(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as tmpdir:
             memory = ProjectMemory(tmpdir)
             orchestrator = CompanyOrchestrator(project_memory=memory)
             product = ProductDepartment(project_memory=memory)
             agent_loop = SimpleNamespace(
-                run=AsyncMock(return_value={"summary": "implemented with clarification"})
+                run=AsyncMock(
+                    return_value={"summary": "implemented with clarification"}
+                )
             )
             engineering = EngineeringDepartment(
                 project_memory=memory,
@@ -121,16 +258,22 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(product_task.origin, "engineering")
         self.assertEqual(product_task.target, "product")
-        self.assertEqual(product_task.payload["question"], "Which export formats are required?")
+        self.assertEqual(
+            product_task.payload["question"], "Which export formats are required?"
+        )
         self.assertEqual(engineering_task.origin, "product")
         self.assertEqual(engineering_task.target, "engineering")
         self.assertEqual(
             engineering_task.payload["last_clarification_question"],
             "Which export formats are required?",
         )
-        self.assertIn("Product clarification", engineering_task.payload["clarification_response"])
+        self.assertIn(
+            "Product clarification", engineering_task.payload["clarification_response"]
+        )
         agent_loop.run.assert_awaited_once()
-        self.assertIn("Which export formats are required?", agent_loop.run.await_args.args[0])
+        self.assertIn(
+            "Which export formats are required?", agent_loop.run.await_args.args[0]
+        )
         self.assertEqual(engineering_deliverable.status, "success")
 
     async def test_blocking_rejection_routes_prd_back_to_product_with_feedback(self):
@@ -140,7 +283,9 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             product = ProductDepartment(project_memory=memory)
             engineering = EngineeringDepartment(
                 project_memory=memory,
-                agent_loop=SimpleNamespace(run=AsyncMock(return_value={"summary": "done"})),
+                agent_loop=SimpleNamespace(
+                    run=AsyncMock(return_value={"summary": "done"})
+                ),
             )
             engineering.receive = AsyncMock()
             orchestrator.register(product)
@@ -174,7 +319,9 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
         engineering.receive.assert_not_awaited()
         self.assertEqual(revision_task.origin, "ceo")
         self.assertEqual(revision_task.target, "product")
-        self.assertEqual(revision_task.payload["previous_prd"], product_deliverable.payload)
+        self.assertEqual(
+            revision_task.payload["previous_prd"], product_deliverable.payload
+        )
         self.assertEqual(
             revision_task.payload["ceo_feedback"],
             "Add multi-tenant support before engineering starts",
@@ -193,7 +340,9 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             product = ProductDepartment(project_memory=memory)
             engineering = EngineeringDepartment(
                 project_memory=memory,
-                agent_loop=SimpleNamespace(run=AsyncMock(return_value={"summary": "done"})),
+                agent_loop=SimpleNamespace(
+                    run=AsyncMock(return_value={"summary": "done"})
+                ),
             )
             qa = QADepartment(project_memory=memory)
             engineering.receive = AsyncMock()
@@ -226,7 +375,9 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             await route_task
 
             self.assertEqual(orchestrator.active_project.phase, "development")
-            self.assertEqual(orchestrator.active_project.prd, product_deliverable.payload)
+            self.assertEqual(
+                orchestrator.active_project.prd, product_deliverable.payload
+            )
             engineering.receive.assert_awaited_once()
 
             engineering_deliverable = Deliverable(
@@ -240,7 +391,9 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             await orchestrator._route(engineering_deliverable)
 
             self.assertEqual(orchestrator.active_project.phase, "qa")
-            self.assertEqual(orchestrator.active_project.engineering_result, engineering_deliverable)
+            self.assertEqual(
+                orchestrator.active_project.engineering_result, engineering_deliverable
+            )
             qa.receive.assert_awaited_once()
             qa_task = qa.receive.await_args.args[0]
             self.assertEqual(qa_task.origin, "engineering")
@@ -258,7 +411,9 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             )
             engineering = EngineeringDepartment(
                 project_memory=memory,
-                agent_loop=SimpleNamespace(run=AsyncMock(return_value={"summary": "done"})),
+                agent_loop=SimpleNamespace(
+                    run=AsyncMock(return_value={"summary": "done"})
+                ),
             )
             engineering.receive = AsyncMock()
             orchestrator.register(engineering)
@@ -282,7 +437,8 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(orchestrator.active_project.phase, "release_ready")
             release_events = [
-                message for message in seen_messages
+                message
+                for message in seen_messages
                 if isinstance(message, EventMessage)
                 and message.event == CompanyEvent.APPROVAL_REQUIRED
             ]
@@ -309,7 +465,9 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(revision_task.origin, "ceo")
             self.assertEqual(revision_task.target, "engineering")
             self.assertEqual(revision_task.payload["qa_report"], "QA passed")
-            self.assertEqual(revision_task.payload["ceo_feedback"], "Fix launch blocker")
+            self.assertEqual(
+                revision_task.payload["ceo_feedback"], "Fix launch blocker"
+            )
 
     async def test_engineering_failure_returns_to_engineering_in_development(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -322,7 +480,9 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             )
             engineering = EngineeringDepartment(
                 project_memory=memory,
-                agent_loop=SimpleNamespace(run=AsyncMock(return_value={"summary": "done"})),
+                agent_loop=SimpleNamespace(
+                    run=AsyncMock(return_value={"summary": "done"})
+                ),
             )
             engineering.receive = AsyncMock()
             orchestrator.register(engineering)
@@ -339,11 +499,15 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             await orchestrator._route(engineering_deliverable)
 
             self.assertEqual(orchestrator.active_project.phase, "development")
-            self.assertEqual(orchestrator.active_project.engineering_result, engineering_deliverable)
+            self.assertEqual(
+                orchestrator.active_project.engineering_result, engineering_deliverable
+            )
             engineering.receive.assert_awaited_once()
             retry_task = engineering.receive.await_args.args[0]
             self.assertEqual(retry_task.target, "engineering")
-            self.assertIn("Address the engineering failure", retry_task.payload["instruction"])
+            self.assertIn(
+                "Address the engineering failure", retry_task.payload["instruction"]
+            )
 
 
 if __name__ == "__main__":

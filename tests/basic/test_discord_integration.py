@@ -39,15 +39,38 @@ class TestDiscordApprovalFormatting(unittest.TestCase):
         self.assertIn("Gate: PRD Approval → Engineering", message)
         self.assertIn("> Build a subscription billing dashboard", message)
 
+    def test_formats_release_approval_required_message(self):
+        event = EventMessage(
+            event=CompanyEvent.APPROVAL_REQUIRED,
+            task_id="task-2",
+            payload={
+                "project_name": "fastapi-billing",
+                "gate_name": "release_approval",
+                "artifact_preview": "QA passed",
+                "handoff_to": "release",
+            },
+        )
+
+        message = format_approval_required_message(event)
+
+        self.assertIn("🧪 **QA Release Approval Required**", message)
+        self.assertIn("Project: `fastapi-billing`", message)
+        self.assertIn("Gate: Release Approval → Release", message)
+        self.assertIn("> QA passed", message)
+
 
 class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
     async def test_run_instruction_returns_structured_output(self):
         bot = DiscordAiderBot(config=DiscordAiderConfig(max_runtime_seconds=30))
 
-        key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo")
+        key = DiscordSessionKey(
+            guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo"
+        )
         fake_coder = MagicMock()
 
-        with patch.object(bot, "get_or_create_session", AsyncMock(return_value=fake_coder)):
+        with patch.object(
+            bot, "get_or_create_session", AsyncMock(return_value=fake_coder)
+        ):
             with patch("aider.integrations.discord.EngineeringDepartment") as eng_cls:
                 engineering = MagicMock()
                 engineering.process = AsyncMock(
@@ -73,15 +96,23 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
     async def test_run_instruction_reloads_memory_on_ping(self):
         bot = DiscordAiderBot(config=DiscordAiderConfig(max_runtime_seconds=30))
 
-        key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo")
+        key = DiscordSessionKey(
+            guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo"
+        )
         fake_coder = MagicMock()
 
-        with patch.object(bot, "get_or_create_session", AsyncMock(return_value=fake_coder)):
+        with patch.object(
+            bot, "get_or_create_session", AsyncMock(return_value=fake_coder)
+        ):
             with patch.object(bot, "on_reconnect_or_ping") as ping_hook:
-                with patch("aider.integrations.discord.EngineeringDepartment") as eng_cls:
+                with patch(
+                    "aider.integrations.discord.EngineeringDepartment"
+                ) as eng_cls:
                     engineering = MagicMock()
                     engineering.process = AsyncMock(
-                        return_value=MagicMock(payload="done", status="success", metadata={})
+                        return_value=MagicMock(
+                            payload="done", status="success", metadata={}
+                        )
                     )
                     eng_cls.return_value = engineering
 
@@ -96,7 +127,9 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
 
     async def test_receive_human_input_bootstraps_without_active_project(self):
         bot = DiscordAiderBot(config=DiscordAiderConfig(max_runtime_seconds=30))
-        key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo")
+        key = DiscordSessionKey(
+            guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo"
+        )
 
         with patch.object(
             bot, "run_prototype", AsyncMock(return_value={"artifact_type": "prd"})
@@ -121,10 +154,14 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
             callback=None,
         )
 
-    async def test_receive_human_input_routes_active_project_iteration_to_engineering(self):
+    async def test_receive_human_input_routes_active_project_iteration_to_engineering(
+        self,
+    ):
         bot = DiscordAiderBot(config=DiscordAiderConfig(max_runtime_seconds=30))
         bot.active_project = Project(project_id="project-1", name="repo")
-        key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo")
+        key = DiscordSessionKey(
+            guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo"
+        )
 
         with patch.object(
             bot, "run_instruction", AsyncMock(return_value={"summary": "done"})
@@ -149,10 +186,14 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
     async def test_run_prototype_emits_approval_before_engineering_handoff(self):
         bot = DiscordAiderBot(config=DiscordAiderConfig(max_runtime_seconds=30))
 
-        key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo")
+        key = DiscordSessionKey(
+            guild_id=1, channel_id=2, user_id=3, repo_path="/tmp/repo"
+        )
         fake_coder = MagicMock()
 
-        with patch.object(bot, "get_or_create_session", AsyncMock(return_value=fake_coder)):
+        with patch.object(
+            bot, "get_or_create_session", AsyncMock(return_value=fake_coder)
+        ):
             with patch("aider.integrations.discord.EngineeringDepartment") as eng_cls:
                 engineering = MagicMock()
                 engineering.name = "engineering"
@@ -179,8 +220,10 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.orchestrator.active_project, bot.active_project)
         engineering.receive.assert_not_awaited()
         approval_events = [
-            event for event in seen_events
-            if isinstance(event, EventMessage) and event.event == CompanyEvent.APPROVAL_REQUIRED
+            event
+            for event in seen_events
+            if isinstance(event, EventMessage)
+            and event.event == CompanyEvent.APPROVAL_REQUIRED
         ]
         self.assertEqual(len(approval_events), 1)
         self.assertEqual(approval_events[0].payload["project_name"], "fastapi-billing")
@@ -201,7 +244,9 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
 
     async def test_denied_user(self):
         bot = DiscordAiderBot(config=DiscordAiderConfig(deny_users={99}))
-        key = DiscordSessionKey(guild_id=1, channel_id=2, user_id=99, repo_path="/tmp/repo")
+        key = DiscordSessionKey(
+            guild_id=1, channel_id=2, user_id=99, repo_path="/tmp/repo"
+        )
 
         with self.assertRaises(PermissionError):
             await bot.run_instruction(

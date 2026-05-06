@@ -16,6 +16,7 @@ from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.departments.engineering import EngineeringDepartment
+from aider.company.departments.product import ProductDepartment
 from aider.company.schemas import CompanyTask
 from aider.coders import Coder
 from aider.main import main as aider_main
@@ -109,6 +110,8 @@ class DiscordAiderBot:
         self.config = config or DiscordAiderConfig()
         self.sessions = DiscordSessionManager()
         self.orchestrator: Optional[CompanyOrchestrator] = None
+        self.engineering: Optional[EngineeringDepartment] = None
+        self.product: Optional[ProductDepartment] = None
 
     def check_access(self, user_id: int):
         if user_id in self.config.deny_users:
@@ -155,6 +158,74 @@ class DiscordAiderBot:
         self.sessions.put(key, coder)
         return coder
 
+    def _init_company_session(
+        self,
+        coder: Coder,
+        callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
+    ) -> EngineeringDepartment:
+        agent_loop = AiderAgentLoop(
+            coder=coder,
+            callback=callback,
+            config=AgentLoopConfig(
+                use_architect_mode=self.config.use_architect_mode,
+                architect_model=self.config.architect_model,
+                editor_model=self.config.editor_model,
+            ),
+        )
+        self.engineering = EngineeringDepartment(
+            project_memory=coder.project_memory,
+            agent_loop=agent_loop,
+            conversation_memory=coder.conversation_memory,
+        )
+        self.product = ProductDepartment(
+            project_memory=coder.project_memory,
+            conversation_memory=None,
+        )
+        self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
+        self.orchestrator.register(self.product)
+        self.orchestrator.register(self.engineering)
+        return self.engineering
+
+    async def run_prototype(
+        self,
+        *,
+        key: DiscordSessionKey,
+        repo_path: str,
+        user_id: int,
+        prompt: str,
+        model: Optional[str] = None,
+        callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
+    ):
+        self.check_access(user_id)
+        if len(prompt) > self.config.max_prompt_chars:
+            raise ValueError("Prompt too large")
+
+        coder = await self.get_or_create_session(key, repo_path, model=model)
+        self.on_reconnect_or_ping(key)
+        self._init_company_session(coder, callback=callback)
+
+        task = CompanyTask(
+            task_id=str(uuid.uuid4()),
+            origin="ceo",
+            target="product",
+            artifact_type="raw_prompt",
+            payload=prompt,
+            blocking=False,
+        )
+
+        deliverable = await self.product.process(task)
+        if self.orchestrator:
+            await self.orchestrator._route(deliverable)
+
+        return {
+            "task_id": task.task_id,
+            "summary": deliverable.payload,
+            "content": deliverable.payload,
+            "artifact_type": deliverable.artifact_type,
+            "status": deliverable.status,
+            "metadata": deliverable.metadata,
+        }
+
     async def run_instruction(
         self,
         *,
@@ -173,22 +244,7 @@ class DiscordAiderBot:
         coder = await self.get_or_create_session(key, repo_path, model=model)
         self.on_reconnect_or_ping(key)
 
-        agent_loop = AiderAgentLoop(
-            coder=coder,
-            callback=callback,
-            config=AgentLoopConfig(
-                use_architect_mode=self.config.use_architect_mode,
-                architect_model=self.config.architect_model,
-                editor_model=self.config.editor_model,
-            ),
-        )
-        engineering = EngineeringDepartment(
-            project_memory=coder.project_memory,
-            agent_loop=agent_loop,
-            conversation_memory=coder.conversation_memory,
-        )
-        self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
-        self.orchestrator.register(engineering)
+        engineering = self._init_company_session(coder, callback=callback)
         task = CompanyTask(
             task_id=str(uuid.uuid4()),
             origin="ceo",
@@ -253,7 +309,6 @@ class DiscordAiderBot:
             project_memory.load()
 
 
-
 def build_discord_client(*args, **kwargs):
     """Factory that imports discord.py lazily.
 
@@ -266,10 +321,43 @@ def build_discord_client(*args, **kwargs):
     except ImportError as err:
         raise ImportError("Install discord.py to use Discord integrations") from err
 
+    aider_bot = kwargs.pop("aider_bot", None)
+    repo_path_resolver = kwargs.pop("repo_path_resolver", None)
+    model_resolver = kwargs.pop("model_resolver", None)
+
     intents = kwargs.pop("intents", None)
     if intents is None:
         intents = discord.Intents.default()
         intents.guilds = True
         intents.message_content = True
 
-    return commands.Bot(*args, intents=intents, **kwargs)
+    bot = commands.Bot(*args, intents=intents, **kwargs)
+
+    if aider_bot is not None:
+
+        @bot.command(name="prototype")
+        async def prototype(ctx, *, prompt: str):
+            repo_path = (
+                repo_path_resolver(ctx) if repo_path_resolver else getattr(ctx, "repo_path", None)
+            )
+            if not repo_path:
+                await ctx.send("Repository path is required for /prototype.")
+                return
+
+            model = model_resolver(ctx) if model_resolver else None
+            key = DiscordSessionKey(
+                guild_id=getattr(getattr(ctx, "guild", None), "id", 0) or 0,
+                channel_id=ctx.channel.id,
+                user_id=getattr(getattr(ctx, "author", None), "id", None),
+                repo_path=repo_path,
+            )
+            await aider_bot.run_prototype(
+                key=key,
+                repo_path=repo_path,
+                user_id=getattr(getattr(ctx, "author", None), "id", 0) or 0,
+                prompt=prompt,
+                model=model,
+            )
+            await ctx.send("📋 Product is drafting requirements...")
+
+    return bot

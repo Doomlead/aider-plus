@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Optional, List, Callable
+from typing import Awaitable, Optional, List, Callable
 
 from aider.memory import ProjectMemory, ConversationMemory, Message
 from aider.company.schemas import CompanyTask, Deliverable
@@ -21,6 +21,7 @@ class Department(ABC):
         self.inbox: asyncio.Queue[CompanyTask] = asyncio.Queue()
         self.tools: List[str] = []
         self._on_deliverable: Optional[Callable[[Deliverable], None]] = None
+        self._submit_task: Optional[Callable[[CompanyTask], Awaitable[Optional[Deliverable]]]] = None
 
     async def receive(self, task: CompanyTask) -> None:
         await self.inbox.put(task)

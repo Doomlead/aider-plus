@@ -20,6 +20,11 @@ class CompanyOrchestrator:
         self.departments[dept.name] = dept
         dept._on_deliverable = lambda d: asyncio.create_task(self._route(d))
 
+        async def submit_task(task: CompanyTask) -> Optional[Deliverable]:
+            return await self.submit(task)
+
+        dept._submit_task = submit_task
+
     def on_deliverable(self, handler: Callable[[Deliverable], Awaitable[None]]):
         self._handlers.append(handler)
 
@@ -31,17 +36,40 @@ class CompanyOrchestrator:
             except Exception:
                 pass
 
-        # Auto-route handoffs if specified in metadata
+        # Auto-route handoffs if specified in metadata. Product PRDs are
+        # promoted into structured engineering task context so Engineering
+        # receives the generated PRD, not just the original user prompt.
         next_target = d.metadata.get("handoff_to")
         if next_target and next_target in self.departments:
-            await self.submit(CompanyTask(
-                task_id=d.task_id,
-                origin=d.department,
-                target=next_target,
-                artifact_type=d.metadata.get("next_artifact_type", "general"),
-                payload=d.payload,
-                blocking=d.metadata.get("blocking", False),
-            ))
+            await self.submit(self._handoff_task(d, next_target))
+
+    def _handoff_task(self, d: Deliverable, next_target: str) -> CompanyTask:
+        payload = d.payload
+        context = dict(d.metadata.get("context", {}))
+
+        if d.department == "product" and next_target == "engineering" and d.artifact_type == "prd":
+            payload = {
+                "original_request": d.metadata.get("original_request"),
+                "prd_content": d.content,
+                "prd_metadata": dict(d.metadata),
+            }
+            context.update(payload)
+        elif d.department == "product" and next_target == "engineering" and d.artifact_type == "memo":
+            payload = {
+                "clarification_response": d.content,
+                "clarification_metadata": dict(d.metadata),
+                **context,
+            }
+
+        return CompanyTask(
+            task_id=d.task_id,
+            origin=d.department,
+            target=next_target,
+            artifact_type=d.metadata.get("next_artifact_type", "general"),
+            payload=payload,
+            blocking=d.metadata.get("blocking", False),
+            context=context,
+        )
 
     async def submit(self, task: CompanyTask) -> Optional[Deliverable]:
         if task.target not in self.departments:

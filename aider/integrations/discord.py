@@ -112,6 +112,7 @@ class DiscordAiderBot:
         self.orchestrator: Optional[CompanyOrchestrator] = None
         self.engineering: Optional[EngineeringDepartment] = None
         self.product: Optional[ProductDepartment] = None
+        self.active_project = None
 
     def check_access(self, user_id: int):
         if user_id in self.config.deny_users:
@@ -186,6 +187,36 @@ class DiscordAiderBot:
         self.orchestrator.register(self.engineering)
         return self.engineering
 
+    async def receive_human_input(
+        self,
+        *,
+        key: DiscordSessionKey,
+        repo_path: str,
+        user_id: int,
+        prompt: str,
+        model: Optional[str] = None,
+        callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
+    ):
+        """Unified human entry point: bootstrap via Product, then iterate in Engineering."""
+        if not self.active_project:
+            return await self.run_prototype(
+                key=key,
+                repo_path=repo_path,
+                user_id=user_id,
+                prompt=prompt,
+                model=model,
+                callback=callback,
+            )
+
+        return await self.run_instruction(
+            key=key,
+            repo_path=repo_path,
+            user_id=user_id,
+            prompt=prompt,
+            model=model,
+            callback=callback,
+        )
+
     async def run_prototype(
         self,
         *,
@@ -196,6 +227,7 @@ class DiscordAiderBot:
         model: Optional[str] = None,
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
     ):
+        """Start a new project by routing the prompt through Product before Engineering."""
         self.check_access(user_id)
         if len(prompt) > self.config.max_prompt_chars:
             raise ValueError("Prompt too large")
@@ -237,6 +269,7 @@ class DiscordAiderBot:
         include_diff: bool = False,
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
     ):
+        """Run an existing-project instruction directly in Engineering without PRD generation."""
         self.check_access(user_id)
         if len(prompt) > self.config.max_prompt_chars:
             raise ValueError("Prompt too large")

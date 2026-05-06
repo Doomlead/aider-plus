@@ -99,6 +99,11 @@ def format_audit_log_message(project_memory: ProjectMemory, limit: int = 10) -> 
     return f"🧾 **Recent Audit Events**\n```\n{rendered[:1800]}\n```"
 
 
+def format_company_status_message(orchestrator: CompanyOrchestrator) -> str:
+    rendered = orchestrator.company_status()
+    return f"🏢 **Company Dashboard**\n```\n{rendered[:1800]}\n```"
+
+
 class DiscordSessionManager:
     """In-memory session store keyed by channel/user/repo for easy future persistence."""
 
@@ -599,6 +604,21 @@ def build_discord_client(*args, **kwargs):
             await ctx.send(
                 format_audit_log_message(project_memory, limit=max(1, min(limit, 25)))
             )
+
+
+        @bot.command(name="company_status")
+        async def company_status(ctx):
+            if aider_bot.orchestrator is None:
+                await ctx.send("No company session is active yet.")
+                return
+            await ctx.send(format_company_status_message(aider_bot.orchestrator))
+
+        @bot.command(name="dashboard")
+        async def dashboard(ctx):
+            if aider_bot.orchestrator is None:
+                await ctx.send("No company session is active yet.")
+                return
+            await ctx.send(format_company_status_message(aider_bot.orchestrator))
 
         @bot.command(name="prototype")
         async def prototype(ctx, *, prompt: str):

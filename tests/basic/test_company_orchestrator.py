@@ -8,6 +8,7 @@ from aider.company.department import Department
 from aider.company.departments.devops import DevOpsDepartment
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
+from aider.company.departments.qa import QADepartment
 from aider.company.departments.ux import UXDepartment
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
@@ -15,7 +16,7 @@ from aider.company.schemas import CompanyEvent, CompanyTask, Deliverable, EventM
 from aider.memory import ConversationMemory, ProjectMemory
 
 
-class QADepartment(Department):
+class FakeQADepartment(Department):
     name = "qa"
 
     async def process(self, task):
@@ -573,7 +574,7 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(release_events[0].payload["gate_name"], "release_approval")
             self.assertIn("QA passed", release_events[0].payload["artifact_preview"])
 
-            orchestrator.approve("task-release-1")
+            orchestrator.approve(release_events[0].task_id)
             await route_task
 
             self.assertEqual(orchestrator.active_project.phase, "deploying")
@@ -599,7 +600,7 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             qa_deliverable.task_id = "task-release-2"
             route_task = asyncio.create_task(orchestrator._route(qa_deliverable))
             await asyncio.sleep(0)
-            orchestrator.reject("task-release-2", reason="Fix launch blocker")
+            orchestrator.reject(seen_messages[-1].task_id, reason="Fix launch blocker")
             await route_task
 
             self.assertEqual(orchestrator.active_project.phase, "development")
@@ -707,6 +708,122 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             self.assertIn(
                 "Address the engineering failure", retry_task.payload["instruction"]
             )
+
+    async def test_full_happy_path_prototype_to_release(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory = ProjectMemory(tmpdir)
+            orchestrator = CompanyOrchestrator(project_memory=memory)
+            orchestrator.active_project = Project(
+                project_id="happy-path-1",
+                name="dashboard",
+                phase="prototyping",
+            )
+            product = ProductDepartment(project_memory=memory)
+            engineering = EngineeringDepartment(
+                project_memory=memory,
+                agent_loop=SimpleNamespace(
+                    run=AsyncMock(
+                        return_value={
+                            "summary": "implemented dashboard",
+                            "metadata": {
+                                "files": ["app.py"],
+                                "token_usage": {"total_tokens": 42},
+                            },
+                        }
+                    )
+                ),
+            )
+            qa = QADepartment(project_memory=memory)
+            devops = DevOpsDepartment(project_memory=memory)
+            departments = [product, engineering, qa, devops]
+            for department in departments:
+                orchestrator.register(department)
+
+            async def auto_approve(message):
+                if (
+                    isinstance(message, EventMessage)
+                    and message.event == CompanyEvent.APPROVAL_REQUIRED
+                ):
+                    asyncio.create_task(
+                        orchestrator.handle_approval_response(
+                            message.task_id, True, source="test"
+                        )
+                    )
+
+            orchestrator.on_deliverable(auto_approve)
+            loops = [
+                asyncio.create_task(department.run_loop())
+                for department in departments
+            ]
+            try:
+                await orchestrator.submit(
+                    CompanyTask(
+                        task_id="happy-path-1",
+                        origin="ceo",
+                        target="product",
+                        artifact_type="raw_prompt",
+                        payload="Build an internal API endpoint",
+                        blocking=False,
+                        context={"project_name": "dashboard"},
+                    )
+                )
+
+                async def project_done():
+                    while orchestrator.active_project.phase != "done":
+                        await asyncio.sleep(0.01)
+
+                await asyncio.wait_for(project_done(), timeout=5)
+            finally:
+                for loop in loops:
+                    loop.cancel()
+                await asyncio.gather(*loops, return_exceptions=True)
+
+            self.assertEqual(orchestrator.active_project.phase, "done")
+            self.assertIsNotNone(orchestrator.active_project.prd)
+            self.assertEqual(
+                orchestrator.active_project.engineering_result.status, "success"
+            )
+            self.assertEqual(orchestrator.active_project.qa_result.status, "success")
+            self.assertEqual(
+                orchestrator.active_project.deploy_result.status, "success"
+            )
+            observability = memory.data["observability"]
+            self.assertGreaterEqual(
+                observability["turns_per_phase"]["prototyping"]["product"], 1
+            )
+            self.assertEqual(
+                observability["token_usage_per_department"]["engineering"], 42
+            )
+            status = orchestrator.company_status()
+            self.assertIn("Company Dashboard", status)
+            self.assertIn("Phase: done", status)
+            self.assertIn("Token usage per department", status)
+
+    def test_departments_do_not_import_each_other(self):
+        import ast
+        from pathlib import Path
+
+        department_dir = Path("aider/company/departments")
+        department_modules = {
+            f"aider.company.departments.{path.stem}"
+            for path in department_dir.glob("*.py")
+            if path.stem != "__init__"
+        }
+        for path in department_dir.glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imported = {alias.name for alias in node.names}
+                elif isinstance(node, ast.ImportFrom):
+                    imported = {node.module or ""}
+                else:
+                    continue
+                forbidden = imported & (
+                    department_modules - {f"aider.company.departments.{path.stem}"}
+                )
+                self.assertFalse(
+                    forbidden, f"{path} imports departments directly: {forbidden}"
+                )
 
 
 if __name__ == "__main__":

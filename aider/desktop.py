@@ -16,6 +16,13 @@ import subprocess
 import time
 from pathlib import Path
 
+from aider.company.audit import AuditLogViewer
+
+
+def render_desktop_audit_log(project_memory, limit: int = 10) -> str:
+    """Render recent company audit events for desktop debugging panels."""
+    return AuditLogViewer.from_project_memory(project_memory).render_text(limit=limit)
+
 
 DEFAULT_WINDOW_SIZE = (1400, 900)
 MIN_WINDOW_SIZE = (1200, 800)

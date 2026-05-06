@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Awaitable, Callable, Dict, Optional, Set
 
 from aider.agent import AiderAgentLoop
+from aider.company.audit import AuditLogViewer
 from aider.agent.loop import AgentLoopConfig
+from aider.company.approval import ApprovalManager
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
 from aider.company.departments.devops import DevOpsDepartment
@@ -89,6 +91,12 @@ def format_approval_required_message(event: EventMessage) -> str:
         "**Preview:**\n"
         f"{quoted_preview}"
     )
+
+
+def format_audit_log_message(project_memory: ProjectMemory, limit: int = 10) -> str:
+    viewer = AuditLogViewer.from_project_memory(project_memory)
+    rendered = viewer.render_text(limit=limit)
+    return f"🧾 **Recent Audit Events**\n```\n{rendered[:1800]}\n```"
 
 
 class DiscordSessionManager:
@@ -451,7 +459,7 @@ def build_discord_client(*args, **kwargs):
 
     class ApprovalFeedbackModal(discord.ui.Modal):
         def __init__(
-            self, orchestrator: CompanyOrchestrator, task_id: str, gate_name: str
+            self, approval_manager: ApprovalManager, task_id: str, gate_name: str
         ):
             title = (
                 "Request Release Changes"
@@ -464,7 +472,7 @@ def build_discord_client(*args, **kwargs):
                 else "Feedback for Product"
             )
             super().__init__(title=title)
-            self.orchestrator = orchestrator
+            self.approval_manager = approval_manager
             self.task_id = task_id
             self.gate_name = gate_name
             self.feedback = discord.ui.TextInput(
@@ -476,7 +484,7 @@ def build_discord_client(*args, **kwargs):
             self.add_item(self.feedback)
 
         async def on_submit(self, interaction):
-            await self.orchestrator.handle_approval_response(
+            await self.approval_manager.handle_approval_response(
                 self.task_id,
                 False,
                 source="discord",
@@ -493,10 +501,10 @@ def build_discord_client(*args, **kwargs):
 
     class ApprovalView(discord.ui.View):
         def __init__(
-            self, orchestrator: CompanyOrchestrator, task_id: str, gate_name: str
+            self, approval_manager: ApprovalManager, task_id: str, gate_name: str
         ):
             super().__init__(timeout=None)
-            self.orchestrator = orchestrator
+            self.approval_manager = approval_manager
             self.task_id = task_id
             self.gate_name = gate_name
 
@@ -504,7 +512,7 @@ def build_discord_client(*args, **kwargs):
             label="Approve", emoji="✅", style=discord.ButtonStyle.success
         )
         async def approve_button(self, interaction, button):
-            resolved = await self.orchestrator.handle_approval_response(
+            resolved = await self.approval_manager.handle_approval_response(
                 self.task_id, True, source="discord"
             )
             for child in self.children:
@@ -522,7 +530,7 @@ def build_discord_client(*args, **kwargs):
 
         @discord.ui.button(label="Reject", emoji="❌", style=discord.ButtonStyle.danger)
         async def reject_button(self, interaction, button):
-            resolved = await self.orchestrator.handle_approval_response(
+            resolved = await self.approval_manager.handle_approval_response(
                 self.task_id, False, source="discord"
             )
             for child in self.children:
@@ -543,7 +551,9 @@ def build_discord_client(*args, **kwargs):
         )
         async def request_changes_button(self, interaction, button):
             await interaction.response.send_modal(
-                ApprovalFeedbackModal(self.orchestrator, self.task_id, self.gate_name)
+                ApprovalFeedbackModal(
+                    self.approval_manager, self.task_id, self.gate_name
+                )
             )
 
     async def send_company_event(ctx, event):
@@ -555,16 +565,40 @@ def build_discord_client(*args, **kwargs):
         orchestrator = aider_bot.orchestrator
         if orchestrator is None:
             return
+        approval_manager = orchestrator.approval_manager
         await ctx.send(
             format_approval_required_message(event),
             view=ApprovalView(
-                orchestrator,
+                approval_manager,
                 event.task_id,
                 event.payload.get("gate_name", "prd_approval"),
             ),
         )
 
     if aider_bot is not None:
+
+        @bot.command(name="audit")
+        async def audit(ctx, limit: int = 10):
+            repo_path = (
+                repo_path_resolver(ctx)
+                if repo_path_resolver
+                else getattr(ctx, "repo_path", None)
+            )
+            key = DiscordSessionKey(
+                guild_id=getattr(getattr(ctx, "guild", None), "id", 0) or 0,
+                channel_id=ctx.channel.id,
+                user_id=getattr(getattr(ctx, "author", None), "id", None),
+                repo_path=repo_path,
+            )
+            project_memory = aider_bot.sessions._project_memories.get(key)
+            if project_memory is None and aider_bot.orchestrator is not None:
+                project_memory = aider_bot.orchestrator.memory
+            if project_memory is None:
+                await ctx.send("No project memory is available for audit logs yet.")
+                return
+            await ctx.send(
+                format_audit_log_message(project_memory, limit=max(1, min(limit, 25)))
+            )
 
         @bot.command(name="prototype")
         async def prototype(ctx, *, prompt: str):

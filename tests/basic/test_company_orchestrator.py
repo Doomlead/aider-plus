@@ -612,6 +612,62 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
                 revision_task.payload["ceo_feedback"], "Fix launch blocker"
             )
 
+    async def test_submit_release_approval_routes_to_devops_not_engineering(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory = ProjectMemory(tmpdir)
+            orchestrator = CompanyOrchestrator(project_memory=memory)
+            orchestrator.active_project = Project(
+                project_id="project-submit-release",
+                name="dashboard",
+                phase="release_ready",
+                engineering_result=Deliverable(
+                    task_id="task-submit-release",
+                    department="engineering",
+                    artifact_type="code",
+                    payload="implemented",
+                    status="success",
+                    metadata={"files": ["app.py"]},
+                ),
+            )
+            engineering = EngineeringDepartment(
+                project_memory=memory,
+                agent_loop=SimpleNamespace(
+                    run=AsyncMock(return_value={"summary": "done"})
+                ),
+            )
+            devops = DevOpsDepartment(project_memory=memory)
+            engineering.receive = AsyncMock()
+            devops.receive = AsyncMock()
+            orchestrator.register(engineering)
+            orchestrator.register(devops)
+
+            release_task = CompanyTask(
+                task_id="task-submit-release",
+                origin="qa",
+                target="engineering",
+                artifact_type="test_report",
+                payload={"qa_report": "QA passed", "qa_metadata": {"ok": True}},
+                blocking=True,
+                context={
+                    "gate_name": "release_approval",
+                    "handoff_to": "devops",
+                    "project_name": "dashboard",
+                },
+            )
+
+            submit_task = asyncio.create_task(orchestrator.submit(release_task))
+            await asyncio.sleep(0)
+            orchestrator.approve("task-submit-release")
+            await submit_task
+
+            self.assertEqual(orchestrator.active_project.phase, "deploying")
+            engineering.receive.assert_not_awaited()
+            devops.receive.assert_awaited_once()
+            deploy_task = devops.receive.await_args.args[0]
+            self.assertEqual(deploy_task.target, "devops")
+            self.assertEqual(deploy_task.payload["engineering_result"], "implemented")
+            self.assertEqual(deploy_task.payload["qa_report"], "QA passed")
+
     async def test_engineering_failure_returns_to_engineering_in_development(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             memory = ProjectMemory(tmpdir)

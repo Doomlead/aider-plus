@@ -2,6 +2,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, Optional, Any
 
+from aider.company.interfaces import (
+    ApprovalRequest,
+    Deliverable,
+    DepartmentOutput,
+    ProcessResult,
+)
+
 
 class CompanyEvent(str, Enum):
     APPROVAL_REQUIRED = "approval_required"
@@ -40,21 +47,3 @@ class CompanyTask:
     payload: Any
     blocking: bool = False
     context: dict = field(default_factory=dict)
-
-
-@dataclass
-class Deliverable:
-    task_id: str
-    department: str
-    artifact_type: str
-    payload: Any
-    status: Literal["success", "failure", "needs_review"]
-    metadata: dict = field(default_factory=dict)
-
-    @property
-    def content(self) -> Any:
-        return self.payload
-
-    @content.setter
-    def content(self, value: Any) -> None:
-        self.payload = value

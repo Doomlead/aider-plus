@@ -8,6 +8,9 @@ class DevOpsDepartment(Department):
     name = "devops"
     allowed_tools = ["shell", "docker_build", "deploy", "git_tag"]
 
+    def get_context_requirements(self) -> list[str]:
+        return ["playbook.deployment_gotchas", "project.name", "project.phase"]
+
     async def process(self, task: CompanyTask) -> Deliverable:
         release_artifact = self._release_artifact(task)
         playbook_guidance = task.context.get("playbook_guidance", [])

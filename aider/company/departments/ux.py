@@ -8,6 +8,9 @@ class UXDepartment(Department):
     name = "ux"
     allowed_tools = ["design_spec"]
 
+    def get_context_requirements(self) -> list[str]:
+        return ["playbook.*", "project.name", "project.phase", "project.prd"]
+
     async def process(self, task: CompanyTask) -> Deliverable:
         prd_content = self._prd_content(task)
         design_spec = {

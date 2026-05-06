@@ -5,8 +5,9 @@ from abc import ABC, abstractmethod
 from typing import Awaitable, Optional, List, Callable
 
 from aider.company.audit import append_audit_event
-from aider.memory import ProjectMemory, ConversationMemory, Message
-from aider.company.schemas import CompanyTask, Deliverable
+from aider.company.interfaces import Deliverable
+from aider.memory import ProjectMemory, ConversationMemory
+from aider.company.schemas import CompanyTask
 
 
 class Department(ABC):
@@ -36,47 +37,14 @@ class Department(ABC):
             )
         return allowed
 
-    def build_context(self, task: CompanyTask) -> dict:
-        context = dict(task.context or {})
-        playbook = self.memory.data.get("playbook", {})
-        if not isinstance(playbook, dict):
-            playbook = {}
-
-        relevant = {}
-        if self.name == "engineering":
-            relevant["coding_standards"] = list(playbook.get("coding_standards") or [])
-            if playbook.get("ux_preferences"):
-                relevant["ux_preferences"] = list(playbook.get("ux_preferences") or [])
-        elif self.name == "devops":
-            relevant["deployment_gotchas"] = list(
-                playbook.get("deployment_gotchas") or []
-            )
-        else:
-            relevant = {
-                key: list(value or [])
-                for key, value in playbook.items()
-                if isinstance(value, list) and value
-            }
-
-        if relevant:
-            context["playbook"] = relevant
-            context["playbook_guidance"] = self._format_playbook_guidance(relevant)
-        return context
+    def get_context_requirements(self) -> list[str]:
+        return ["playbook.*"]
 
     async def receive(self, task: CompanyTask) -> None:
-        task.context = self.build_context(task)
         await self.inbox.put(task)
 
     @abstractmethod
     async def process(self, task: CompanyTask) -> Deliverable: ...
-
-    @staticmethod
-    def _format_playbook_guidance(playbook: dict) -> list[str]:
-        guidance = []
-        for entries in playbook.values():
-            for entry in entries:
-                guidance.append(str(entry))
-        return guidance
 
     def _log_event(
         self, event_type: str, payload, metadata: Optional[dict] = None

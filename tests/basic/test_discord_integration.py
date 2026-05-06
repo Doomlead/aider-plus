@@ -231,12 +231,12 @@ class TestDiscordAiderBot(unittest.IsolatedAsyncioTestCase):
 
         bot.orchestrator.approve(output["task_id"])
         await asyncio.sleep(0)
-        self.assertEqual(bot.active_project.phase, "development")
-        engineering.receive.assert_awaited_once()
-        routed_task = engineering.receive.await_args.args[0]
+        self.assertEqual(bot.active_project.phase, "design")
+        engineering.receive.assert_not_awaited()
+        routed_task = await bot.ux.inbox.get()
         self.assertIsInstance(routed_task, CompanyTask)
         self.assertEqual(routed_task.origin, "product")
-        self.assertEqual(routed_task.target, "engineering")
+        self.assertEqual(routed_task.target, "ux")
         self.assertEqual(routed_task.payload["prd_content"], output["summary"])
         self.assertEqual(routed_task.payload["original_request"], "Build a dashboard")
         self.assertIsNotNone(routed_task.payload.get("prd_content"))

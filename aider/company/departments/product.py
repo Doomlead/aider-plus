@@ -1,3 +1,5 @@
+import re
+
 from aider.company.department import Department
 from aider.company.schemas import CompanyTask, Deliverable
 
@@ -12,6 +14,8 @@ class ProductDepartment(Department):
         # Lightweight PRD generation. Replace with real LLM call later.
         original_request = self._original_request(task.payload)
         prd = self._build_prd(task.payload, original_request)
+        requires_design = self._requires_design(task.payload, original_request)
+        handoff_to = "ux" if requires_design else "engineering"
         context = dict(task.context)
         if context:
             context["original_request"] = original_request
@@ -22,12 +26,13 @@ class ProductDepartment(Department):
             payload=prd,
             status="success",
             metadata={
-                "handoff_to": "engineering",
+                "handoff_to": handoff_to,
                 "next_artifact_type": "prd",
                 "blocking": True,
                 "gate_name": "prd_approval",
                 "original_request": original_request,
                 "revision_count": self._revision_count(task.payload),
+                "requires_design": requires_design,
                 "context": context,
             },
         )
@@ -68,7 +73,9 @@ class ProductDepartment(Department):
         if not isinstance(payload, dict) or "previous_prd" not in payload:
             return f"# PRD\n\n## Vision\n{original_request}\n\n## Requirements\n- TBD\n"
 
-        feedback = payload.get("ceo_feedback", "Please revise before engineering starts")
+        feedback = payload.get(
+            "ceo_feedback", "Please revise before engineering starts"
+        )
         revision_count = cls._revision_count(payload)
         return (
             f"{payload.get('previous_prd')}\n"
@@ -87,3 +94,28 @@ class ProductDepartment(Department):
         if isinstance(payload, dict):
             return payload.get("question") or payload.get("description") or str(payload)
         return str(payload)
+
+    @staticmethod
+    def _requires_design(payload, original_request: str) -> bool:
+        if isinstance(payload, dict) and "requires_design" in payload:
+            return bool(payload.get("requires_design"))
+
+        prompt_terms = set(re.findall(r"[a-z0-9]+", original_request.lower()))
+        design_terms = {
+            "ui",
+            "ux",
+            "design",
+            "wireframe",
+            "wireframes",
+            "frontend",
+            "screen",
+            "screens",
+            "dashboard",
+            "component",
+            "components",
+            "layout",
+            "css",
+        }
+        return (
+            bool(prompt_terms & design_terms) or "front-end" in original_request.lower()
+        )

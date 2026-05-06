@@ -25,14 +25,15 @@ class ApprovalDecision:
 @dataclass
 class CompanyTask:
     task_id: str
-    origin: str           # e.g. "ceo", "product"
-    target: str           # department name
+    origin: str  # e.g. "ceo", "product"
+    target: str  # department name
     artifact_type: Literal[
         "raw_prompt",
         "prd",
         "design_spec",
         "code",
         "test_report",
+        "deploy_request",
         "memo",
         "general",
     ]

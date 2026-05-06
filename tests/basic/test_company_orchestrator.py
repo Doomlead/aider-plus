@@ -5,8 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from aider.company.department import Department
+from aider.company.departments.devops import DevOpsDepartment
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
+from aider.company.departments.ux import UXDepartment
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
 from aider.company.schemas import CompanyEvent, CompanyTask, Deliverable, EventMessage
@@ -39,8 +41,11 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
                     run=AsyncMock(return_value={"summary": "done"})
                 ),
             )
+            devops = DevOpsDepartment(project_memory=memory)
             engineering.receive = AsyncMock()
+            devops.receive = AsyncMock()
             orchestrator.register(engineering)
+            orchestrator.register(devops)
             task = CompanyTask(
                 task_id="duplicate-approval-1",
                 origin="product",
@@ -138,6 +143,84 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             engineering_task.context["prd_content"], product_deliverable.content
         )
 
+    async def test_design_required_routes_product_to_ux_before_engineering(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory = ProjectMemory(tmpdir)
+            orchestrator = CompanyOrchestrator(project_memory=memory)
+            orchestrator.active_project = Project(
+                project_id="project-design-1",
+                name="dashboard",
+                phase="prototyping",
+            )
+            ux = UXDepartment(project_memory=memory)
+            engineering = EngineeringDepartment(
+                project_memory=memory,
+                agent_loop=SimpleNamespace(
+                    run=AsyncMock(return_value={"summary": "done"})
+                ),
+            )
+            ux.receive = AsyncMock()
+            engineering.receive = AsyncMock()
+            orchestrator.register(ux)
+            orchestrator.register(engineering)
+
+            product_deliverable = Deliverable(
+                task_id="task-design-1",
+                department="product",
+                artifact_type="prd",
+                payload="# PRD\n\nBuild a dashboard",
+                status="success",
+                metadata={
+                    "handoff_to": "ux",
+                    "next_artifact_type": "prd",
+                    "blocking": True,
+                    "gate_name": "prd_approval",
+                    "original_request": "Build a dashboard",
+                    "requires_design": True,
+                    "context": {"project_name": "dashboard"},
+                },
+            )
+
+            route_task = asyncio.create_task(orchestrator._route(product_deliverable))
+            await asyncio.sleep(0)
+            orchestrator.approve("task-design-1")
+            await route_task
+
+            self.assertEqual(orchestrator.active_project.phase, "design")
+            ux.receive.assert_awaited_once()
+            engineering.receive.assert_not_awaited()
+            ux_task = ux.receive.await_args.args[0]
+            self.assertEqual(ux_task.target, "ux")
+            self.assertEqual(
+                ux_task.payload["prd_content"], product_deliverable.payload
+            )
+
+            ux_deliverable = Deliverable(
+                task_id="task-design-1",
+                department="ux",
+                artifact_type="design_spec",
+                payload={"acceptance_criteria": ["Dashboard is usable"]},
+                status="success",
+                metadata={"context": dict(ux_task.context)},
+            )
+            await orchestrator._route(ux_deliverable)
+
+            self.assertEqual(orchestrator.active_project.phase, "development")
+            self.assertEqual(
+                orchestrator.active_project.design_spec,
+                {"acceptance_criteria": ["Dashboard is usable"]},
+            )
+            engineering.receive.assert_awaited_once()
+            engineering_task = engineering.receive.await_args.args[0]
+            self.assertEqual(engineering_task.target, "engineering")
+            self.assertEqual(
+                engineering_task.payload["prd_content"], product_deliverable.payload
+            )
+            self.assertEqual(
+                engineering_task.payload["design_spec"],
+                {"acceptance_criteria": ["Dashboard is usable"]},
+            )
+
     async def test_blocking_approval_persists_and_clears_pending_approval(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             memory = ProjectMemory(tmpdir)
@@ -229,8 +312,11 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
                     run=AsyncMock(return_value={"summary": "done"})
                 ),
             )
+            devops = DevOpsDepartment(project_memory=memory)
             engineering.receive = AsyncMock()
+            devops.receive = AsyncMock()
             orchestrator.register(engineering)
+            orchestrator.register(devops)
             seen_messages = []
 
             async def handler(message):
@@ -453,8 +539,11 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
                     run=AsyncMock(return_value={"summary": "done"})
                 ),
             )
+            devops = DevOpsDepartment(project_memory=memory)
             engineering.receive = AsyncMock()
+            devops.receive = AsyncMock()
             orchestrator.register(engineering)
+            orchestrator.register(devops)
             seen_messages = []
 
             async def handler(message):
@@ -487,8 +576,24 @@ class TestCompanyOrchestrator(unittest.IsolatedAsyncioTestCase):
             orchestrator.approve("task-release-1")
             await route_task
 
-            self.assertEqual(orchestrator.active_project.phase, "done")
+            self.assertEqual(orchestrator.active_project.phase, "deploying")
+            devops.receive.assert_awaited_once()
+            deploy_task = devops.receive.await_args.args[0]
+            self.assertEqual(deploy_task.origin, "ceo")
+            self.assertEqual(deploy_task.target, "devops")
+            self.assertEqual(deploy_task.payload["qa_report"], "QA passed")
             engineering.receive.assert_not_awaited()
+
+            devops_deliverable = Deliverable(
+                task_id="task-release-1",
+                department="devops",
+                artifact_type="deploy_report",
+                payload={"deploy_url": "https://dashboard.example.com"},
+                status="success",
+                metadata={"context": {"project_name": "dashboard"}},
+            )
+            await orchestrator._route(devops_deliverable)
+            self.assertEqual(orchestrator.active_project.phase, "done")
 
             orchestrator.active_project.phase = "qa"
             qa_deliverable.task_id = "task-release-2"

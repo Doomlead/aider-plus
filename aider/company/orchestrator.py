@@ -4,13 +4,14 @@ import asyncio
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from aider.memory import ProjectMemory
+from aider.company.approval import ApprovalManager
 from aider.company.context import ContextBuilder
 from aider.company.department import Department
+from aider.company.lifecycle import LifecycleEngine
 from aider.company.project import Project
 from aider.company.state import CompanyStateManager
 from aider.company.schemas import (
     ApprovalDecision,
-    CompanyEvent,
     CompanyTask,
     Deliverable,
     EventMessage,
@@ -23,12 +24,28 @@ class CompanyOrchestrator:
     def __init__(self, project_memory: ProjectMemory):
         self.state = CompanyStateManager(project_memory)
         self.context_builder = ContextBuilder(self.state)
+        self.lifecycle = LifecycleEngine(self.state)
+        self.approvals = ApprovalManager(self.state, audit_logger=self._log_event)
+        self.approval_manager = self.approvals
+        self.approvals.on_event(self._emit)
         self.departments: Dict[str, Department] = {}
         self._handlers: List[Callable[[CompanyMessage], Awaitable[None]]] = []
-        self._gates: Dict[str, asyncio.Future] = {}
-        self._pending_tasks: Dict[str, CompanyTask] = {}
-        self._recovered_gate_tasks: Dict[str, asyncio.Task] = {}
-        self._resolved_task_ids: set[str] = set()
+
+    @property
+    def _gates(self):
+        return self.approvals.gates
+
+    @property
+    def _resolved_task_ids(self):
+        return self.approvals.resolved_task_ids
+
+    @property
+    def _pending_tasks(self):
+        return self.approvals._pending_tasks
+
+    @property
+    def _recovered_gate_tasks(self):
+        return self.approvals._recovered_gate_tasks
 
     @property
     def active_project(self) -> Optional[Project]:
@@ -109,7 +126,9 @@ class CompanyOrchestrator:
                 d.content if isinstance(d.content, dict) else {"content": d.content}
             )
             if d.status == "success":
-                self.state.set_current_phase("development")
+                self.lifecycle.apply(
+                    self.lifecycle.transition_for_deliverable(project, d)
+                )
                 if "engineering" in self.departments:
                     await self.submit(self._handoff_task(d, "engineering"))
                 return True
@@ -117,7 +136,9 @@ class CompanyOrchestrator:
         if project.phase == "development" and d.department == "engineering":
             project.engineering_result = d
             if d.status == "success":
-                self.state.set_current_phase("qa")
+                self.lifecycle.apply(
+                    self.lifecycle.transition_for_deliverable(project, d)
+                )
                 if "qa" in self.departments:
                     await self.submit(self._qa_task(d))
                 return True
@@ -134,7 +155,7 @@ class CompanyOrchestrator:
                 d.department,
                 {"task_id": d.task_id, "status": d.status},
             )
-            self.state.set_current_phase("release_ready")
+            self.lifecycle.apply(self.lifecycle.transition_for_deliverable(project, d))
             await self._request_release_approval(d)
             return True
 
@@ -146,13 +167,14 @@ class CompanyOrchestrator:
                 d.department,
                 {"task_id": d.task_id, "status": d.status},
             )
-            self.state.set_current_phase("post_mortem")
+            self.lifecycle.apply(self.lifecycle.transition_for_deliverable(project, d))
             await self._run_post_mortem(d)
+            self.lifecycle.apply(
+                self.lifecycle.transition_after_post_mortem(project.phase, d)
+            )
             if d.status == "success":
-                self.state.set_current_phase("done")
                 return True
 
-            self.state.set_current_phase("development")
             if "engineering" in self.departments:
                 await self.submit(self._engineering_infra_revision_task(d))
             return True
@@ -233,14 +255,16 @@ class CompanyOrchestrator:
             raise ValueError(f"No department: {task.target}")
 
         if task.blocking:
-            await self._open_approval_gate(task)
-            decision = await self._gates[task.task_id]
-            self._close_approval_gate(task.task_id)
-            decision = self._normalize_decision(decision)
+            decision = await self.approvals.create_request(task)
+            self.approvals.close_request(task.task_id)
             if not decision.approved:
                 if self._is_release_approval(task):
                     if self.active_project:
-                        self.state.set_current_phase("development")
+                        self.lifecycle.apply(
+                            self.lifecycle.transition_after_approval(
+                                self.active_project, task, False
+                            )
+                        )
                     await self._route_release_rejection(task, decision)
                 else:
                     await self._route_rejection(task, decision)
@@ -255,105 +279,44 @@ class CompanyOrchestrator:
         return None
 
     async def recover_pending_approvals(self) -> None:
-        """Recreate in-memory approval gates from ProjectMemory and re-emit their UIs."""
-        pending_task_ids = {
-            str(approval.get("task_id"))
-            for approval in self.state.get_pending_approvals()
-            if approval.get("status") == "pending" and approval.get("task_id")
-        }
-        self._resolved_task_ids.difference_update(pending_task_ids)
-        for approval in self.state.get_pending_approvals():
-            if approval.get("status") != "pending":
-                continue
-            task = self._task_from_pending_approval(approval)
-            if task is None or task.task_id in self._gates:
-                continue
-            fut = asyncio.get_event_loop().create_future()
-            self._gates[task.task_id] = fut
-            self._pending_tasks[task.task_id] = task
-            await self._emit(self._approval_required_event(task))
-            self._recovered_gate_tasks[task.task_id] = asyncio.create_task(
-                self._complete_recovered_gate(task)
-            )
+        await self.approvals.recover_pending_approvals(
+            self._complete_recovered_approval
+        )
 
-    async def _complete_recovered_gate(self, task: CompanyTask) -> None:
-        try:
-            decision = self._normalize_decision(await self._gates[task.task_id])
-            self._close_approval_gate(task.task_id)
-            if not decision.approved:
-                if self._is_release_approval(task):
-                    if self.active_project:
-                        self.state.set_current_phase("development")
-                    await self._route_release_rejection(task, decision)
-                else:
-                    await self._route_rejection(task, decision)
-                return
+    async def _complete_recovered_approval(
+        self, task: CompanyTask, decision: ApprovalDecision
+    ) -> None:
+        if not decision.approved:
             if self._is_release_approval(task):
-                await self._submit_devops_after_release(task)
-                return
-            self._advance_after_approval(task)
-            task.blocking = False
-            await self._dispatch(task)
-        finally:
-            self._recovered_gate_tasks.pop(task.task_id, None)
+                if self.active_project:
+                    self.lifecycle.apply(
+                        self.lifecycle.transition_after_approval(
+                            self.active_project, task, False
+                        )
+                    )
+                await self._route_release_rejection(task, decision)
+            else:
+                await self._route_rejection(task, decision)
+            return
+        if self._is_release_approval(task):
+            await self._submit_devops_after_release(task)
+            return
+        self._advance_after_approval(task)
+        task.blocking = False
+        await self._dispatch(task)
 
     async def _open_approval_gate(self, task: CompanyTask) -> None:
-        fut = asyncio.get_event_loop().create_future()
-        self._gates[task.task_id] = fut
-        self._pending_tasks[task.task_id] = task
-        self.state.add_pending_approval(self._pending_approval_record(task))
-        self._log_event(
-            "approval_requested",
-            self._artifact_preview(task),
-            task.origin,
-            {
-                "task_id": task.task_id,
-                "gate_name": self._approval_required_event(task).payload.get(
-                    "gate_name"
-                ),
-            },
-        )
-        await self._emit(self._approval_required_event(task))
+        await self.approvals.create_request(task)
 
     def _close_approval_gate(self, task_id: str) -> None:
-        self._gates.pop(task_id, None)
-        self._pending_tasks.pop(task_id, None)
-        self.state.remove_pending_approval(task_id)
+        self.approvals.close_request(task_id)
 
     def _approval_required_event(self, task: CompanyTask) -> EventMessage:
-        context = task.context if isinstance(task.context, dict) else {}
-        metadata = dict(context.get("prd_metadata", {}))
-        gate_name = context.get("gate_name") or metadata.get(
-            "gate_name", "prd_approval"
-        )
-        artifact_preview = context.get("artifact_preview") or self._artifact_preview(
-            task
-        )
-        return EventMessage(
-            event=CompanyEvent.APPROVAL_REQUIRED,
-            task_id=task.task_id,
-            payload={
-                "task_id": task.task_id,
-                "gate_name": gate_name,
-                "artifact_preview": str(artifact_preview)[:1500],
-                "approver_role": context.get("approver_role", "ceo"),
-                "project_name": context.get("project_name"),
-                "handoff_to": context.get("handoff_to", task.target),
-            },
-            metadata={"task": task},
-        )
+        return self.approvals.approval_required_event(task)
 
     @staticmethod
     def _artifact_preview(task: CompanyTask) -> str:
-        if isinstance(task.payload, dict):
-            return str(
-                task.payload.get("prd_content")
-                or task.payload.get("previous_prd")
-                or task.payload.get("qa_report")
-                or task.payload.get("engineering_result")
-                or task.payload
-            )
-        return str(task.payload)
+        return ApprovalManager.artifact_preview(task)
 
     @staticmethod
     def _prd_content(task: CompanyTask) -> str:
@@ -455,7 +418,11 @@ class CompanyOrchestrator:
 
     async def _submit_devops_after_release(self, task: CompanyTask) -> None:
         if self.active_project:
-            self.state.set_current_phase("deploying")
+            self.lifecycle.apply(
+                self.lifecycle.transition_after_approval(
+                    self.active_project, task, True
+                )
+            )
         if "devops" in self.departments:
             await self.submit(self._devops_task(task))
         elif self.active_project:
@@ -479,16 +446,19 @@ class CompanyOrchestrator:
                 "handoff_to": "devops",
             },
         )
-        await self._open_approval_gate(task)
-        decision = self._normalize_decision(await self._gates[task.task_id])
-        self._close_approval_gate(task.task_id)
+        decision = await self.approvals.create_request(task)
+        self.approvals.close_request(task.task_id)
 
         if decision.approved:
             await self._submit_devops_after_release(task)
             return
 
         if self.active_project:
-            self.state.set_current_phase("development")
+            self.lifecycle.apply(
+                self.lifecycle.transition_after_approval(
+                    self.active_project, task, False
+                )
+            )
         await self._route_release_rejection(task, decision)
 
     def _pending_approval_record(self, task: CompanyTask) -> dict:
@@ -544,15 +514,7 @@ class CompanyOrchestrator:
         )
 
     def _serialize_task(self, task: CompanyTask) -> dict:
-        return {
-            "task_id": task.task_id,
-            "origin": task.origin,
-            "target": task.target,
-            "artifact_type": task.artifact_type,
-            "payload": self.state.json_safe(task.payload),
-            "blocking": task.blocking,
-            "context": self.state.json_safe(task.context),
-        }
+        return self.approvals.serialize_task(task)
 
     @staticmethod
     def _is_release_approval(task: CompanyTask) -> bool:
@@ -561,9 +523,7 @@ class CompanyOrchestrator:
 
     @staticmethod
     def _normalize_decision(decision) -> ApprovalDecision:
-        if isinstance(decision, ApprovalDecision):
-            return decision
-        return ApprovalDecision(approved=bool(decision))
+        return ApprovalManager.normalize_decision(decision)
 
     def _advance_after_approval(self, task: CompanyTask) -> None:
         project = self.active_project
@@ -576,8 +536,8 @@ class CompanyOrchestrator:
             and task.artifact_type == "prd"
         ):
             project.prd = self._prd_content(task)
-            self.state.set_current_phase(
-                "design" if task.target == "ux" else "development"
+            self.lifecycle.apply(
+                self.lifecycle.transition_after_approval(project, task, True)
             )
 
     async def _route_rejection(
@@ -593,7 +553,11 @@ class CompanyOrchestrator:
             revision_count = previous_metadata.get("revision_count", 0) + 1
 
         if self.active_project and task.origin == "product":
-            self.state.set_current_phase("prototyping")
+            self.lifecycle.apply(
+                self.lifecycle.transition_after_approval(
+                    self.active_project, task, False
+                )
+            )
 
         feedback = (
             decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
@@ -655,31 +619,12 @@ class CompanyOrchestrator:
         reason: Optional[str] = None,
         metadata: Optional[dict] = None,
     ) -> bool:
-        """Resolve an approval gate once, ignoring duplicate approval UIs."""
-        if task_id in self._resolved_task_ids:
-            return False
-        if task_id not in self._gates or self._gates[task_id].done():
-            self._resolved_task_ids.add(task_id)
-            return False
-
-        self._resolved_task_ids.add(task_id)
-        response_metadata = {"approved_by": source}
-        if metadata:
-            response_metadata.update(metadata)
-        if approved:
-            self.approve(task_id, metadata=response_metadata)
-        else:
-            self.reject(
-                task_id, reason=reason or "Rejected by CEO", metadata=response_metadata
-            )
-        return True
+        return await self.approvals.handle_approval_response(
+            task_id, approved, source=source, reason=reason, metadata=metadata
+        )
 
     def approve(self, task_id: str, metadata: Optional[dict] = None) -> None:
-        if task_id in self._gates and not self._gates[task_id].done():
-            self._log_approval_resolved(task_id, True, None, metadata)
-            self._gates[task_id].set_result(
-                ApprovalDecision(approved=True, metadata=metadata or {})
-            )
+        self.approvals.approve(task_id, metadata=metadata)
 
     def reject(
         self,
@@ -687,18 +632,10 @@ class CompanyOrchestrator:
         reason: str = "Rejected by CEO",
         metadata: Optional[dict] = None,
     ) -> None:
-        if task_id in self._gates and not self._gates[task_id].done():
-            self._log_approval_resolved(task_id, False, reason, metadata)
-            self._gates[task_id].set_result(
-                ApprovalDecision(approved=False, reason=reason, metadata=metadata or {})
-            )
+        self.approvals.reject(task_id, reason=reason, metadata=metadata)
 
     def request_changes(self, task_id: str, feedback: str) -> None:
-        self.reject(
-            task_id,
-            reason=feedback,
-            metadata={"action": "revise", "feedback": feedback},
-        )
+        self.approvals.request_changes(task_id, feedback)
 
     async def _run_post_mortem(self, d: Deliverable) -> None:
         project = self.active_project

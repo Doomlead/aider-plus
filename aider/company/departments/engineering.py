@@ -78,7 +78,9 @@ class EngineeringDepartment(Department):
         original_request = task.payload.get("original_request")
         prd_content = task.payload.get("prd_content")
         clarification_response = task.payload.get("clarification_response")
+        design_spec = task.payload.get("design_spec")
         qa_report = task.payload.get("qa_report")
+        deploy_report = task.payload.get("deploy_report")
         ceo_feedback = task.payload.get("ceo_feedback")
         instruction = task.payload.get("instruction")
         if original_request:
@@ -87,8 +89,12 @@ class EngineeringDepartment(Department):
             parts.append(f"PRD content:\n{prd_content}")
         if clarification_response:
             parts.append(f"Product clarification:\n{clarification_response}")
+        if design_spec:
+            parts.append(f"UX design spec:\n{design_spec}")
         if qa_report:
             parts.append(f"QA feedback:\n{qa_report}")
+        if deploy_report:
+            parts.append(f"DevOps deploy report:\n{deploy_report}")
         if ceo_feedback:
             parts.append(f"CEO feedback:\n{ceo_feedback}")
         if instruction:
@@ -135,7 +141,9 @@ class EngineeringDepartment(Department):
                 diffs = [*diffs, diff]
             return {"files": files, "commits": commits, "diffs": diffs}
 
-        files = getattr(result, "files", None) or getattr(result, "files_changed", []) or []
+        files = (
+            getattr(result, "files", None) or getattr(result, "files_changed", []) or []
+        )
         commits = getattr(result, "commits", []) or []
         commit_hash = getattr(result, "commit_hash", None)
         if commit_hash and commit_hash not in commits:

@@ -71,11 +71,26 @@ class CompanyOrchestrator:
         if project.phase == "prototyping" and d.department == "product":
             if d.artifact_type == "prd" and d.status == "success":
                 project.prd = str(d.content)
-                next_target = d.metadata.get("handoff_to")
+                project.requires_design = bool(d.metadata.get("requires_design", False))
+                next_target = (
+                    "ux" if project.requires_design else d.metadata.get("handoff_to")
+                )
+                if next_target == "ux" and "ux" not in self.departments:
+                    next_target = "engineering"
                 if next_target and next_target in self.departments:
                     await self.submit(self._handoff_task(d, next_target))
                     return True
             return False
+
+        if project.phase == "design" and d.department == "ux":
+            project.design_spec = (
+                d.content if isinstance(d.content, dict) else {"content": d.content}
+            )
+            if d.status == "success":
+                project.phase = "development"
+                if "engineering" in self.departments:
+                    await self.submit(self._handoff_task(d, "engineering"))
+                return True
 
         if project.phase == "development" and d.department == "engineering":
             project.engineering_result = d
@@ -95,6 +110,17 @@ class CompanyOrchestrator:
             await self._request_release_approval(d)
             return True
 
+        if project.phase == "deploying" and d.department == "devops":
+            project.deploy_result = d
+            if d.status == "success":
+                project.phase = "done"
+                return True
+
+            project.phase = "development"
+            if "engineering" in self.departments:
+                await self.submit(self._engineering_infra_revision_task(d))
+            return True
+
         return False
 
     def _handoff_task(self, d: Deliverable, next_target: str) -> CompanyTask:
@@ -103,13 +129,27 @@ class CompanyOrchestrator:
 
         if (
             d.department == "product"
-            and next_target == "engineering"
             and d.artifact_type == "prd"
+            and next_target
+            in {
+                "engineering",
+                "ux",
+            }
         ):
             payload = {
                 "original_request": d.metadata.get("original_request"),
                 "prd_content": d.content,
                 "prd_metadata": dict(d.metadata),
+            }
+            context.update(payload)
+        elif d.department == "ux" and next_target == "engineering":
+            prd_content = context.get("prd_content")
+            payload = {
+                "original_request": context.get("original_request"),
+                "prd_content": prd_content,
+                "prd_metadata": dict(context.get("prd_metadata", {})),
+                "design_spec": d.content,
+                "design_metadata": dict(d.metadata),
             }
             context.update(payload)
         elif (
@@ -186,8 +226,7 @@ class CompanyOrchestrator:
                     await self._route_rejection(task, decision)
                 return
             if self._is_release_approval(task):
-                if self.active_project:
-                    self.active_project.phase = "done"
+                await self._submit_devops_after_release(task)
                 return
             self._advance_after_approval(task)
             task.blocking = False
@@ -287,6 +326,67 @@ class CompanyOrchestrator:
             context=context,
         )
 
+    def _engineering_infra_revision_task(self, d: Deliverable) -> CompanyTask:
+        context = dict(d.metadata.get("context", {}))
+        context["infra_error"] = d.content
+        return CompanyTask(
+            task_id=d.task_id,
+            origin="devops",
+            target="engineering",
+            artifact_type="deploy_request",
+            payload={
+                "deploy_report": d.content,
+                "deploy_metadata": dict(d.metadata),
+                "instruction": "Address the infrastructure deployment failure and resubmit the implementation.",
+            },
+            blocking=False,
+            context=context,
+        )
+
+    def _devops_task(self, task: CompanyTask) -> CompanyTask:
+        context = dict(task.context)
+        if self.active_project:
+            context.setdefault("project_name", self.active_project.name)
+        return CompanyTask(
+            task_id=task.task_id,
+            origin="ceo",
+            target="devops",
+            artifact_type="deploy_request",
+            payload={
+                "engineering_result": (
+                    self.active_project.engineering_result.content
+                    if self.active_project and self.active_project.engineering_result
+                    else None
+                ),
+                "engineering_metadata": (
+                    dict(self.active_project.engineering_result.metadata)
+                    if self.active_project and self.active_project.engineering_result
+                    else {}
+                ),
+                "qa_report": (
+                    task.payload.get("qa_report")
+                    if isinstance(task.payload, dict)
+                    else task.payload
+                ),
+                "qa_metadata": (
+                    task.payload.get("qa_metadata", {})
+                    if isinstance(task.payload, dict)
+                    else {}
+                ),
+                "environment": context.get("environment", "production"),
+            },
+            blocking=False,
+            context=context,
+        )
+
+    async def _submit_devops_after_release(self, task: CompanyTask) -> None:
+        if self.active_project:
+            self.active_project.phase = "deploying"
+        if "devops" in self.departments:
+            await self.submit(self._devops_task(task))
+        elif self.active_project:
+            self.active_project.phase = "done"
+
     async def _request_release_approval(self, d: Deliverable) -> None:
         task = CompanyTask(
             task_id=d.task_id,
@@ -302,7 +402,7 @@ class CompanyOrchestrator:
                 **dict(d.metadata.get("context", {})),
                 "gate_name": "release_approval",
                 "artifact_preview": d.content,
-                "handoff_to": "release",
+                "handoff_to": "devops",
             },
         )
         await self._open_approval_gate(task)
@@ -310,8 +410,7 @@ class CompanyOrchestrator:
         self._close_approval_gate(task.task_id)
 
         if decision.approved:
-            if self.active_project:
-                self.active_project.phase = "done"
+            await self._submit_devops_after_release(task)
             return
 
         if self.active_project:
@@ -437,11 +536,11 @@ class CompanyOrchestrator:
         if (
             project.phase == "prototyping"
             and task.origin == "product"
-            and task.target == "engineering"
+            and task.target in {"engineering", "ux"}
             and task.artifact_type == "prd"
         ):
             project.prd = self._prd_content(task)
-            project.phase = "development"
+            project.phase = "design" if task.target == "ux" else "development"
 
     async def _route_rejection(
         self, task: CompanyTask, decision: ApprovalDecision
@@ -532,7 +631,9 @@ class CompanyOrchestrator:
         if approved:
             self.approve(task_id, metadata=response_metadata)
         else:
-            self.reject(task_id, reason=reason or "Rejected by CEO", metadata=response_metadata)
+            self.reject(
+                task_id, reason=reason or "Rejected by CEO", metadata=response_metadata
+            )
         return True
 
     def approve(self, task_id: str, metadata: Optional[dict] = None) -> None:

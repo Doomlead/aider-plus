@@ -16,9 +16,11 @@ from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
+from aider.company.departments.devops import DevOpsDepartment
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
 from aider.company.departments.qa import QADepartment
+from aider.company.departments.ux import UXDepartment
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
 from aider.coders import Coder
 from aider.main import main as aider_main
@@ -143,7 +145,9 @@ class DiscordAiderBot:
         self.orchestrator: Optional[CompanyOrchestrator] = None
         self.engineering: Optional[EngineeringDepartment] = None
         self.product: Optional[ProductDepartment] = None
+        self.ux: Optional[UXDepartment] = None
         self.qa: Optional[QADepartment] = None
+        self.devops: Optional[DevOpsDepartment] = None
         self.active_project: Optional[Project] = None
 
     def check_access(self, user_id: int):
@@ -215,15 +219,25 @@ class DiscordAiderBot:
             project_memory=coder.project_memory,
             conversation_memory=None,
         )
+        self.ux = UXDepartment(
+            project_memory=coder.project_memory,
+            conversation_memory=None,
+        )
         self.qa = QADepartment(
+            project_memory=coder.project_memory,
+            conversation_memory=None,
+        )
+        self.devops = DevOpsDepartment(
             project_memory=coder.project_memory,
             conversation_memory=None,
         )
         self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
         self.orchestrator.active_project = self.active_project
         self.orchestrator.register(self.product)
+        self.orchestrator.register(self.ux)
         self.orchestrator.register(self.engineering)
         self.orchestrator.register(self.qa)
+        self.orchestrator.register(self.devops)
         if company_event_callback:
             self.orchestrator.on_deliverable(company_event_callback)
         return self.engineering

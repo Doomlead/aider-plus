@@ -10,6 +10,7 @@ class DevOpsDepartment(Department):
 
     async def process(self, task: CompanyTask) -> Deliverable:
         release_artifact = self._release_artifact(task)
+        playbook_guidance = task.context.get("playbook_guidance", [])
         git_tag = self._git_tag(task)
         deploy_url = self._deploy_url(task)
         return Deliverable(
@@ -22,6 +23,7 @@ class DevOpsDepartment(Department):
                 "deploy_url": deploy_url,
                 "git_tag": git_tag,
                 "environment": self._environment(task),
+                "playbook_guidance": playbook_guidance,
             },
             status="success",
             metadata={

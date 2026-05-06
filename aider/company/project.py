@@ -15,6 +15,7 @@ class Project:
         "qa",
         "release_ready",
         "deploying",
+        "post_mortem",
         "done",
     ] = "prototyping"
     prd: Optional[str] = None

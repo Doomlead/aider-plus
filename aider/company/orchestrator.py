@@ -5,6 +5,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
+from aider.company.audit import append_audit_event
 from aider.memory import ProjectMemory
 from aider.company.department import Department
 from aider.company.project import Project
@@ -51,6 +52,16 @@ class CompanyOrchestrator:
                 pass
 
     async def _route(self, d: Deliverable) -> None:
+        self._log_event(
+            "deliverable_produced",
+            d.payload,
+            d.department,
+            {
+                "task_id": d.task_id,
+                "status": d.status,
+                "artifact_type": d.artifact_type,
+            },
+        )
         await self._emit(d)
 
         if await self._route_project_state(d):
@@ -106,12 +117,26 @@ class CompanyOrchestrator:
 
         if project.phase == "qa" and d.department == "qa":
             project.qa_result = d
+            self._log_event(
+                "qa_pass" if d.status == "success" else "qa_fail",
+                d.payload,
+                d.department,
+                {"task_id": d.task_id, "status": d.status},
+            )
             project.phase = "release_ready"
             await self._request_release_approval(d)
             return True
 
         if project.phase == "deploying" and d.department == "devops":
             project.deploy_result = d
+            self._log_event(
+                "deployment_success" if d.status == "success" else "deployment_failure",
+                d.payload,
+                d.department,
+                {"task_id": d.task_id, "status": d.status},
+            )
+            project.phase = "post_mortem"
+            await self._run_post_mortem(d)
             if d.status == "success":
                 project.phase = "done"
                 return True
@@ -174,6 +199,16 @@ class CompanyOrchestrator:
         )
 
     async def submit(self, task: CompanyTask) -> Optional[Deliverable]:
+        self._log_event(
+            "task_submitted",
+            task.payload,
+            task.target,
+            {
+                "task_id": task.task_id,
+                "origin": task.origin,
+                "artifact_type": task.artifact_type,
+            },
+        )
         if task.target not in self.departments:
             raise ValueError(f"No department: {task.target}")
 
@@ -247,6 +282,17 @@ class CompanyOrchestrator:
         self._gates[task.task_id] = fut
         self._pending_tasks[task.task_id] = task
         self._persist_pending_approval(task)
+        self._log_event(
+            "approval_requested",
+            self._artifact_preview(task),
+            task.origin,
+            {
+                "task_id": task.task_id,
+                "gate_name": self._approval_required_event(task).payload.get(
+                    "gate_name"
+                ),
+            },
+        )
         await self._emit(self._approval_required_event(task))
 
     def _close_approval_gate(self, task_id: str) -> None:
@@ -646,6 +692,7 @@ class CompanyOrchestrator:
 
     def approve(self, task_id: str, metadata: Optional[dict] = None) -> None:
         if task_id in self._gates and not self._gates[task_id].done():
+            self._log_approval_resolved(task_id, True, None, metadata)
             self._gates[task_id].set_result(
                 ApprovalDecision(approved=True, metadata=metadata or {})
             )
@@ -657,6 +704,7 @@ class CompanyOrchestrator:
         metadata: Optional[dict] = None,
     ) -> None:
         if task_id in self._gates and not self._gates[task_id].done():
+            self._log_approval_resolved(task_id, False, reason, metadata)
             self._gates[task_id].set_result(
                 ApprovalDecision(approved=False, reason=reason, metadata=metadata or {})
             )
@@ -667,6 +715,107 @@ class CompanyOrchestrator:
             reason=feedback,
             metadata={"action": "revise", "feedback": feedback},
         )
+
+    async def _run_post_mortem(self, d: Deliverable) -> None:
+        project = self.active_project
+        if project is None:
+            return
+
+        playbook = self.memory.data.get("playbook", {})
+        if not isinstance(playbook, dict):
+            playbook = {}
+        playbook.setdefault("coding_standards", [])
+        playbook.setdefault("ux_preferences", [])
+        playbook.setdefault("deployment_gotchas", [])
+
+        if project.qa_result and project.qa_result.status == "failure":
+            self._append_unique_playbook_item(
+                playbook["coding_standards"],
+                f"Previous QA failed for {project.name}: {project.qa_result.content}",
+            )
+
+        if d.department == "devops" and d.status == "failure":
+            self._append_unique_playbook_item(
+                playbook["deployment_gotchas"],
+                f"Previous deployment failed for {project.name}: {d.content}",
+            )
+
+        for record in self.memory.data.get("audit_log", []):
+            if (
+                not isinstance(record, dict)
+                or record.get("event_type") != "approval_resolved"
+            ):
+                continue
+            metadata = record.get("metadata", {})
+            if not isinstance(metadata, dict) or metadata.get("approved") is not False:
+                continue
+            feedback = metadata.get("reason") or metadata.get("feedback")
+            if feedback:
+                self._append_unique_playbook_item(
+                    playbook["ux_preferences"],
+                    f"CEO feedback from a previous approval: {feedback}",
+                )
+
+        self.memory.update({"playbook": playbook})
+        self.memory.persist()
+        self._log_event(
+            "post_mortem_completed",
+            {"project_id": project.project_id, "phase": project.phase},
+            "orchestrator",
+            {"task_id": d.task_id},
+        )
+
+    @staticmethod
+    def _append_unique_playbook_item(items: list, value: str) -> None:
+        value = str(value)[:500]
+        if value and value not in items:
+            items.append(value)
+
+    def _log_approval_resolved(
+        self,
+        task_id: str,
+        approved: bool,
+        reason: Optional[str],
+        metadata: Optional[dict],
+    ) -> None:
+        task = self._pending_tasks.get(task_id)
+        payload = {"task_id": task_id, "approved": approved, "reason": reason}
+        department = task.origin if task else "orchestrator"
+        event_metadata = {"task_id": task_id, "approved": approved}
+        if reason:
+            event_metadata["reason"] = reason
+        if metadata:
+            event_metadata.update(metadata)
+            if metadata.get("feedback"):
+                event_metadata["feedback"] = metadata.get("feedback")
+        self._log_event("approval_resolved", payload, department, event_metadata)
+
+    def _log_event(
+        self,
+        event_type: str,
+        payload,
+        department: str = "orchestrator",
+        metadata: Optional[dict] = None,
+    ) -> None:
+        project_id = (
+            self.active_project.project_id
+            if self.active_project
+            else str(
+                self.memory.data.get("project_id")
+                or getattr(self.memory, "repo_path", "")
+            )
+        )
+        try:
+            append_audit_event(
+                self.memory,
+                project_id=project_id,
+                department=department,
+                event_type=event_type,
+                payload=payload,
+                metadata=metadata,
+            )
+        except Exception:
+            pass
 
     async def start(self) -> None:
         await asyncio.gather(

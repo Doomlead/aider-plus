@@ -28,7 +28,16 @@ def test_project_memory_persists_and_loads(tmp_path: Path):
     loaded = ProjectMemory(str(repo_path))
     loaded.load()
 
-    assert loaded.data == {"facts": {"language": "python"}, "state": "active"}
+    assert loaded.data == {
+        "audit_log": [],
+        "facts": {"language": "python"},
+        "playbook": {
+            "coding_standards": [],
+            "deployment_gotchas": [],
+            "ux_preferences": [],
+        },
+        "state": "active",
+    }
 
 
 def test_consolidate_conversation_compacts_older_messages(tmp_path: Path):

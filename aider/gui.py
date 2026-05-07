@@ -40,6 +40,29 @@ _COMPANY_SESSIONS = {}
 _COMPANY_SESSIONS_LOCK = threading.Lock()
 
 
+COMPANY_PHASES = [
+    "prototyping",
+    "design",
+    "development",
+    "qa",
+    "release_ready",
+    "deploying",
+    "post_mortem",
+    "done",
+]
+
+
+def humanize_company_label(value) -> str:
+    return str(value or "unknown").replace("_", " ").title()
+
+
+def truncate_preview(value, limit: int = 1600) -> str:
+    preview = str(value or "").strip()
+    if len(preview) > limit:
+        return preview[:limit] + "…"
+    return preview
+
+
 class CaptureIO(InputOutput):
     lines = []
 
@@ -415,6 +438,82 @@ class DesktopCompanySession:
     def company_status(self) -> str:
         return self.orchestrator.company_status()
 
+    def audit_records(self, limit: int = 10) -> list[dict]:
+        records = self.coder.project_memory.data.get("audit_log", [])
+        if not isinstance(records, list):
+            return []
+        return [record for record in records if isinstance(record, dict)][-limit:]
+
+    def last_activity(self) -> str:
+        records = self.audit_records(limit=1)
+        if records:
+            return str(records[-1].get("timestamp") or "No audit events")
+        if self.events:
+            event = self.events[-1]
+            metadata = getattr(event, "metadata", {})
+            if isinstance(metadata, dict) and metadata.get("timestamp"):
+                return str(metadata.get("timestamp"))
+            return "Live event received"
+        return "No activity yet"
+
+    def recent_deliverables(self) -> list[dict]:
+        project = self.active_project
+        deliverables = []
+        if project.prd:
+            deliverables.append(
+                {
+                    "label": "PRD",
+                    "department": "Product",
+                    "status": "needs review",
+                    "summary": project.prd,
+                    "files": [],
+                }
+            )
+        if project.design_spec:
+            deliverables.append(
+                {
+                    "label": "Design spec",
+                    "department": "UX",
+                    "status": "ready",
+                    "summary": project.design_spec,
+                    "files": [],
+                }
+            )
+        for attr, label in (
+            ("engineering_result", "Engineering output"),
+            ("qa_result", "QA results"),
+            ("deploy_result", "Deployment"),
+        ):
+            deliverable = getattr(project, attr, None)
+            if not deliverable:
+                continue
+            metadata = getattr(deliverable, "metadata", {}) or {}
+            files = metadata.get("files") or metadata.get("files_changed") or []
+            deliverables.append(
+                {
+                    "label": label,
+                    "department": getattr(deliverable, "department", "company"),
+                    "status": getattr(deliverable, "status", "unknown"),
+                    "summary": getattr(deliverable, "payload", ""),
+                    "files": files if isinstance(files, list) else [files],
+                }
+            )
+        return deliverables[-6:]
+
+    def dashboard_metrics(self, turns_this_session: int = 0) -> dict:
+        pending = [
+            approval
+            for approval in self.pending_approvals()
+            if approval.get("status") == "pending"
+        ]
+        return {
+            "turns_this_session": turns_this_session,
+            "approvals_pending": len(pending),
+            "last_activity": self.last_activity(),
+            "current_phase": self.current_phase(),
+            "active_runs": self.active_run_count(),
+        }
+
     def persist(self):
         conversation_memory = getattr(self.coder, "conversation_memory", None)
         project_memory = getattr(self.coder, "project_memory", None)
@@ -514,6 +613,9 @@ class GUI:
     def do_sidebar(self):
         with st.sidebar:
             st.title("Aider")
+            self.do_company_tab()
+            st.divider()
+
             if st.button("⚙️ Settings", key="open_settings"):
                 self.state.show_settings = not self.state.show_settings
             # self.cmds_tab, self.settings_tab = st.tabs(["Commands", "Settings"])
@@ -522,9 +624,6 @@ class GUI:
                 self.do_settings_tab()
                 st.divider()
 
-            self.do_company_tab()
-            self.do_company_status_sidebar()
-            st.divider()
             # self.do_recommended_actions()
             self.do_add_to_chat()
             self.do_recent_msgs()
@@ -538,78 +637,91 @@ class GUI:
             )
 
     def do_company_tab(self):
-        st.subheader("Company")
+        st.subheader("Company Mode")
+        active_label = "Active" if self.state.company_enabled else "Paused"
+        active_icon = "🟢" if self.state.company_enabled else "⏸️"
+        st.markdown(f"### {active_icon} {active_label}")
         st.caption(
-            "Desktop controls for the same Product → UX → Engineering → QA → DevOps "
-            "workflow exposed in Discord."
+            "Route chat through the Product → UX → Engineering → QA → DevOps "
+            "workflow, or pause it for direct Aider chat."
         )
 
-        self.state.company_enabled = st.toggle(
-            "Use Company workflow for chat",
+        toggle_enabled = st.toggle(
+            "Company Mode Toggle",
             value=self.state.company_enabled,
             disabled=self.prompt_pending(),
-            help=(
-                "Routes prompts through Product prototyping first, then Engineering "
-                "for follow-up work. Turn this off to use the classic direct Aider chat."
-            ),
+            help="Switch between the structured Company workflow and direct Aider chat.",
         )
-        self.state.company_route = st.selectbox(
-            "Company route",
-            ["Auto", "Prototype", "Engineering"],
-            index=["Auto", "Prototype", "Engineering"].index(self.state.company_route),
-            disabled=self.prompt_pending() or not self.state.company_enabled,
-            help=(
-                "Auto mirrors Discord's human entry point. Prototype starts with Product/PRD. "
-                "Engineering skips PRD generation for existing-project tasks."
-            ),
-        )
-        self.state.company_auto_refresh = st.toggle(
-            "Auto-refresh company UI",
-            value=self.state.company_auto_refresh,
-            disabled=not self.state.company_enabled,
-            help=(
-                "Polls the background company session so approvals and dashboard "
-                "status stay current."
-            ),
-        )
-
-        if not self.state.company_enabled:
-            return
-
-        company = self.get_company()
-        self.enable_company_polling(company)
-        new_events, event_version = company.drain_events()
-        if new_events:
-            self.state.company_event_version = event_version
-
-        if company.background_error:
-            st.error(company.background_error)
-
-        if st.button("🔄 Refresh company state", key="company_refresh"):
+        if toggle_enabled != self.state.company_enabled:
+            self.state.company_enabled = toggle_enabled
+            if not toggle_enabled and self.company is not None:
+                self.company.shutdown()
+                self.company = None
             st.rerun()
 
-        self.do_company_pending_runs(company)
-        self.do_company_approvals(company)
+        button_label = (
+            "⏸️ Stop Company Mode"
+            if self.state.company_enabled
+            else "▶️ Start Company Mode"
+        )
+        if st.button(
+            button_label,
+            key="company_start_stop",
+            disabled=self.prompt_pending(),
+            use_container_width=True,
+        ):
+            self.state.company_enabled = not self.state.company_enabled
+            if not self.state.company_enabled and self.company is not None:
+                self.company.shutdown()
+                self.company = None
+            st.rerun()
 
-        with st.expander("🏢 Dashboard", expanded=False):
-            st.code(company.company_status())
+        if self.state.company_enabled:
+            st.success("Company workflow is active for new prompts.")
+            self.state.company_bypass_next = st.toggle(
+                "Bypass Company for next prompt",
+                value=self.state.company_bypass_next,
+                disabled=self.prompt_pending(),
+                help="Send the next chat prompt straight to classic Aider without pausing Company Mode.",
+            )
+            self.state.company_route = st.selectbox(
+                "Company route",
+                ["Auto", "Prototype", "Engineering"],
+                index=["Auto", "Prototype", "Engineering"].index(
+                    self.state.company_route
+                ),
+                disabled=self.prompt_pending(),
+                help=(
+                    "Auto mirrors Discord's human entry point. Prototype starts with Product/PRD. "
+                    "Engineering skips PRD generation for existing-project tasks."
+                ),
+            )
+            self.state.company_auto_refresh = st.toggle(
+                "Auto-refresh company UI",
+                value=self.state.company_auto_refresh,
+                help=(
+                    "Polls the background company session so approvals and dashboard "
+                    "status stay current."
+                ),
+            )
+            company = self.get_company()
+            self.enable_company_polling(company)
+            self.drain_company_events(company)
+            self.do_company_pending_runs(company)
+            self.do_company_status_sidebar(company)
+            if st.button(
+                "🔄 Refresh company state",
+                key="company_refresh",
+                use_container_width=True,
+            ):
+                st.rerun()
+        else:
+            st.info(
+                "Direct Aider chat is active. Start Company Mode when you want the structured workflow."
+            )
+            self.state.company_bypass_next = False
 
-        with st.expander("🧾 Audit log", expanded=False):
-            limit = st.slider("Audit events", 1, 25, 10, key="audit_log_limit")
-            st.code(company.audit_log(limit=limit))
-
-        with st.expander("📡 Company events", expanded=bool(new_events)):
-            if not company.events:
-                st.caption("No company events yet.")
-            for event in company.events[-10:]:
-                self.render_company_event(event)
-
-    def do_company_status_sidebar(self):
-        if not self.state.company_enabled:
-            st.caption("Company Mode: Inactive")
-            return
-
-        company = self.get_company()
+    def do_company_status_sidebar(self, company):
         pending_count = len(
             [
                 approval
@@ -617,18 +729,19 @@ class GUI:
                 if approval.get("status") == "pending"
             ]
         )
-        st.caption(
-            "Company Mode: Active" if company.is_active() else "Company Mode: Stopped"
-        )
-        st.metric(
-            "Current Phase", str(company.current_phase()).replace("_", " ").title()
-        )
+        st.metric("Current Phase", humanize_company_label(company.current_phase()))
         st.metric("Pending Approvals", pending_count)
         active_runs = company.active_run_count()
         if active_runs:
             st.caption(f"Background runs: {active_runs}")
         if company.background_error:
             st.error(company.background_error)
+
+    def drain_company_events(self, company):
+        new_events, event_version = company.drain_events()
+        if new_events:
+            self.state.company_event_version = event_version
+        return new_events
 
     def enable_company_polling(self, company):
         if not self.state.company_auto_refresh:
@@ -682,40 +795,77 @@ class GUI:
                 st.info(f"{label} is running in the background.")
         company.pending_runs = remaining
 
-    def do_company_approvals(self, company):
+    def do_company_approvals(self, company, prominent: bool = False):
         pending = [
             approval
             for approval in company.pending_approvals()
             if approval.get("status") == "pending"
         ]
         if not pending:
-            st.caption("No pending approvals.")
+            st.success("No pending approvals.")
+            st.caption(
+                "Approval requests will appear here with artifact previews and action controls."
+            )
             return
 
-        st.warning(f"{len(pending)} approval request(s) need a decision.")
-        for approval in pending:
+        st.error(f"{len(pending)} approval request(s) need a decision.")
+        for index, approval in enumerate(pending, start=1):
             task_id = str(approval.get("task_id"))
-            with st.expander(f"Approval: {task_id}", expanded=True):
-                st.markdown(format_desktop_approval(approval))
-                col1, col2 = st.columns(2)
+            gate_name = approval.get("gate_name", "approval")
+            department = approval.get("department", "unknown")
+            title = (
+                f"{index}. {humanize_company_label(gate_name)} · "
+                f"{humanize_company_label(department)} · {task_id}"
+            )
+            container = (
+                st.container(border=True)
+                if prominent
+                else st.expander(title, expanded=True)
+            )
+            with container:
+                if prominent:
+                    st.subheader(title)
+                cols = st.columns([1, 1, 2])
+                cols[0].metric("Gate", humanize_company_label(gate_name))
+                cols[1].metric("Department", humanize_company_label(department))
+                cols[2].caption(f"Task `{task_id}`")
+
+                with st.expander("Context / preview", expanded=True):
+                    st.markdown(format_desktop_approval(approval))
+                    task = approval.get("task")
+                    if isinstance(task, dict) and task.get("context"):
+                        st.write("**Additional context**")
+                        st.json(task.get("context"))
+                feedback = st.text_area(
+                    "Optional feedback",
+                    key=f"feedback_{task_id}",
+                    placeholder=(
+                        "Add notes for approval, describe requested changes, or explain why this is rejected."
+                    ),
+                )
+                col1, col2, col3 = st.columns(3)
                 with col1:
-                    if st.button("✅ Approve", key=f"approve_{task_id}"):
+                    if st.button(
+                        "✅ Approve", key=f"approve_{task_id}", use_container_width=True
+                    ):
                         company.approve(task_id)
                         st.rerun()
                 with col2:
-                    if st.button("❌ Reject", key=f"reject_{task_id}"):
-                        company.reject(task_id)
+                    if st.button(
+                        "📝 Request Changes",
+                        key=f"changes_{task_id}",
+                        use_container_width=True,
+                    ):
+                        company.request_changes(
+                            task_id, feedback or "Changes requested from desktop"
+                        )
                         st.rerun()
-                feedback = st.text_area(
-                    "Request changes feedback",
-                    key=f"feedback_{task_id}",
-                    placeholder="Describe what should change before this is approved.",
-                )
-                if st.button("📝 Request changes", key=f"changes_{task_id}"):
-                    company.request_changes(
-                        task_id, feedback or "Changes requested from desktop"
-                    )
-                    st.rerun()
+                with col3:
+                    if st.button(
+                        "❌ Reject", key=f"reject_{task_id}", use_container_width=True
+                    ):
+                        company.reject(task_id, feedback or "Rejected from desktop")
+                        st.rerun()
 
     def render_company_event(self, event):
         if isinstance(event, EventMessage):
@@ -733,6 +883,168 @@ class GUI:
         with st.container(border=True):
             st.write(f"**{department}** {artifact_type} {status}")
             st.write(str(content)[:1200])
+
+    def do_main_tabs(self):
+        tabs = st.tabs(
+            [
+                "Chat",
+                "Company Dashboard",
+                "Approvals",
+                "Audit Log",
+                "Project Memory",
+            ]
+        )
+        with tabs[0]:
+            self.do_chat_tab()
+        with tabs[1]:
+            self.do_company_dashboard_page()
+        with tabs[2]:
+            self.do_company_approvals_page()
+        with tabs[3]:
+            self.do_company_audit_log_page()
+        with tabs[4]:
+            self.do_project_memory_page()
+
+    def do_chat_tab(self):
+        if self.state.company_enabled:
+            if self.state.company_bypass_next:
+                st.info(
+                    "Company Mode is active, but the next prompt will bypass it and use direct Aider chat."
+                )
+            else:
+                st.info(
+                    "Company Mode is active. Prompts are queued into the structured workflow; "
+                    "use the dedicated tabs for dashboard, approvals, audit log, and memory."
+                )
+        else:
+            st.info("Company Mode is paused. You are chatting directly with Aider.")
+        self.do_messages_container()
+
+    def get_company_for_page(self):
+        if not self.state.company_enabled:
+            st.info(
+                "Company Mode is paused. Start it from the sidebar to activate this page."
+            )
+            return None
+        company = self.get_company()
+        self.enable_company_polling(company)
+        self.drain_company_events(company)
+        self.do_company_pending_runs(company)
+        if company.background_error:
+            st.error(company.background_error)
+        return company
+
+    def do_company_dashboard_page(self):
+        st.header("Company Dashboard")
+        company = self.get_company_for_page()
+        if company is None:
+            st.caption(
+                "Direct chat remains available in the Chat tab while Company Mode is paused."
+            )
+            return
+
+        metrics = company.dashboard_metrics(turns_this_session=self.count_user_turns())
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Turns this session", metrics["turns_this_session"])
+        m2.metric("Approvals pending", metrics["approvals_pending"])
+        m3.metric("Last activity", metrics["last_activity"])
+
+        phase = str(metrics["current_phase"])
+        st.subheader("Current Phase")
+        current_index = COMPANY_PHASES.index(phase) if phase in COMPANY_PHASES else 0
+        st.progress(
+            (current_index + 1) / len(COMPANY_PHASES),
+            text=humanize_company_label(phase),
+        )
+        phase_cols = st.columns(len(COMPANY_PHASES))
+        for index, phase_name in enumerate(COMPANY_PHASES):
+            marker = (
+                "✅"
+                if index < current_index
+                else "▶️" if index == current_index else "○"
+            )
+            phase_cols[index].caption(f"{marker} {humanize_company_label(phase_name)}")
+
+        st.subheader("Recent Deliverables")
+        deliverables = company.recent_deliverables()
+        if not deliverables:
+            st.caption(
+                "No deliverables yet. Send a prompt through Company Mode to populate this area."
+            )
+        for idx, deliverable in enumerate(deliverables):
+            title = (
+                f"{deliverable['label']} · {humanize_company_label(deliverable['department'])} "
+                f"· {humanize_company_label(deliverable['status'])}"
+            )
+            with st.expander(title, expanded=idx == len(deliverables) - 1):
+                files = deliverable.get("files") or []
+                if files:
+                    st.write("**Files changed**")
+                    for fname in files:
+                        st.code(str(fname), language=None)
+                st.write("**Preview**")
+                st.write(
+                    truncate_preview(deliverable.get("summary"), 1800)
+                    or "No preview available."
+                )
+
+        with st.expander("Raw company status", expanded=False):
+            st.code(company.company_status())
+
+    def do_company_approvals_page(self):
+        st.header("Approvals")
+        company = self.get_company_for_page()
+        if company is None:
+            return
+        self.do_company_approvals(company, prominent=True)
+
+    def do_company_audit_log_page(self):
+        st.header("Audit Log")
+        company = self.get_company_for_page()
+        if company is None:
+            return
+        limit = st.slider("Audit events", 1, 50, 15, key="audit_log_limit")
+        records = company.audit_records(limit=limit)
+        if not records:
+            st.caption("No audit events recorded.")
+            return
+        for record in reversed(records):
+            label = " | ".join(
+                [
+                    str(record.get("timestamp", "")),
+                    str(record.get("department", "orchestrator")),
+                    str(record.get("event_type", "event")),
+                ]
+            )
+            with st.expander(label, expanded=False):
+                st.write(record.get("payload_summary", ""))
+                st.json(record.get("metadata", {}))
+        with st.expander("Plain-text audit log", expanded=False):
+            st.code(company.audit_log(limit=limit))
+
+    def do_project_memory_page(self):
+        st.header("Project Memory")
+        project_memory = getattr(self.coder, "project_memory", None)
+        if not isinstance(project_memory, ProjectMemory):
+            project_memory = ProjectMemory(str(Path(self.coder.root).resolve()))
+            project_memory.load()
+            self.coder.project_memory = project_memory
+        data = project_memory.data
+        st.caption(
+            "Repo-scoped memory used by Company departments and direct Aider context enrichment."
+        )
+        if st.button("💾 Persist project memory", key="persist_project_memory"):
+            project_memory.persist()
+            st.success("Project memory persisted.")
+        st.subheader("Playbook")
+        st.json(data.get("playbook", {}))
+        st.subheader("Observability")
+        st.json(data.get("observability", {}))
+        with st.expander("Full project memory", expanded=False):
+            st.json(data)
+
+    def count_user_turns(self):
+        return sum(1 for msg in self.state.messages if msg.get("role") == "user")
 
     def do_settings_tab(self):
         st.subheader("Settings")
@@ -1020,6 +1332,7 @@ class GUI:
         self.state.init("company_enabled", False)
         self.state.init("company_route", "Auto")
         self.state.init("company_auto_refresh", True)
+        self.state.init("company_bypass_next", False)
         self.state.init("company_event_version", 0)
 
         self.state.init("initial_inchat_files", self.coder.get_inchat_relative_files())
@@ -1057,10 +1370,15 @@ class GUI:
         self.conf_path = self.state.conf_path
         self.company = None
 
-        self.do_messages_container()
+        self.do_main_tabs()
         self.do_sidebar()
 
-        user_inp = st.chat_input("Say something")
+        chat_placeholder = (
+            "Say something (direct Aider chat)"
+            if not self.state.company_enabled or self.state.company_bypass_next
+            else "Say something for the Company workflow"
+        )
+        user_inp = st.chat_input(chat_placeholder)
         if user_inp:
             self.prompt = user_inp
 
@@ -1107,9 +1425,12 @@ class GUI:
         prompt = self.state.prompt
         self.state.prompt = None
 
-        if self.state.company_enabled:
+        if self.state.company_enabled and not self.state.company_bypass_next:
             self.process_company_chat(prompt)
             return
+
+        if self.state.company_bypass_next:
+            self.state.company_bypass_next = False
 
         # This duplicates logic from within Coder
         self.num_reflections = 0

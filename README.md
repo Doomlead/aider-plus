@@ -5,7 +5,7 @@
 <h1 align="center">Aider Plus</h1>
 
 <p align="center">
-<strong>Aider Plus</strong> is an agent-first fork of <a href="https://github.com/Aider-AI/aider">aider-chat</a>. It preserves Aider's git-aware coding engine and adds an autonomous agent loop, a company-style product delivery workflow, Discord automation, onboarding, persistent project memory, OpenRouter-first setup helpers, and desktop/browser UI improvements.
+<strong>Aider Plus</strong> is an agent-first fork of <a href="https://github.com/Aider-AI/aider">aider-chat</a>. It keeps Aider's git-aware coding engine and layers on headless automation, an autonomous tool-calling agent loop, a Product → UX → Engineering → QA → DevOps company workflow, Discord and desktop surfaces, onboarding, persistent project memory, audit trails, approval gates, and newer model/provider metadata.
 </p>
 
 ---
@@ -24,7 +24,7 @@
 - [Discord integration](#discord-integration)
 - [Memory and auditability](#memory-and-auditability)
 - [GUI and desktop mode](#gui-and-desktop-mode)
-- [Benchmarking, docs, and website](#benchmarking-docs-and-website)
+- [Model, docs, benchmark, and website assets](#model-docs-benchmark-and-website-assets)
 - [Development](#development)
 - [Safety model](#safety-model)
 - [Roadmap direction](#roadmap-direction)
@@ -36,13 +36,13 @@
 
 Aider Plus turns upstream Aider into a foundation for **agentic software delivery**:
 
-1. Read repository state, project memory, conversation history, and user instructions.
-2. Decide whether to answer directly, plan, ask for clarification, or execute code edits.
-3. Use Aider's established coder pipeline for git-aware implementation.
-4. Route larger requests through product, UX, engineering, QA, DevOps, and approval stages.
-5. Emit structured events and deliverables for Discord, desktop panels, bots, logs, and future service wrappers.
+1. Gather repository state, repo maps, conversation memory, project memory, user instructions, model metadata, and workflow state.
+2. Decide whether to answer directly, run a headless task, call agent tools, ask for clarification, or route the request through a structured delivery workflow.
+3. Use Aider's coder implementations for real edits, diffs, lint/test hooks, commits, repo-map context, and model-specific prompting.
+4. Coordinate larger work through Product, UX, Engineering, QA, DevOps, approval gates, audit logs, revision loops, and post-mortems.
+5. Expose the same core runtime to terminal, scripts, Discord bots, Streamlit/browser UI, native desktop windows, and future service adapters.
 
-In short: this repository is both an interactive coding assistant and an embeddable runtime for software agents that can coordinate a full feature delivery loop.
+In short: this repository is both an interactive AI pair-programmer and an embeddable runtime for autonomous software agents that can plan, implement, review, approve, and track feature delivery.
 
 ---
 
@@ -50,22 +50,24 @@ In short: this repository is both an interactive coding assistant and an embedda
 
 Aider Plus currently includes:
 
-- **Upstream Aider code editing**: chat, ask, architect, editblock, whole-file, unified-diff, patch, lint/test hooks, repo maps, git commits, URL scraping, voice/watch/copy-paste helpers, model metadata, and the full documentation website source.
-- **Headless/bot mode**: `--headless` / `--bot-mode` switches Aider into non-interactive defaults for integrations by disabling pretty output and streaming while auto-approving prompts.
-- **Agent loop runtime**: `AiderAgentLoop` builds structured context, calls an LLM with tool definitions, and dispatches an `aider_coder` tool through bounded iterations.
-- **Architect/editor orchestration**: coding tasks can run as a two-phase process where an architect coder creates an implementation plan and an editor coder applies it.
-- **Tool registry and permissions**: agent tools are registered centrally and can be restricted by department-level tool allowlists.
-- **Company workflow engine**: `CompanyOrchestrator` coordinates projects, lifecycle transitions, handoffs, approval gates, audit logging, and post-mortem outcomes.
-- **Departments**: Product drafts PRDs and handles clarification, UX creates design handoffs, Engineering runs the Aider agent loop, QA runs targeted checks and produces release reports, and DevOps handles deployment/release completion.
-- **Approval gates**: PRD approvals and release approvals can block work, persist across restarts, recover pending approval UIs, and accept approve/reject/request-changes outcomes.
-- **Project state machine**: projects move through prototyping, design, development, QA, release-ready, deployment, completed, blocked, revision, and post-mortem paths.
-- **Discord integration**: Discord sessions can run direct engineering tasks or `/prototype` product flows, display approval buttons/modals, show audit logs, and show company dashboards.
-- **Persistent memory**: project memory stores state, pending approvals, audit events, post-mortems, and consolidated conversation summaries.
-- **Onboarding**: `aider onboard` / `aider init` gathers API keys, Discord bot token, default repository, workspace, and project-memory defaults.
-- **OpenRouter support**: setup helpers can detect an OpenRouter key, check free-tier status, select default OpenRouter models, or offer OAuth when no key/model is configured.
-- **Desktop app mode**: `--desktop` launches the Streamlit GUI inside a native pywebview window with improved size defaults, lifecycle cleanup, optional tray support, and audit-log rendering helpers.
-- **GUI settings updates**: the browser/desktop GUI includes model/key configuration affordances including OpenRouter API key handling.
-- **GPT-5.5 model metadata**: model settings and tests include GPT-5.5 aliases across supported providers, and docs/history references were updated accordingly.
+- **Upstream Aider editing engine**: interactive chat, ask, architect, editblock, whole-file, unified-diff, patch editing, repo maps, git operations, auto-commit behavior, lint/test commands, URL scraping, voice/watch/copy-paste helpers, token/cost accounting, model metadata, and the bundled documentation/website source.
+- **Headless and bot mode**: `--headless` and `--bot-mode` set integration-friendly defaults for scripted use by disabling pretty output and streaming while auto-approving prompts.
+- **Autonomous agent loop**: `AiderAgentLoop` builds structured context, calls LiteLLM-compatible models with tool definitions, dispatches the `aider_coder` tool, tracks bounded iterations, and reports structured results.
+- **Architect/editor orchestration**: agent coding tasks can run through an architect planning phase followed by an editor implementation phase.
+- **Tool registry and department permissions**: tools are centrally registered and can be restricted by the active company department's allowlist.
+- **Company workflow engine**: `CompanyOrchestrator` coordinates projects, department registration, lifecycle transitions, handoffs, approval gates, event recording, background task management, audit viewing, and post-mortem outcomes.
+- **Product, UX, Engineering, QA, and DevOps departments**: Product drafts PRDs and clarification requests, UX creates design handoffs, Engineering implements, QA runs targeted checks and release reports, and DevOps performs deployment/release completion.
+- **Engineering programmer/reviewer loop**: Engineering now runs programmer and reviewer phases, injects structured reviewer feedback into revision prompts, loops internally up to bounded limits, records reviewer issues, and fails safely if review cannot pass.
+- **Approval gates**: PRD and release approvals can block lifecycle progress, persist across restarts, recover pending approval UIs, and accept approve/reject/request-changes decisions.
+- **Project lifecycle state machine**: projects move through prototyping, design, development, QA, release-ready, deployment, completed, blocked, revision, and post-mortem paths.
+- **Discord integration**: Discord sessions can run direct engineering tasks, start `/prototype` product flows, display approval buttons/modals, recover pending approvals, show audit logs, show company status dashboards, consolidate memory, and enforce repo policies.
+- **Persistent memory**: project memory stores repo-scoped project state, pending approvals, audit events, post-mortems, deliverables, and summaries; conversation memory stores Discord/direct-chat history and dream-style consolidations.
+- **Onboarding**: `aider onboard` and `aider init` gather API keys, Discord bot tokens, default repository/workspace settings, and memory defaults.
+- **OpenRouter-first helpers**: setup can detect OpenRouter keys, check free-tier status, select matching default OpenRouter models, offer OAuth when no usable key/model exists, and expose OpenRouter key configuration in the GUI.
+- **Browser and desktop UI**: the Streamlit GUI supports direct chat plus Company Mode dashboards, approvals, audit logs, project memory views, route selection, bypass controls, background progress, and error/status indicators.
+- **Native desktop mode**: `--desktop` launches the Streamlit GUI in a pywebview window with desktop-friendly defaults, port discovery, process cleanup, optional tray icon support, debug/devtools mode, and audit-log rendering helpers.
+- **Model updates**: model settings and docs include newer OpenAI, Anthropic, Gemini, DeepSeek, and OpenRouter metadata, including GPT-5.5 aliases and provider-specific Claude/GPT/Gemini variants inherited from this branch.
+- **Focused test coverage**: the retained local tests focus on the newer Engineering reviewer/programmer revision loop.
 
 ---
 
@@ -73,95 +75,92 @@ Aider Plus currently includes:
 
 ### Aider-compatible coding assistant
 
-- Runs interactively from a terminal, browser GUI, or desktop shell.
-- Uses Aider's coder implementations for real edits rather than replacing the editing engine.
-- Preserves repo-map context, prompt caching, model settings, git workflows, auto-commit behavior, lint/test commands, and existing config conventions.
+- Runs from a terminal, a browser-based Streamlit GUI, or a native desktop shell.
+- Uses Aider's coder implementations for edits instead of replacing the editing engine.
+- Preserves repo-map context, prompt caching, model settings, token accounting, git workflows, auto-commit behavior, lint/test commands, file watching, URL ingestion, and existing config conventions.
+- Keeps upstream Aider documentation and website assets in the repository for the base CLI/editing behavior.
 
 ### Autonomous agent loop
 
-- Builds an `AgentContext` from conversation memory, recent coder/tool results, repository metadata, project instructions, and project memory.
-- Calls LiteLLM-compatible models with tool schemas and bounded iteration counts.
+- Builds an `AgentContext` from conversation memory, recent coder/tool results, repository metadata, project instructions, project memory, and the current department context.
+- Calls LiteLLM-compatible chat models with tool schemas and bounded iteration counts.
 - Emits lifecycle callbacks such as `context_built`, `thinking`, `planning_with_architect`, `executing_edits`, `permission_violation`, and `response_complete`.
-- Returns structured summaries, iteration counts, coder results, errors, diffs, file lists, and commits when available.
+- Returns structured summaries, iteration counts, coder results, errors, diffs, changed files, and commits when available.
+- Supports coder-native message formatting so upstream prompt caching and model-specific message preparation keep working.
 
-### Company-style delivery pipeline
+### Company-style delivery
 
-- Product turns a raw request into a PRD and decides whether UX design is required.
-- UX prepares design context when a product request needs design work.
-- Engineering receives structured PRD/design context and runs the Aider agent loop.
-- QA evaluates changed test files or recommends manual verification when no targeted tests exist.
-- Release approval can hand off to DevOps.
-- DevOps performs release/deployment reporting and can move work into completion or post-mortem paths.
+- Product turns raw feature ideas into PRDs and clarification requests.
+- UX receives PRD context and produces design specifications or handoffs.
+- Engineering runs the Aider agent loop, uses architect/editor staging, then runs an internal reviewer phase.
+- Reviewer feedback is structured, summarized, persisted in deliverable metadata, and injected into programmer revisions until review passes or the bounded loop fails.
+- QA executes targeted checks and produces release reports.
+- Release approval can route approved work to DevOps for deployment completion.
+- Failures, rejected approvals, or requested changes can route work into revision, blocked, or post-mortem states.
 
-### Human approvals and governance
+### Multi-surface operation
 
-- Blocking tasks create approval events with gate names, previews, approver roles, project names, and handoff targets.
-- Approvals are persisted in project memory so a Discord or service process can recover pending gates after reconnect/restart.
-- Duplicate approvals are ignored after resolution.
-- Users can approve, reject, or request changes with feedback.
-
-### Integrations and UI surfaces
-
-- Discord integration exposes reusable bot façade classes plus a `discord.py` client builder.
-- Discord commands include audit log viewing, company status/dashboard viewing, and prototype flow kickoff.
-- Browser GUI remains available through upstream `--gui` / `--browser` behavior.
-- Desktop GUI wraps the Streamlit app in a native window via `--desktop`.
+- **Terminal**: direct Aider CLI, `--headless`, `--bot-mode`, `--desktop`, and normal Aider subcommands.
+- **Discord**: bot façade for headless engineering tasks, prototype flows, approval interactions, audit viewing, and company status.
+- **Browser GUI**: Streamlit chat UI with model/key settings, OpenRouter key affordances, Company Mode controls, dashboard tabs, approvals, audit log, and project-memory display.
+- **Desktop GUI**: native wrapper around the browser GUI with lifecycle cleanup, desktop defaults, optional tray icon, and debug mode.
 
 ---
 
 ## Architecture overview
 
-Important package areas:
+Primary modules:
 
-- **CLI and argument parsing**: `aider/main.py`, `aider/args.py`, `aider/__main__.py`
-- **Aider coder engine**: `aider/coders/`
-- **Agent loop**: `aider/agent/loop.py`, `aider/agent/tools.py`
-- **Company orchestration**: `aider/company/orchestrator.py`, `aider/company/lifecycle.py`, `aider/company/approval.py`, `aider/company/state.py`
-- **Departments**: `aider/company/departments/product.py`, `engineering.py`, `ux.py`, `qa.py`, `devops.py`
-- **Company contracts**: `aider/company/schemas.py`, `aider/company/interfaces.py`, `aider/company/project.py`, `aider/company/context.py`
+- **CLI and runtime entrypoint**: `aider/main.py`, `aider/args.py`
+- **Aider editing engine**: `aider/coders/`, `aider/commands.py`, `aider/repo.py`, `aider/repomap.py`, `aider/models.py`
+- **Agent runtime**: `aider/agent/loop.py`, `aider/agent/tools.py`
+- **Company workflow**: `aider/company/`
 - **Discord adapter**: `aider/integrations/discord.py`
-- **Memory**: `aider/memory/conversation.py`, `aider/memory/project.py`, `aider/memory/project_memory.py`, `aider/memory/dream.py`, `aider/memory/repository.py`
-- **Onboarding and model setup**: `aider/onboarding.py`, `aider/openrouter.py`, `aider/models.py`, `aider/resources/model-settings.yml`, `aider/resources/model-metadata.json`
+- **Memory**: `aider/memory/`
+- **Onboarding and provider setup**: `aider/onboarding.py`, `aider/onboard.py`, OpenRouter helpers in the main runtime
 - **GUI/desktop**: `aider/gui.py`, `aider/desktop.py`
-- **Docs/website**: `aider/website/`
-- **Benchmarks**: `benchmark/`
-- **Tests**: `tests/`
+- **Docs/website/benchmarks**: `aider/website/`, `benchmark/`
+- **Focused local tests**: `tests/company/`
 
-High-level runtime flow:
+High-level flow:
 
 ```text
-User / Discord / GUI / automation
+Terminal / script / Discord / browser GUI / desktop GUI
         |
         v
-CLI, bot façade, or desktop/browser wrapper
+CLI configuration + model/provider setup + repo context
         |
-        +--> direct Aider coder flow
+        +--> Direct Aider coder flow
         |
         +--> AiderAgentLoop
-        |       +--> architect plan
-        |       +--> editor implementation
+        |       +--> AgentContext + ToolRegistry + aider_coder tool
+        |       +--> optional Architect -> Editor editing phases
         |
         +--> CompanyOrchestrator
-                +--> Product -> approval -> UX? -> Engineering -> QA -> approval -> DevOps
-                +--> project memory, audit log, lifecycle state, post-mortem
+                +--> Product -> UX -> Engineering -> QA -> DevOps
+                +--> approvals, project lifecycle, audit log, memory, post-mortem
+                +--> desktop/Discord status and approval surfaces
 ```
 
 ---
 
 ## Quickstart
 
-### Interactive terminal usage
+### Run normal Aider-compatible chat
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-export OPENAI_API_KEY=your_key_here
-cd /path/to/your/repo
 aider
 ```
 
-### Guided setup
+### Run one headless task
+
+```bash
+aider --headless --model gpt-5.5 --msg "Refactor the parser and add tests"
+```
+
+`--headless` also works as `--bot-mode` and is intended for scripts, queues, CI jobs, Discord workers, and service wrappers.
+
+### Start guided setup
 
 ```bash
 aider onboard
@@ -169,27 +168,13 @@ aider onboard
 aider init
 ```
 
-The onboarding flow can collect provider keys, an optional Discord bot token, workspace/repository defaults, and initial project memory.
-
-### Headless automation usage
+### Launch the browser GUI
 
 ```bash
-export OPENAI_API_KEY=your_key_here
-cd /path/to/your/repo
-aider --headless --model gpt-5.5 --msg "Refactor the parser and add tests"
-```
-
-`--headless` also works as `--bot-mode` and sets integration-friendly defaults.
-
-### Browser GUI
-
-```bash
-aider --gui
-# or
 aider --browser
 ```
 
-### Desktop GUI
+### Launch the desktop GUI
 
 ```bash
 aider --desktop
@@ -201,214 +186,195 @@ Use `--desktop-debug` when you need web inspector/devtools for the desktop shell
 
 ## Installation
 
-### Standard local install
+Aider Plus follows the upstream package layout and still publishes the `aider` console script from `aider.main:main`.
+
+### From this repository
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -e .
+git clone <this-repo-url>
+cd aider-plus
+python -m pip install -e '.[dev,browser]'
 ```
 
-### Development install
+### Runtime expectations
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -e .
-pip install -r requirements/requirements-dev.txt
-```
-
-### Optional dependencies
-
-- Browser/Playwright-related requirements live under `requirements/requirements-browser*.txt`.
-- Discord integrations require `discord.py`.
-- Desktop app mode requires `pywebview`; tray support is optional and depends on `pystray` plus `Pillow`.
-- Provider-specific SDKs and API keys follow the same general patterns as upstream Aider/LiteLLM.
+- Python `>=3.10,<3.15`.
+- A git repository for most editing and GUI workflows.
+- At least one model provider key, such as OpenAI, Anthropic, OpenRouter, or another LiteLLM-supported provider.
+- Browser/desktop mode needs the browser optional dependencies. Desktop mode additionally uses pywebview at runtime.
+- Discord integration requires a Discord bot token and a service wrapper that instantiates the Discord session helper.
 
 ---
 
 ## Configuration and model providers
 
-Aider Plus keeps Aider's model/provider configuration style and adds convenience behavior around OpenRouter:
+Aider Plus keeps Aider's provider/config style and adds setup conveniences:
 
-- API keys can come from environment variables or onboarding config.
-- CLI flags and config files still drive model selection.
-- LiteLLM-style provider/model names are supported.
-- If no explicit model is supplied, setup helpers can select a default based on available provider keys.
-- If `OPENROUTER_API_KEY` is present, Aider Plus can check whether the key is free-tier and choose a matching OpenRouter default.
-- If no usable key is detected, Aider Plus can offer an OpenRouter OAuth flow.
-- GPT-5.5 settings and aliases are included in model resources/tests.
-
-Useful files:
-
-- `aider/resources/model-settings.yml`
-- `aider/resources/model-metadata.json`
-- `aider/models.py`
-- `aider/openrouter.py`
-- `aider/onboarding.py`
-- `aider/website/docs/llms/`
-- `aider/website/docs/config/`
+- Use normal Aider configuration files, environment variables, and CLI flags for models and API keys.
+- Use `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, or other LiteLLM-compatible provider configuration.
+- `OPENROUTER_API_KEY` can be checked for free-tier status so setup can select a matching default model.
+- When no usable key/model is detected, setup can offer OpenRouter OAuth.
+- GUI settings expose model/key configuration, including an OpenRouter API key field.
+- Model metadata has been refreshed for newer GPT, Claude, Gemini, DeepSeek, and OpenRouter entries, including GPT-5.5 support.
 
 ---
 
 ## Common workflows
 
-### 1) Interactive coding assistant
+### 1) Direct pair programming
 
-Use Aider the normal way: chat in a repo, request edits, review diffs, run tests, and commit through your usual git flow.
+Run `aider` and use normal Aider chat/edit commands for interactive coding.
 
-### 2) One-shot automation
+### 2) Scripted automation
 
-Use `--msg` or `--message-file` with `--headless` to run a single task from a script, queue worker, CI job, or service wrapper.
+Use `--msg` or `--message-file` with `--headless` to run a single task from a script, queue worker, CI job, Discord worker, or service adapter.
 
-### 3) Agentic implementation
+### 3) Agent-loop execution
 
-Use `AiderAgentLoop` when you want model-directed tool calling, structured context, architect/editor staging, callbacks, and structured results.
+Use `AiderAgentLoop` when you want model-directed tool calling, structured context, architect/editor staging, callbacks, department permissions, and structured results.
 
 ### 4) Company prototype flow
 
-Use the company orchestrator or Discord `/prototype` command to route a raw product idea through PRD creation, approval, design when needed, engineering implementation, QA, release approval, and DevOps.
+Use `CompanyOrchestrator`, Discord `/prototype`, or Company Mode in the GUI to route a raw product idea through PRD creation, approval, UX/design, engineering implementation, reviewer revisions, QA, release approval, and DevOps.
 
-### 5) Audit and recovery
+### 5) Desktop Company Mode
 
-Use project memory and the audit log viewer to inspect what departments did, recover pending approval gates, and preserve context across sessions.
+Start `aider --desktop`, enable Company Mode, choose Auto/Prototype/Engineering routing, watch the dashboard, approve or reject gates, inspect audit events, and view project memory without leaving the desktop app.
+
+### 6) Audit and recovery
+
+Inspect persisted project memory to recover approvals, review audit logs, see deliverables, and understand why a project moved to revision, blocked, deployed, completed, or post-mortem.
 
 ---
 
 ## Company workflow
 
-The company layer models software delivery as explicit tasks and deliverables.
+The company system is implemented under `aider/company/`.
 
-### Main objects
+### Key abstractions
 
-- `CompanyTask`: work request with origin, target, artifact type, payload, blocking flag, context, and metadata.
-- `Deliverable`: department output with artifact type, payload/content, status, and handoff metadata.
-- `EventMessage`: structured lifecycle/approval/audit event for integrations.
+- `CompanyTask`: normalized work request with task id, department target, description, context, source, and metadata.
+- `Deliverable`: department output with artifact type, payload, status, metadata, optional reviewer feedback, and review status.
+- `CompanyEvent`: lifecycle/audit event emitted by departments and the orchestrator.
+- `EventMessage`: structured handoff and status messages used by the GUI/orchestrator surfaces.
 - `Project`: active project state, phase, PRD, design spec, engineering result, QA result, deployment result, and post-mortem data.
 - `CompanyStateManager`: persistence and recovery wrapper around `ProjectMemory`.
-- `LifecycleEngine`: phase transition policy.
+- `LifecycleEngine`: centralized project phase transitions.
 - `ApprovalManager`: blocking approval creation, persistence, recovery, and resolution.
+- `AuditLog` / `AuditLogViewer`: append and render structured company events.
 
-### Phase flow
+### Delivery stages
 
-Typical successful flow:
+1. **Product** creates PRDs and clarification outputs.
+2. **PRD approval** can block work until a human approves, rejects, or requests changes.
+3. **UX** creates design context when the task needs a design handoff.
+4. **Engineering programmer phase** uses the Aider agent loop to implement.
+5. **Engineering reviewer phase** checks the implementation, produces structured feedback, and can trigger programmer revisions.
+6. **QA** runs targeted commands/checks and creates release reports.
+7. **Release approval** can block deployment.
+8. **DevOps** records deployment/release completion for approved releases.
+9. **Post-mortem** captures outcomes for completed or failed paths.
 
-```text
-prototyping
-  -> PRD approval
-  -> design (optional UX)
-  -> development
-  -> QA
-  -> release approval
-  -> deploying
-  -> completed
-```
+### Department isolation
 
-Failure or feedback paths can route work into revision, blocked, or post-mortem states.
-
-### Department responsibilities
-
-- **Product**: creates PRDs, preserves original requests, determines UX need, handles engineering clarification memos, and sets PRD approval metadata.
-- **UX**: converts PRD context into design guidance before Engineering when required.
-- **Engineering**: validates handoff context, composes implementation prompts, runs the Aider agent loop, reports files/commits/diffs, and requests Product clarification when blocked.
-- **QA**: checks changed test files with targeted pytest commands when possible, produces release reports, and recommends further verification.
-- **DevOps**: processes approved release handoffs and records deployment/release status.
+Departments declare required context and allowed tools. The orchestrator handles handoffs instead of having departments directly mutate each other's private state. Tool permissions can block a department from invoking tools outside its allowlist.
 
 ---
 
 ## Discord integration
 
-`aider/integrations/discord.py` provides optional Discord support without making `discord.py` a core dependency.
+Discord support lives in `aider/integrations/discord.py` and provides:
 
-Capabilities:
-
-- Session keys scoped by guild, channel, user, and repository path.
-- Repository whitelist policy.
-- Prompt size and runtime limits.
-- Allow/deny user controls.
-- Direct engineering execution through `run_instruction`.
-- Product-led prototype execution through `run_prototype`.
-- Company events streamed back into Discord.
+- A `DiscordAiderSession` façade around headless Aider/agent execution.
+- Per-channel/thread session keys and project memories.
+- Direct engineering tasks through the Aider agent loop.
+- Product-led prototype execution through `run_prototype` and `/prototype`-style commands.
 - Approval messages with Approve, Reject, and Request Changes controls.
-- Commands for audit logs and company dashboard/status.
-- Conversation consolidation into project memory on disconnect.
-- Recovery of pending approvals after reconnect/ping.
+- Pending approval recovery after bot reconnect/restart.
+- Audit log rendering for recent company events.
+- Company status/dashboard rendering.
+- Conversation memory and dream consolidation for long-running sessions.
+- Repository-root policy controls for Discord-triggered work.
 
-Typical dependency install:
+Typical adapter flow:
 
-```bash
-pip install discord.py
+```python
+from aider.integrations.discord import DiscordAiderSession
+
+session = DiscordAiderSession(repo_path="/path/to/repo")
+result = await session.run_instruction("Implement the requested change")
 ```
-
-The onboarding flow can prompt for a Discord bot token and save it with the rest of the local setup configuration.
 
 ---
 
 ## Memory and auditability
 
-Aider Plus uses memory at multiple levels:
+Aider Plus adds memory layers that are separate from git history:
 
-- **Conversation memory** stores recent chat/session context.
-- **Project memory** stores durable project data in `.aider/project_memory.json` or configured memory locations.
-- **Dream/consolidation memory** summarizes Discord session conversations into longer-lived project memory.
-- **Repository memory** provides repository-aware memory primitives.
-- **Audit log events** record department actions, approvals, deliverables, QA pass/fail, deployment status, and post-mortem activity.
+- **Conversation memory** stores message history for long-running bot/session contexts.
+- **Dream consolidation** summarizes older conversation context so Discord sessions can stay compact.
+- **Project memory** stores repo-scoped project state, pending approvals, audit logs, deliverables, release data, deployment data, and post-mortems.
+- **Audit log events** record department actions, approvals, deliverables, reviewer results, QA pass/fail, deployment status, lifecycle transitions, and post-mortem activity.
 
 Audit data is viewable from:
 
-- Discord `audit` command.
-- Discord `company_status` / `dashboard` commands.
+- Discord audit log messages.
+- `AuditLogViewer` in Python.
 - Desktop helper rendering via `render_desktop_audit_log`.
-- Project memory JSON for direct inspection.
+- GUI Company Mode audit-log pages.
+- Raw project memory data.
 
 ---
 
 ## GUI and desktop mode
 
-Aider Plus keeps upstream browser GUI behavior and adds a desktop wrapper:
+Aider Plus keeps upstream browser GUI behavior and adds richer Company Mode plus a desktop wrapper:
 
-- `--gui` / `--browser` launches the Streamlit browser app.
+- `--browser` starts the Streamlit GUI in a browser.
 - `--desktop` starts the same Streamlit app on a local port and hosts it in a native pywebview window.
 - The desktop wrapper finds an available port, waits for the server, sets desktop-friendly Streamlit flags, cleans up the child process, and optionally starts a tray icon when dependencies are present.
-- Default/minimum window sizes are tuned for a full coding workspace.
-- GUI settings include OpenRouter API key support.
+- `--desktop-debug` enables web inspector/devtools support.
+- The GUI sidebar can pause/resume Company Mode, select Auto/Prototype/Engineering routing, bypass the next prompt for direct Aider chat, refresh status, and surface pending approvals.
+- Main GUI tabs include Chat, Company Dashboard, Approvals, Audit Log, and Project Memory.
+- The Company Dashboard shows lifecycle phase progress, pending approvals, recent deliverables, changed files, and raw company status.
+- Approval pages provide approve, reject, and request-changes interactions.
+- Background workflow execution is isolated from the Streamlit request thread and exposes pending-run and error indicators.
+- Model/settings UI includes OpenRouter API key handling.
 
 ---
 
-## Benchmarking, docs, and website
+## Model, docs, benchmark, and website assets
 
-Aider Plus includes upstream Aider's docs and benchmarking assets:
+The repo retains upstream Aider's documentation, benchmark scaffolding, website source, and model metadata while carrying Aider Plus updates:
 
-- `benchmark/` contains benchmark/evaluation scripts, SWE-bench-related workflows, plotting, docker support, and leaderboard generation assets.
-- `aider/website/` contains the documentation website, install/config/LLM docs, troubleshooting, examples, blog posts, benchmark writeups, and leaderboard data.
-- Website docs were updated for GPT-5.5-related references and advanced model settings.
+- Website source and docs live in `aider/website/`.
+- Benchmark tooling and results live in `benchmark/`.
+- Model settings live in `aider/resources/model-settings.yml` and `aider/models.py`.
+- This branch includes metadata/docs for GPT-5.5 plus newer OpenAI, Anthropic Claude, Gemini, DeepSeek, and OpenRouter variants.
+- The upstream basic/browser test suite has been trimmed from this branch; current local tests focus on company engineering review behavior.
 
 ---
 
 ## Development
 
+### Install for development
+
+```bash
+python -m pip install -e '.[dev,browser]'
+```
+
 ### Run tests
 
 ```bash
-pytest -q
+pytest -q tests/company
 ```
 
-### Run targeted tests
-
-```bash
-pytest -q tests/basic/test_discord_integration.py
-pytest -q tests/basic/test_company_orchestrator.py
-pytest -q tests/basic/test_main.py
-pytest -q tests/basic/test_models.py
-```
-
-### Helpful commands
+### Useful commands
 
 ```bash
 python -m aider --help
 python -m aider --headless --msg "Summarize this repository"
+python -m aider --browser
 python -m aider --desktop
 ```
 
@@ -419,7 +385,7 @@ python -m aider --desktop
 - Company workflow: `aider/company/`
 - Integrations: `aider/integrations/`
 - Memory: `aider/memory/`
-- Tests: `tests/`
+- Focused local tests: `tests/company/`
 - Benchmarks: `benchmark/`
 - Website/docs: `aider/website/`
 - Utility scripts: `scripts/`
@@ -431,11 +397,13 @@ python -m aider --desktop
 Aider Plus follows a practical safety posture for code agents:
 
 - Agent iterations are bounded.
+- Engineering reviewer/programmer revisions are bounded.
 - Headless mode is explicit and intended for controlled environments.
 - Department tool permissions can block unauthorized tool use.
 - Human approvals can block PRD and release handoffs.
 - Repository policies can restrict Discord-triggered work to approved roots.
 - Prompt size and runtime limits protect bot integrations.
+- Background GUI tasks expose errors instead of silently failing.
 - Persistent audit logs make automated work inspectable.
 - Git-native outputs keep diffs and commits human-reviewable.
 
@@ -451,13 +419,14 @@ Near-term evolution is oriented around:
 - additional channel adapters beyond Discord,
 - deeper memory and retrieval behavior,
 - more complete desktop/company dashboards,
+- broader test coverage after the local test-suite trim,
 - better benchmark coverage for end-to-end delivery workflows.
 
 ---
 
 ## Upstream Aider docs
 
-Because Aider Plus is a fork, upstream Aider documentation remains useful for the base editing engine, CLI behavior, model configuration, repo maps, lint/test hooks, and general usage:
+Because Aider Plus is a fork, upstream Aider documentation remains useful for the base editing engine, CLI behavior, model configuration, repo maps, lint/test hooks, git behavior, and general usage:
 
 - Install docs: https://aider.chat/docs/install.html
 - Usage docs: https://aider.chat/docs/usage.html
@@ -468,19 +437,19 @@ Because Aider Plus is a fork, upstream Aider documentation remains useful for th
 
 ### Aider Plus commit additions summary
 
-The following summarizes each non-merge Aider Plus commit visible in this branch's history, in chronological order:
+The following summarizes each non-merge Aider Plus commit visible in this branch's history, in chronological order. Merge commits are omitted because they primarily integrate the feature commits listed here.
 
 | Commit | What it added or changed |
 | --- | --- |
-| `308b154` | Added GPT-5.5 model settings/aliases across providers and test coverage for those model settings. |
-| `c723364` | Added advanced model settings documentation and refreshed FAQ/sample analytics content. |
+| `308b154` | Added GPT-5.5 model settings and aliases across providers with model-setting test coverage. |
+| `c723364` | Added advanced model settings documentation and refreshed FAQ/sample analytics website content. |
 | `3ec8ec5` | Updated FAQ token percentage references and switched the history update script's model reference to GPT-5.5. |
-| `e56bd79` | Added the first headless mode defaults and Discord integration scaffolding. |
-| `531da4b` | Documented headless mode and Discord integration support in the README. |
+| `e56bd79` | Added initial headless-mode defaults and Discord integration scaffolding. |
+| `531da4b` | Documented headless mode and Discord integration support. |
 | `b58b443` | Reframed the README around Aider Plus's agent-first direction. |
 | `22f3b87` | Split agent-loop context construction into an explicit, testable build step. |
-| `79219d2` | Switched agent context caching toward coder-native message formatting. |
-| `847d109` | Preserved Aider prompt caching behavior when agent context messages are generated. |
+| `79219d2` | Shifted agent context caching toward coder-native message formatting. |
+| `847d109` | Preserved Aider prompt caching behavior when generating agent context messages. |
 | `3a978a7` | Refactored the agent loop to use coder-native message assembly. |
 | `46f43ae` | Removed an obsolete `prepare_messages_for_llm` stub. |
 | `d121a2d` | Refactored the agent loop to rely on coder-managed message formatting. |
@@ -496,23 +465,31 @@ The following summarizes each non-merge Aider Plus commit visible in this branch
 | `5c14ef7` | Wired the Discord bot flow through `CompanyOrchestrator` scaffolding. |
 | `98cc4a0` | Added guided onboarding and first-run setup prompts. |
 | `01b0222` | Extended onboarding to prompt for a Discord bot token. |
-| `3b19a1e` | Rewrote the README with a full Aider Plus capabilities overview. |
+| `3b19a1e` | Rewrote the README with a fuller Aider Plus capabilities overview. |
 | `faa0d76` | Added a README summary of Aider Plus commit additions. |
 | `e2c9ef7` | Added desktop app mode that wraps the browser GUI in a native desktop window. |
 | `41382aa` | Improved desktop GUI defaults, lifecycle handling, process cleanup, and related UX. |
 | `bf3a772` | Added an OpenRouter API key field to GUI settings. |
-| `19f31a7` | Fixed EngineeringDepartment handoff into the agent loop. |
-| `275507b` | Added ProductDepartment and a Discord prototype flow for PRD-first feature requests. |
+| `19f31a7` | Fixed `EngineeringDepartment` handoff into the agent loop. |
+| `275507b` | Added `ProductDepartment` and a Discord prototype flow for PRD-first feature requests. |
 | `bd6fbe9` | Routed generated PRD context through company handoffs so Engineering receives structured requirements. |
-| `d461fde` | Added blocking PRD approval handoff before Product work moves to Engineering/UX. |
+| `d461fde` | Added a blocking PRD approval handoff before Product work proceeds to UX/Engineering. |
 | `f867288` | Added a project state machine to the orchestrator. |
 | `fe4823d` | Persisted company approval gates in project memory. |
-| `6014143` | Added department tool permissions and QA test execution/reporting. |
+| `6014143` | Added department tool permissions plus QA test execution/reporting. |
 | `53cec2a` | Added DevOps and UX stages to the company delivery pipeline. |
 | `f98a6e5` | Routed approved releases to DevOps instead of stopping at QA approval. |
 | `a8a55ed` | Added company audit logging and a post-mortem playbook path. |
 | `5a6191c` | Stabilized company core interfaces for tasks, deliverables, events, and state. |
 | `e1341b1` | Centralized lifecycle approval handling and audit-log viewing. |
-| `782b1b9` | Stabilized company workflow boundaries, handoffs, and communication between departments. |
-
-Merge commits are intentionally omitted from the table because they primarily integrate the feature commits above.
+| `782b1b9` | Stabilized company workflow boundaries, handoffs, and inter-department communication. |
+| `2fb8435` | Updated the README for then-current Aider Plus capabilities. |
+| `df324ea` | Hardened dependency checks, model metadata handling, onboarding behavior, schema validation, and lint/test issues. |
+| `6c9b22b` | Trimmed the local test tree substantially, leaving the focused company-review tests now present in this branch. |
+| `63d117c` | Added Company workflow controls to the desktop/Streamlit GUI. |
+| `8dd7ff7` | Improved desktop Company workflow background handling, event delivery, pending-run tracking, and safety indicators. |
+| `c697cae` | Expanded the desktop Company workflow UI with dashboard, approval, audit-log, project-memory, routing, and status improvements. |
+| `f8b99c5` | Added an Engineering programmer/reviewer phase loop with Discord/GUI status support and tests. |
+| `054d1a8` | Enhanced reviewer intelligence with structured agent feedback extraction and richer review metadata. |
+| `3685579` | Improved programmer revision handling so reviewer feedback is incorporated on follow-up implementation passes. |
+| `40289e7` | Injected reviewer feedback more completely into programmer revision prompts and metadata. |

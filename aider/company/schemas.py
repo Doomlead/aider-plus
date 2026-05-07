@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal, Optional, Any
+from typing import Any, Literal, Optional
 
 from aider.company.interfaces import (
     ApprovalRequest,
@@ -47,3 +47,15 @@ class CompanyTask:
     payload: Any
     blocking: bool = False
     context: dict = field(default_factory=dict)
+
+
+__all__ = [
+    "ApprovalDecision",
+    "ApprovalRequest",
+    "CompanyEvent",
+    "CompanyTask",
+    "Deliverable",
+    "DepartmentOutput",
+    "EventMessage",
+    "ProcessResult",
+]

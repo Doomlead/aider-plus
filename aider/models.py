@@ -1201,6 +1201,9 @@ def check_for_dependencies(io, model_name):
         io: The IO object for user interaction
         model_name: The name of the model to check dependencies for
     """
+    if not isinstance(model_name, str):
+        return
+
     # Check if this is a Bedrock model and ensure boto3 is installed
     if model_name.startswith("bedrock/"):
         check_pip_install_extra(

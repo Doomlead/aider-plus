@@ -254,6 +254,16 @@ class TestModels(unittest.TestCase):
         # Verify check_pip_install_extra was not called
         mock_check_pip.assert_not_called()
 
+    @patch("aider.models.check_pip_install_extra")
+    def test_check_for_dependencies_non_string_model_name(self, mock_check_pip):
+        """Test that non-string model names do not trigger dependency installation."""
+        from aider.io import InputOutput
+        from aider.models import check_for_dependencies
+
+        check_for_dependencies(InputOutput(), MagicMock())
+
+        mock_check_pip.assert_not_called()
+
     def test_get_repo_map_tokens(self):
         # Test default case (no max_input_tokens in info)
         model = Model("gpt-4")

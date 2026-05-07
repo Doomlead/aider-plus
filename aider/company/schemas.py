@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 from aider.company.interfaces import (
     ApprovalRequest,
@@ -12,11 +12,12 @@ from aider.company.interfaces import (
 
 class CompanyEvent(str, Enum):
     APPROVAL_REQUIRED = "approval_required"
+    LIFECYCLE = "lifecycle"
 
 
 @dataclass
 class EventMessage:
-    event: CompanyEvent
+    event: Union[CompanyEvent, str]
     task_id: str
     payload: dict
     metadata: dict = field(default_factory=dict)

@@ -37,12 +37,16 @@ class EngineeringDepartment(Department):
         self.current_stage: str = "programmer"
         self._active_task: Optional[CompanyTask] = None
         self._review_feedback: Optional[dict] = None
+        self._revision_count: int = 0
+        self._last_reviewer_issues: Optional[str] = None
         if hasattr(self.agent_loop, "tool_registry"):
             self.agent_loop.tool_registry.set_department(self)
 
     async def process(self, task: CompanyTask) -> Deliverable:
         self._active_task = task
         self._review_feedback = None
+        self._revision_count = 0
+        self._last_reviewer_issues = None
         last_programmer_deliverable: Optional[Deliverable] = None
         last_review: Optional[Deliverable] = None
 
@@ -84,6 +88,10 @@ class EngineeringDepartment(Department):
                 )
                 return review
 
+            self._last_reviewer_issues = self._review_feedback_summary(
+                self._review_feedback
+            )
+
             await self._emit_engineering_event(
                 task.task_id,
                 "engineering_revision_needed",
@@ -105,7 +113,11 @@ class EngineeringDepartment(Department):
                 artifact_type="code",
                 payload="Engineering did not produce a deliverable.",
                 status="failure",
-                metadata={"review_passed": False},
+                metadata={
+                    "review_passed": False,
+                    "revision_count": self._revision_count,
+                    "last_reviewer_issues": self._last_reviewer_issues,
+                },
                 review_passed=False,
             )
 
@@ -115,6 +127,8 @@ class EngineeringDepartment(Department):
                 "review_passed": False,
                 "review_feedback": self._review_feedback,
                 "max_internal_iterations": self.max_internal_iterations,
+                "revision_count": self._revision_count,
+                "last_reviewer_issues": self._last_reviewer_issues,
             }
         )
         return Deliverable(
@@ -132,14 +146,29 @@ class EngineeringDepartment(Department):
         """Run the existing Architect → Editor implementation flow."""
         self.current_stage = "programmer"
         task_text = self._task_text(task)
+        previous_review_feedback = None
         if self._review_feedback:
+            self._revision_count += 1
             previous_review_feedback = self._format_review_feedback(
                 self._review_feedback
             )
+            self._last_reviewer_issues = self._review_feedback_summary(
+                self._review_feedback
+            )
+            await self._emit_engineering_event(
+                task.task_id,
+                "programmer_revision_start",
+                {
+                    "revision_count": self._revision_count,
+                    "last_reviewer_issues": self._last_reviewer_issues,
+                },
+            )
             task_text = (
-                f"{task_text}\n\n"
-                "Previous Reviewer Feedback (fix these issues):\n"
-                f"{previous_review_feedback}"
+                "Previous Code Review Feedback (CRITICAL - Address ALL issues):\n"
+                f"{previous_review_feedback}\n\n"
+                "Fix all issues listed above while still fulfilling the original PRD "
+                "and design spec.\n\n"
+                f"{task_text}"
             )
 
         record_department_memory = not self._uses_agent_conversation_memory()
@@ -154,7 +183,9 @@ class EngineeringDepartment(Department):
 
         metadata = self._result_metadata(result)
         metadata.setdefault("stage", "programmer")
+        metadata.setdefault("revision_count", self._revision_count)
         metadata.setdefault("review_feedback_applied", self._review_feedback)
+        metadata.setdefault("last_reviewer_issues", self._last_reviewer_issues)
         return Deliverable(
             task_id=task.task_id,
             department=self.name,
@@ -752,6 +783,56 @@ Be specific and actionable."""
         if repo_path:
             return Path(repo_path)
         return None
+
+    @staticmethod
+    def _review_feedback_summary(feedback: Optional[dict]) -> Optional[str]:
+        if not feedback:
+            return None
+        issues = feedback.get("issues") or []
+        if issues:
+            summaries = []
+            for issue in issues[:5]:
+                if isinstance(issue, dict):
+                    severity = issue.get("severity")
+                    location = issue.get("file") or "general"
+                    description = issue.get("description") or issue.get("issue")
+                    if description:
+                        prefix = f"[{severity}] " if severity else ""
+                        summaries.append(f"{prefix}{location}: {description}")
+                elif issue:
+                    summaries.append(str(issue))
+            if summaries:
+                remaining = len(issues) - len(summaries)
+                summary = "; ".join(summaries)
+                if remaining > 0:
+                    summary += f"; +{remaining} more"
+                return summary
+
+        priority_issues = feedback.get("priority_issues") or []
+        if priority_issues:
+            summaries = []
+            for issue in priority_issues[:5]:
+                if isinstance(issue, dict):
+                    priority = issue.get("priority")
+                    description = issue.get("issue") or issue.get("name")
+                    action = issue.get("action")
+                    if description:
+                        prefix = f"[{priority}] " if priority else ""
+                        summary = f"{prefix}{description}"
+                        if action:
+                            summary += f" — {action}"
+                        summaries.append(summary)
+                elif issue:
+                    summaries.append(str(issue))
+            if summaries:
+                remaining = len(priority_issues) - len(summaries)
+                summary = "; ".join(summaries)
+                if remaining > 0:
+                    summary += f"; +{remaining} more"
+                return summary
+
+        summary = feedback.get("overall_assessment") or feedback.get("summary")
+        return str(summary) if summary else None
 
     @staticmethod
     def _format_review_feedback(feedback: dict) -> str:

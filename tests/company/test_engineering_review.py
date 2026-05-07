@@ -101,20 +101,37 @@ def test_engineering_loops_back_to_programmer_when_review_needs_revision(tmp_pat
 
         assert deliverable.status == "success"
         assert deliverable.review_passed is True
-        assert "Previous Reviewer Feedback (fix these issues)" in loop.last_task_text
+        assert loop.last_task_text.startswith(
+            "Previous Code Review Feedback (CRITICAL - Address ALL issues):"
+        )
+        assert "[P1] Add a missing assertion." in loop.last_task_text
+        assert (
+            "Fix all issues listed above while still fulfilling the original PRD "
+            "and design spec."
+        ) in loop.last_task_text
+        assert deliverable.metadata["revision_count"] == 1
+        assert deliverable.metadata["last_reviewer_issues"] == (
+            "[P1] Add a missing assertion. — Update the implementation."
+        )
         assert [message.payload["name"] for message in emitted] == [
             "engineering_programmer_start",
             "engineering_reviewer_start",
             "engineering_revision_needed",
             "engineering_programmer_start",
+            "programmer_revision_start",
             "engineering_reviewer_start",
             "engineering_review_approved",
         ]
+        assert emitted[4].payload["revision_count"] == 1
+        assert emitted[4].payload["last_reviewer_issues"] == (
+            "[P1] Add a missing assertion. — Update the implementation."
+        )
         assert [event[0] for event in loop.callback_events] == [
             "engineering_programmer_start",
             "engineering_reviewer_start",
             "engineering_revision_needed",
             "engineering_programmer_start",
+            "programmer_revision_start",
             "engineering_reviewer_start",
             "engineering_review_approved",
         ]

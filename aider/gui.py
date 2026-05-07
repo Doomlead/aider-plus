@@ -872,6 +872,13 @@ class GUI:
             if event.event == CompanyEvent.APPROVAL_REQUIRED:
                 st.warning(f"Approval required: {event.task_id}")
                 st.json(event.payload)
+            elif event.event == CompanyEvent.LIFECYCLE:
+                payload = event.payload or {}
+                label = humanize_company_label(payload.get("name") or event.event)
+                iteration = payload.get("iteration")
+                suffix = f" (iteration {iteration})" if iteration is not None else ""
+                st.info(f"{label}{suffix}")
+                st.json(payload)
             else:
                 st.json(event.__dict__)
             return

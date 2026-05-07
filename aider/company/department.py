@@ -7,7 +7,7 @@ from typing import Awaitable, Optional, List, Callable
 from aider.company.audit import append_audit_event
 from aider.company.interfaces import Deliverable
 from aider.memory import ProjectMemory, ConversationMemory
-from aider.company.schemas import CompanyTask
+from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
 
 
 class Department(ABC):
@@ -24,6 +24,7 @@ class Department(ABC):
         self.inbox: asyncio.Queue[CompanyTask] = asyncio.Queue()
         self.tools: List[str] = []
         self._on_deliverable: Optional[Callable[[Deliverable], None]] = None
+        self._on_event: Optional[Callable[[EventMessage], Awaitable[None]]] = None
         self._submit_task: Optional[
             Callable[[CompanyTask], Awaitable[Optional[Deliverable]]]
         ] = None
@@ -42,6 +43,24 @@ class Department(ABC):
 
     async def receive(self, task: CompanyTask) -> None:
         await self.inbox.put(task)
+
+    async def _emit_lifecycle_event(
+        self, task_id: str, event_name: str, payload: Optional[dict] = None
+    ) -> None:
+        """Emit a lifecycle event through company listeners and the audit log."""
+        event_payload = dict(payload or {})
+        self._log_event(event_name, event_payload, {"task_id": task_id})
+        if self._on_event is None:
+            return
+        message = EventMessage(
+            event=CompanyEvent.LIFECYCLE,
+            task_id=task_id,
+            payload={"name": event_name, **event_payload},
+            metadata={"department": self.name},
+        )
+        emitted = self._on_event(message)
+        if hasattr(emitted, "__await__"):
+            await emitted
 
     @abstractmethod
     async def process(self, task: CompanyTask) -> Deliverable: ...

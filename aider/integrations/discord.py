@@ -93,6 +93,29 @@ def format_approval_required_message(event: EventMessage) -> str:
     )
 
 
+def format_lifecycle_event_message(event: EventMessage) -> str:
+    payload = event.payload or {}
+    event_name = payload.get("name") or str(event.event)
+    label = str(event_name).replace("_", " ").title()
+    iteration = payload.get("iteration")
+    suffix = f" (iteration {iteration})" if iteration is not None else ""
+    details = []
+    files = payload.get("files") or []
+    if files:
+        details.append("Files: " + ", ".join(str(path) for path in files[:8]))
+    feedback = payload.get("feedback") or {}
+    if isinstance(feedback, dict) and feedback.get("summary"):
+        details.append("Review: " + str(feedback.get("summary")))
+    checks = payload.get("checks") or []
+    if checks:
+        passed = sum(1 for check in checks if check.get("status") == "passed")
+        details.append(f"Checks: {passed}/{len(checks)} passed")
+    body = "\n".join(details)
+    if body:
+        body = "\n" + body
+    return f"🔄 **{label}**{suffix}\nTask: `{event.task_id}`{body}"
+
+
 def format_audit_log_message(project_memory: ProjectMemory, limit: int = 10) -> str:
     viewer = AuditLogViewer.from_project_memory(project_memory)
     rendered = viewer.render_text(limit=limit)
@@ -562,10 +585,12 @@ def build_discord_client(*args, **kwargs):
             )
 
     async def send_company_event(ctx, event):
-        if (
-            not isinstance(event, EventMessage)
-            or event.event != CompanyEvent.APPROVAL_REQUIRED
-        ):
+        if not isinstance(event, EventMessage):
+            return
+        if event.event == CompanyEvent.LIFECYCLE:
+            await ctx.send(format_lifecycle_event_message(event))
+            return
+        if event.event != CompanyEvent.APPROVAL_REQUIRED:
             return
         orchestrator = aider_bot.orchestrator
         if orchestrator is None:

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 
-DeliverableStatus = Literal["success", "failure", "needs_review"]
+DeliverableStatus = Literal["success", "failure", "needs_review", "needs_revision"]
 
 
 @dataclass
@@ -18,6 +18,8 @@ class Deliverable:
     status: DeliverableStatus
     phase: Optional[str] = None
     metadata: dict = field(default_factory=dict)
+    review_feedback: Any = None
+    review_passed: Optional[bool] = None
 
     @property
     def content(self) -> Any:

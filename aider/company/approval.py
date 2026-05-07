@@ -68,9 +68,7 @@ class ApprovalManager:
 
     async def recover_pending_approvals(
         self,
-        on_recovered_decision: Callable[
-            [CompanyTask, ApprovalDecision], Awaitable[None]
-        ],
+        on_recovered_decision: Callable[[CompanyTask, ApprovalDecision], Awaitable[None]],
     ) -> None:
         """Recreate in-memory approval gates from ProjectMemory and re-emit their UIs."""
         pending_task_ids = {
@@ -81,6 +79,15 @@ class ApprovalManager:
         self._resolved_task_ids.difference_update(pending_task_ids)
         for approval in self.state.get_pending_approvals():
             if approval.get("status") != "pending":
+                # Check if this was CLI-resolved and we have a live gate waiting
+                cli_res = approval.get("cli_resolution")
+                task_id = str(approval.get("task_id", ""))
+                if cli_res and task_id in self._gates and not self._gates[task_id].done():
+                    approved = cli_res.get("action") == "approve"
+                    reason = cli_res.get("reason", "CLI resolution")
+                    await self.handle_approval_response(
+                        task_id, approved, source="cli", reason=reason
+                    )
                 continue
             task = self.task_from_pending_approval(approval)
             if task is None or task.task_id in self._gates:
@@ -95,9 +102,7 @@ class ApprovalManager:
     async def _complete_recovered_gate(
         self,
         task: CompanyTask,
-        on_recovered_decision: Callable[
-            [CompanyTask, ApprovalDecision], Awaitable[None]
-        ],
+        on_recovered_decision: Callable[[CompanyTask, ApprovalDecision], Awaitable[None]],
     ) -> None:
         try:
             decision = self.normalize_decision(await self._gates[task.task_id])
@@ -128,9 +133,7 @@ class ApprovalManager:
         if approved:
             self.approve(task_id, metadata=response_metadata)
         else:
-            self.reject(
-                task_id, reason=reason or "Rejected by CEO", metadata=response_metadata
-            )
+            self.reject(task_id, reason=reason or "Rejected by CEO", metadata=response_metadata)
         return True
 
     def approve(self, task_id: str, metadata: Optional[dict] = None) -> None:
@@ -162,12 +165,8 @@ class ApprovalManager:
     def approval_required_event(self, task: CompanyTask) -> EventMessage:
         context = task.context if isinstance(task.context, dict) else {}
         metadata = dict(context.get("prd_metadata", {}))
-        gate_name = context.get("gate_name") or metadata.get(
-            "gate_name", "prd_approval"
-        )
-        artifact_preview = context.get("artifact_preview") or self.artifact_preview(
-            task
-        )
+        gate_name = context.get("gate_name") or metadata.get("gate_name", "prd_approval")
+        artifact_preview = context.get("artifact_preview") or self.artifact_preview(task)
         return EventMessage(
             event=CompanyEvent.APPROVAL_REQUIRED,
             task_id=task.task_id,
@@ -201,9 +200,7 @@ class ApprovalManager:
         if isinstance(task_data, dict):
             return CompanyTask(
                 task_id=str(task_data.get("task_id") or approval.get("task_id")),
-                origin=str(
-                    task_data.get("origin") or approval.get("department") or "ceo"
-                ),
+                origin=str(task_data.get("origin") or approval.get("department") or "ceo"),
                 target=str(task_data.get("target") or "engineering"),
                 artifact_type=task_data.get("artifact_type", "general"),
                 payload=task_data.get("payload", approval.get("artifact_preview", "")),
@@ -280,9 +277,7 @@ class ApprovalManager:
                 event_metadata["feedback"] = metadata.get("feedback")
         self._log("approval_resolved", payload, department, event_metadata)
 
-    def _log(
-        self, event_type: str, payload, department: str, metadata: Optional[dict]
-    ) -> None:
+    def _log(self, event_type: str, payload, department: str, metadata: Optional[dict]) -> None:
         if self._audit_logger is None:
             return
         try:

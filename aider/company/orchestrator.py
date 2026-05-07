@@ -81,6 +81,7 @@ class CompanyOrchestrator:
             return await self.submit(task)
 
         dept._submit_task = submit_task
+        dept._on_event = self._emit
 
     def create_task(self, coro, label: Optional[str] = None) -> asyncio.Task:
         """Create and track an orchestrator-owned background task."""

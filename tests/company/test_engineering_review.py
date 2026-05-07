@@ -39,22 +39,35 @@ class ReviewingEngineeringDepartment(EngineeringDepartment):
     async def _run_reviewer_phase(self, previous_deliverable):
         passed = self.review_passes.pop(0)
         feedback = {
-            "summary": "Approved for QA." if passed else "Needs revision before QA.",
-            "what_is_good": ["diff reviewed"],
-            "concerns": [],
-            "priority_issues": []
-            if passed
-            else [
-                {
-                    "priority": "P1",
-                    "issue": "Add a missing assertion.",
-                    "action": "Update the implementation.",
-                }
-            ],
+            "overall_assessment": (
+                "Approved for QA." if passed else "Needs revision before QA."
+            ),
+            "issues": (
+                []
+                if passed
+                else [
+                    {
+                        "file": "app.py",
+                        "line_range": "12-14",
+                        "severity": "high",
+                        "description": "Add a missing assertion.",
+                        "suggestion": "Update the implementation.",
+                    }
+                ]
+            ),
+            "needs_revision": not passed,
         }
         self.review_feedback_seen.append(feedback)
         metadata = dict(previous_deliverable.metadata)
-        metadata.update({"review_feedback": feedback, "review_passed": passed})
+        metadata.update(
+            {
+                "review_feedback": feedback,
+                "review_passed": passed,
+                "issues": feedback["issues"],
+                "overall_assessment": feedback["overall_assessment"],
+                "needs_revision": feedback["needs_revision"],
+            }
+        )
         return Deliverable(
             task_id=previous_deliverable.task_id,
             department=self.name,
@@ -102,39 +115,49 @@ def test_engineering_loops_back_to_programmer_when_review_needs_revision(tmp_pat
         assert deliverable.status == "success"
         assert deliverable.review_passed is True
         assert loop.last_task_text.startswith(
-            "Previous Code Review Feedback (CRITICAL - Address ALL issues):"
+            "Previous Code Review Feedback "
+            "(CRITICAL - Address ALL issues before proceeding):"
         )
-        assert "[P1] Add a missing assertion." in loop.last_task_text
+        assert "[HIGH] app.py:12-14: Add a missing assertion." in loop.last_task_text
+        assert "→ Update the implementation." in loop.last_task_text
+        assert "Original Task:" in loop.last_task_text
         assert (
-            "Fix all issues listed above while still fulfilling the original PRD "
-            "and design spec."
+            "Fix all issues raised by the reviewer while still fully satisfying "
+            "the original PRD and design specifications."
         ) in loop.last_task_text
         assert deliverable.metadata["revision_count"] == 1
         assert deliverable.metadata["last_reviewer_issues"] == (
-            "[P1] Add a missing assertion. — Update the implementation."
+            "1 issues found. Needs revision before QA."
         )
         assert [message.payload["name"] for message in emitted] == [
             "engineering_programmer_start",
+            "programmer_complete",
             "engineering_reviewer_start",
             "engineering_revision_needed",
             "engineering_programmer_start",
             "programmer_revision_start",
+            "programmer_complete",
             "engineering_reviewer_start",
             "engineering_review_approved",
         ]
-        assert emitted[4].payload["revision_count"] == 1
-        assert emitted[4].payload["last_reviewer_issues"] == (
-            "[P1] Add a missing assertion. — Update the implementation."
+        assert emitted[5].payload["revision_count"] == 1
+        assert emitted[5].payload["last_reviewer_issues_count"] == 1
+        assert emitted[5].payload["last_reviewer_issues"] == (
+            "1 issues found. Needs revision before QA."
         )
+        assert emitted[5].payload["has_previous_feedback"] is True
         assert [event[0] for event in loop.callback_events] == [
             "engineering_programmer_start",
+            "programmer_complete",
             "engineering_reviewer_start",
             "engineering_revision_needed",
             "engineering_programmer_start",
             "programmer_revision_start",
+            "programmer_complete",
             "engineering_reviewer_start",
             "engineering_review_approved",
         ]
+
     asyncio.run(run_test())
 
 

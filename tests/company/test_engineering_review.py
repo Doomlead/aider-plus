@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.schemas import CompanyTask, Deliverable
@@ -100,7 +101,7 @@ def test_engineering_loops_back_to_programmer_when_review_needs_revision(tmp_pat
 
         assert deliverable.status == "success"
         assert deliverable.review_passed is True
-        assert "Reviewer requested revisions" in loop.last_task_text
+        assert "Previous Reviewer Feedback (fix these issues)" in loop.last_task_text
         assert [message.payload["name"] for message in emitted] == [
             "engineering_programmer_start",
             "engineering_reviewer_start",
@@ -117,4 +118,92 @@ def test_engineering_loops_back_to_programmer_when_review_needs_revision(tmp_pat
             "engineering_reviewer_start",
             "engineering_review_approved",
         ]
+    asyncio.run(run_test())
+
+
+class StructuredReviewAgentLoop(FakeAgentLoop):
+    def __init__(self, structured_result):
+        super().__init__([])
+        self.structured_result = structured_result
+        self.structured_calls = []
+
+    async def run_structured(self, *, task, system_prompt, model):
+        self.structured_calls.append(
+            {"task": task, "system_prompt": system_prompt, "model": model}
+        )
+        return self.structured_result
+
+
+def test_reviewer_phase_uses_structured_agent_feedback(tmp_path):
+    async def run_test():
+        memory = ProjectMemory(str(tmp_path))
+        loop = StructuredReviewAgentLoop(
+            {
+                "content": json.dumps(
+                    {
+                        "review_passed": False,
+                        "issues": [
+                            {
+                                "file": "app.py",
+                                "line_range": "10-12",
+                                "severity": "high",
+                                "description": "Missing bounds check",
+                                "suggestion": "Validate empty input before indexing.",
+                            }
+                        ],
+                        "overall_assessment": (
+                            "Implementation needs a bounds check before QA."
+                        ),
+                        "needs_revision": True,
+                    }
+                )
+            }
+        )
+        department = EngineeringDepartment(
+            project_memory=memory,
+            agent_loop=loop,
+            conversation_memory=loop.coder.conversation_memory,
+        )
+        emitted = []
+
+        async def on_event(message):
+            emitted.append(message)
+
+        department._on_event = on_event
+        department._active_task = CompanyTask(
+            task_id="task-2",
+            origin="product",
+            target="engineering",
+            artifact_type="prd",
+            payload={"prd_content": "Handle empty inputs safely"},
+            context={"playbook_guidance": ["Prefer explicit validation"]},
+        )
+        previous = Deliverable(
+            task_id="task-2",
+            department="engineering",
+            artifact_type="code",
+            payload="implemented",
+            status="success",
+            metadata={"files": ["app.py"], "diffs": ["diff --git a/app.py b/app.py"]},
+        )
+
+        review = await department._run_reviewer_phase(previous)
+
+        assert review.status == "needs_revision"
+        assert review.review_passed is False
+        assert review.metadata["needs_revision"] is True
+        assert review.metadata["issues"][0]["file"] == "app.py"
+        assert review.metadata["reviewer_feedback_summary"] == (
+            "Implementation needs a bounds check before QA."
+        )
+        assert loop.structured_calls[0]["model"] == "claude-3-7-sonnet-20250219"
+        assert (
+            "Original PRD / Requirements" in loop.structured_calls[0]["system_prompt"]
+        )
+        assert "Handle empty inputs safely" in loop.structured_calls[0]["system_prompt"]
+        assert emitted[0].payload["name"] == "reviewer_complete"
+        assert emitted[0].payload["reviewer_feedback_summary"] == (
+            "Implementation needs a bounds check before QA."
+        )
+
     asyncio.run(run_test())

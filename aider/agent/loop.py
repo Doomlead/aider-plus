@@ -21,6 +21,7 @@ class AgentLoopConfig:
     use_architect_mode: bool = True
     architect_model: str | None = None
     editor_model: str | None = None
+    reviewer_model: str | None = None
 
 
 @dataclass
@@ -227,6 +228,34 @@ class AiderAgentLoop:
             **extra_params,
         }
         return await asyncio.to_thread(litellm.completion, **kwargs)
+
+
+    async def run_structured(
+        self,
+        *,
+        task: str,
+        system_prompt: str,
+        model: str | None = None,
+    ) -> Dict[str, Any]:
+        """Run a structured, non-editing LLM task through the agent loop."""
+        selected_model = model or self.coder.main_model.name
+        extra_params = dict(getattr(self.coder.main_model, "extra_params", {}) or {})
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": task},
+        ]
+        await self._emit("structured_review_start", {"model": selected_model})
+        completion = await asyncio.to_thread(
+            litellm.completion,
+            model=selected_model,
+            messages=messages,
+            temperature=0,
+            **extra_params,
+        )
+        message = completion.choices[0].message
+        content = getattr(message, "content", None) or ""
+        await self._emit("structured_review_complete", {"model": selected_model})
+        return {"content": content, "model": selected_model}
 
     async def run(self, user_message: str) -> Dict[str, Any]:
         conversation_memory = getattr(self.coder, "conversation_memory", None)

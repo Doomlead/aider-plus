@@ -1,4 +1,6 @@
 import asyncio
+import json
+import re
 import shlex
 import uuid
 from pathlib import Path
@@ -75,6 +77,9 @@ class EngineeringDepartment(Department):
                         "iteration": iteration,
                         "files": review.metadata.get("files", []),
                         "checks": review.metadata.get("review_checks", []),
+                        "reviewer_feedback_summary": review.metadata.get(
+                            "reviewer_feedback_summary", ""
+                        ),
                     },
                 )
                 return review
@@ -85,6 +90,9 @@ class EngineeringDepartment(Department):
                 {
                     "iteration": iteration,
                     "feedback": self._review_feedback,
+                    "reviewer_feedback_summary": review.metadata.get(
+                        "reviewer_feedback_summary", ""
+                    ),
                     "remaining_iterations": self.max_internal_iterations - iteration,
                 },
             )
@@ -125,11 +133,13 @@ class EngineeringDepartment(Department):
         self.current_stage = "programmer"
         task_text = self._task_text(task)
         if self._review_feedback:
+            previous_review_feedback = self._format_review_feedback(
+                self._review_feedback
+            )
             task_text = (
                 f"{task_text}\n\n"
-                "Reviewer requested revisions. Address every item below before "
-                "returning the implementation:\n"
-                f"{self._format_review_feedback(self._review_feedback)}"
+                "Previous Reviewer Feedback (fix these issues):\n"
+                f"{previous_review_feedback}"
             )
 
         record_department_memory = not self._uses_agent_conversation_memory()
@@ -157,41 +167,103 @@ class EngineeringDepartment(Department):
     async def _run_reviewer_phase(
         self, previous_deliverable: Deliverable
     ) -> Deliverable:
-        """Review implementation diffs, context, standards, and targeted checks."""
+        """Run intelligent review using the agent loop and structured feedback."""
         self.current_stage = "reviewer"
-        task = self._active_task
         metadata = dict(previous_deliverable.metadata)
         changed_files = await self._changed_files(metadata)
         diff = await self._implementation_diff(metadata)
         checks = await self._run_targeted_checks(changed_files)
-        context = self._review_context(task)
-        feedback = self._build_review_feedback(
-            previous_deliverable=previous_deliverable,
-            changed_files=changed_files,
-            diff=diff,
-            checks=checks,
-            context=context,
-        )
-        review_passed = not feedback["priority_issues"]
-        status = "success" if review_passed else "needs_revision"
+        programmer_diffs = metadata.get("diffs_summary") or diff
+
+        review_context = {
+            "prd_summary": self._get_prd_summary(),
+            "design_spec": self._get_design_spec(),
+            "playbook_guidance": self._get_playbook_guidance(),
+            "programmer_diffs": programmer_diffs,
+            "changed_files": changed_files,
+            "targeted_checks": checks,
+            "programmer_status": previous_deliverable.status,
+        }
+
+        reviewer_result = await self._run_structured_reviewer(review_context)
+        review_data = self._parse_reviewer_output(reviewer_result)
+        for check in checks:
+            if check.get("status") != "failed":
+                continue
+            description = f"Reviewer check failed: {check.get('name')}"
+            if any(
+                issue.get("description") == description
+                for issue in review_data["issues"]
+            ):
+                continue
+            review_data["issues"].append(
+                {
+                    "file": None,
+                    "line_range": None,
+                    "severity": "critical" if check.get("required", True) else "medium",
+                    "description": description,
+                    "suggestion": check.get("output")
+                    or "Investigate and fix the failed check.",
+                }
+            )
+            if check.get("required", True):
+                review_data["needs_revision"] = True
+                review_data["review_passed"] = False
+        if previous_deliverable.status == "failure" and not any(
+            issue.get("description") == "Programmer phase reported a failure."
+            for issue in review_data["issues"]
+        ):
+            review_data["issues"].insert(
+                0,
+                {
+                    "file": None,
+                    "line_range": None,
+                    "severity": "critical",
+                    "description": "Programmer phase reported a failure.",
+                    "suggestion": "Resolve the implementation error before QA handoff.",
+                },
+            )
+            review_data["needs_revision"] = True
+            review_data["review_passed"] = False
+
+        reviewer_feedback_summary = review_data["overall_assessment"][:500]
+        status = "success" if review_data["review_passed"] else "needs_revision"
         metadata.update(
             {
                 "stage": "reviewer",
                 "files": changed_files,
+                "changed_files": changed_files,
                 "diffs": [diff] if diff else metadata.get("diffs", []),
-                "review_prompt": self._reviewer_prompt(context),
-                "review_feedback": feedback,
-                "review_passed": review_passed,
+                "diffs_summary": programmer_diffs,
+                "review_prompt": self._get_reviewer_system_prompt(review_context),
+                "review_feedback": review_data,
+                "review_passed": review_data["review_passed"],
                 "review_checks": checks,
+                "issues": review_data["issues"],
+                "overall_assessment": review_data["overall_assessment"],
+                "needs_revision": review_data["needs_revision"],
+                "reviewer_feedback_summary": reviewer_feedback_summary,
             }
         )
         payload = previous_deliverable.payload
-        if not review_passed:
+        if review_data["needs_revision"]:
             payload = (
                 f"{previous_deliverable.payload}\n\n"
                 "Reviewer requested revisions:\n"
-                f"{self._format_review_feedback(feedback)}"
+                f"{self._format_review_feedback(review_data)}"
             )
+
+        await self._emit_engineering_event(
+            previous_deliverable.task_id,
+            "reviewer_complete",
+            {
+                "review_passed": review_data["review_passed"],
+                "needs_revision": review_data["needs_revision"],
+                "issue_count": len(review_data["issues"]),
+                "summary": review_data["overall_assessment"][:300],
+                "reviewer_feedback_summary": reviewer_feedback_summary,
+            },
+        )
 
         return Deliverable(
             task_id=previous_deliverable.task_id,
@@ -200,8 +272,8 @@ class EngineeringDepartment(Department):
             payload=payload,
             status=status,
             metadata=metadata,
-            review_feedback=feedback,
-            review_passed=review_passed,
+            review_feedback=review_data,
+            review_passed=review_data["review_passed"],
         )
 
     async def request_spec_clarification(self, question: str) -> str:
@@ -243,6 +315,242 @@ class EngineeringDepartment(Department):
             or payload.get("playbook_guidance")
             or [],
         }
+
+    def _get_reviewer_system_prompt(self, context) -> str:
+        """Return high-quality reviewer prompt."""
+        return f"""You are an expert Senior Software Engineer acting as a strict code reviewer.
+
+Original PRD / Requirements:
+{context.get('prd_summary', 'No PRD available')}
+
+Design Spec (if any):
+{context.get('design_spec', 'No design spec')}
+
+Coding Standards & Playbook:
+{context.get('playbook_guidance', 'None')}
+
+Review the following code changes carefully and be critical.
+
+Changed Files:
+{context.get('changed_files', [])}
+
+Changed Files + Diffs:
+{context.get('programmer_diffs', 'No diffs available')}
+
+Targeted Check Results:
+{context.get('targeted_checks', [])}
+
+Evaluate:
+- Correctness & functional requirements
+- Edge cases and error handling
+- Test coverage
+- Security issues
+- Code style and maintainability
+- Adherence to PRD and design spec
+
+Return only valid JSON with this exact shape:
+{{
+  "review_passed": true,
+  "issues": [
+    {{
+      "file": "path/to/file.py",
+      "line_range": "12-18",
+      "severity": "critical|high|medium|low",
+      "description": "specific problem",
+      "suggestion": "specific fix"
+    }}
+  ],
+  "overall_assessment": "concise assessment",
+  "needs_revision": false
+}}
+
+Set needs_revision to true for any correctness, security, failing-check,
+or spec-adherence issue that should block QA.
+Be specific and actionable."""
+
+    async def _run_structured_reviewer(self, review_context: dict):
+        reviewer_model = self._reviewer_model()
+        task = (
+            "Perform a thorough code review of the recent changes. "
+            "Do not edit files. Return the requested JSON only."
+        )
+        run_structured = getattr(self.agent_loop, "run_structured", None)
+        if callable(run_structured):
+            return await run_structured(
+                task=task,
+                system_prompt=self._get_reviewer_system_prompt(review_context),
+                model=reviewer_model,
+            )
+
+        coder = getattr(self.agent_loop, "architect_coder", None) or getattr(
+            self.agent_loop, "coder", None
+        )
+        if coder is None:
+            raise RuntimeError("Engineering reviewer requires an agent loop or coder.")
+
+        prompt = (
+            f"{self._get_reviewer_system_prompt(review_context)}\n\n"
+            f"Reviewer task:\n{task}"
+        )
+        run_structured_async = getattr(coder, "run_structured_async", None)
+        if callable(run_structured_async):
+            return await run_structured_async(prompt, preproc=True, include_diff=False)
+        run_async = getattr(coder, "run_async", None)
+        if callable(run_async):
+            return await run_async(prompt, preproc=True)
+        raise RuntimeError(
+            "Engineering reviewer coder does not support structured execution."
+        )
+
+    def _reviewer_model(self) -> str:
+        config = getattr(self.agent_loop, "config", None)
+        return (
+            getattr(config, "reviewer_model", None)
+            or getattr(config, "architect_model", None)
+            or "claude-3-7-sonnet-20250219"
+        )
+
+    def _parse_reviewer_output(self, result) -> dict:
+        raw = self._result_content(result)
+        if not raw and hasattr(result, "to_dict"):
+            raw = str(result.to_dict())
+        data = result if isinstance(result, dict) else None
+        if data and "content" in data and isinstance(data["content"], dict):
+            data = data["content"]
+        elif not self._looks_like_review_data(data):
+            data = self._extract_review_json(raw)
+
+        if not isinstance(data, dict):
+            data = {}
+
+        issues = self._normalize_review_issues(data.get("issues"))
+        needs_revision = self._coerce_bool(data.get("needs_revision"), bool(issues))
+        review_passed = self._coerce_bool(
+            data.get("review_passed"), not needs_revision and not issues
+        )
+        if needs_revision:
+            review_passed = False
+        elif issues and review_passed:
+            needs_revision = True
+            review_passed = False
+
+        overall_assessment = str(
+            data.get("overall_assessment")
+            or data.get("summary")
+            or raw
+            or ("Review passed." if review_passed else "Review needs revision.")
+        ).strip()
+
+        return {
+            "review_passed": review_passed,
+            "issues": issues,
+            "overall_assessment": overall_assessment,
+            "needs_revision": needs_revision,
+        }
+
+    @staticmethod
+    def _looks_like_review_data(data) -> bool:
+        return isinstance(data, dict) and any(
+            key in data
+            for key in ("review_passed", "issues", "overall_assessment", "needs_revision")
+        )
+
+    @staticmethod
+    def _extract_review_json(raw: str):
+        if not raw:
+            return None
+        text = raw.strip()
+        fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        candidates = [fence.group(1)] if fence else []
+        candidates.append(text)
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            candidates.append(text[start : end + 1])
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        return None
+
+    @staticmethod
+    def _normalize_review_issues(issues) -> list[dict]:
+        if not isinstance(issues, list):
+            return []
+        normalized = []
+        for issue in issues:
+            if isinstance(issue, str):
+                normalized.append(
+                    {
+                        "file": None,
+                        "line_range": None,
+                        "severity": "medium",
+                        "description": issue,
+                        "suggestion": "Investigate and address this reviewer concern.",
+                    }
+                )
+                continue
+            if not isinstance(issue, dict):
+                continue
+            normalized.append(
+                {
+                    "file": issue.get("file"),
+                    "line_range": issue.get("line_range")
+                    or issue.get("line")
+                    or issue.get("lines"),
+                    "severity": str(issue.get("severity") or "medium").lower(),
+                    "description": str(
+                        issue.get("description")
+                        or issue.get("issue")
+                        or issue.get("problem")
+                        or "Reviewer issue"
+                    ),
+                    "suggestion": str(
+                        issue.get("suggestion")
+                        or issue.get("action")
+                        or issue.get("fix")
+                        or "Address the issue."
+                    ),
+                }
+            )
+        return normalized
+
+    @staticmethod
+    def _coerce_bool(value, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "yes", "1", "passed", "pass"}
+        if value is None:
+            return default
+        return bool(value)
+
+    def _get_prd_summary(self) -> str:
+        context = self._review_context(self._active_task)
+        prd = context.get("prd_content") or self.memory.data.get("prd")
+        return str(prd or "No PRD available")
+
+    def _get_design_spec(self) -> str:
+        context = self._review_context(self._active_task)
+        design_spec = context.get("design_spec") or self.memory.data.get("design_spec")
+        return str(design_spec or "No design spec")
+
+    def _get_playbook_guidance(self) -> str:
+        context = self._review_context(self._active_task)
+        guidance = context.get("playbook_guidance")
+        if not guidance:
+            playbook = self.memory.data.get("playbook", {})
+            guidance = []
+            if isinstance(playbook, dict):
+                for values in playbook.values():
+                    if isinstance(values, list):
+                        guidance.extend(str(value) for value in values)
+        if isinstance(guidance, list):
+            return "\n".join(f"- {item}" for item in guidance) or "None"
+        return str(guidance or "None")
 
     @staticmethod
     def _reviewer_prompt(context: dict) -> str:
@@ -449,7 +757,31 @@ class EngineeringDepartment(Department):
     def _format_review_feedback(feedback: dict) -> str:
         if not feedback:
             return "No reviewer feedback was provided."
-        lines = [str(feedback.get("summary") or "Reviewer feedback")]
+        lines = [
+            str(
+                feedback.get("overall_assessment")
+                or feedback.get("summary")
+                or "Reviewer feedback"
+            )
+        ]
+        issues = feedback.get("issues") or []
+        if issues:
+            lines.append("\nIssues:")
+            for issue in issues:
+                if not isinstance(issue, dict):
+                    lines.append(f"- {issue}")
+                    continue
+                location = issue.get("file") or "general"
+                line_range = issue.get("line_range")
+                if line_range:
+                    location = f"{location}:{line_range}"
+                severity = issue.get("severity") or "medium"
+                description = issue.get("description") or issue.get("issue") or issue
+                suggestion = issue.get("suggestion") or issue.get("action")
+                line = f"- [{severity}] {location} — {description}"
+                if suggestion:
+                    line += f" Suggestion: {suggestion}"
+                lines.append(line)
         for key, label in (
             ("priority_issues", "Priority issues"),
             ("concerns", "Concerns"),

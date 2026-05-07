@@ -17,9 +17,7 @@ class ToolPermissionError(PermissionError):
         self.department = department
         self.tool_name = tool_name
         self.allowed_tools = allowed_tools
-        super().__init__(
-            f"Department '{department}' is not allowed to use tool '{tool_name}'."
-        )
+        super().__init__(f"Department '{department}' is not allowed to use tool '{tool_name}'.")
 
     def to_dict(self) -> dict:
         return {
@@ -47,10 +45,10 @@ class ToolRegistry:
         return [t.parameters for t in self.tools.values()]
 
     def execute(self, name: str, arguments: dict) -> Any:
+        if name not in self.tools:
+            raise ValueError(f"Unknown tool: {name}")
         self._authorize(name)
-        if name in self.tools:
-            return self.tools[name].func(**arguments)
-        raise ValueError(f"Unknown tool: {name}")
+        return self.tools[name].func(**arguments)
 
     def _authorize(self, name: str) -> None:
         department = self.department

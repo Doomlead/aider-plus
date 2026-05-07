@@ -74,9 +74,7 @@ class EngineeringDepartment(Department):
             )
             review = await self._run_reviewer_phase(programmer_deliverable)
             last_review = review
-            self._review_feedback = review.review_feedback or review.metadata.get(
-                "review_feedback"
-            )
+            self._review_feedback = review.review_feedback or review.metadata.get("review_feedback")
 
             if review.review_passed:
                 await self._emit_engineering_event(
@@ -93,9 +91,7 @@ class EngineeringDepartment(Department):
                 )
                 return review
 
-            self._last_reviewer_issues = self._review_feedback_summary(
-                self._review_feedback
-            )
+            self._last_reviewer_issues = self._review_feedback_summary(self._review_feedback)
 
             await self._emit_engineering_event(
                 task.task_id,
@@ -153,6 +149,23 @@ class EngineeringDepartment(Department):
         """Run the existing Architect → Editor flow, applying reviewer feedback on revisions."""
         self.current_stage = "programmer"
         task_text = self._task_text(task)
+        qa_feedback_dict = (
+            task.context.get("qa_feedback") if isinstance(task.context, dict) else None
+        )
+        if qa_feedback_dict:
+            from aider.company.schemas import QAFeedback
+
+            fb = QAFeedback.from_dict(qa_feedback_dict)
+            qa_section = (
+                f"\n\n## QA Revision {fb.revision_number} — Fix Required\n\n"
+                f"The following tests failed and must be fixed before re-submission:\n"
+                + "\n".join(f"- {t}" for t in fb.failed_tests)
+                + f"\n\n**Failure output (truncated):**\n```\n{fb.failure_output[:1500]}\n```\n\n"
+                f"**Recommended fixes:**\n"
+                + "\n".join(f"- {r}" for r in fb.recommended_fixes)
+                + f"\n\n**PRD reminder:** {fb.prd_excerpt}\n"
+            )
+            task_text += qa_section
         reviewer_feedback = None
 
         if self._deliverable_needs_revision(previous_deliverable):
@@ -166,9 +179,7 @@ class EngineeringDepartment(Department):
                 "programmer_revision_start",
                 {
                     "revision_count": self._revision_count,
-                    "last_reviewer_issues_count": len(
-                        self._feedback_issues(previous_deliverable)
-                    ),
+                    "last_reviewer_issues_count": len(self._feedback_issues(previous_deliverable)),
                     "last_reviewer_issues": feedback_summary,
                     "has_previous_feedback": True,
                 },
@@ -203,9 +214,7 @@ Pay special attention to the reviewer's suggestions."""
             "programmer_complete",
             {
                 "revision_count": self._revision_count,
-                "files_changed": len(
-                    metadata.get("changed_files") or metadata.get("files") or []
-                ),
+                "files_changed": len(metadata.get("changed_files") or metadata.get("files") or []),
             },
         )
         return Deliverable(
@@ -217,9 +226,7 @@ Pay special attention to the reviewer's suggestions."""
             metadata=metadata,
         )
 
-    async def _run_reviewer_phase(
-        self, previous_deliverable: Deliverable
-    ) -> Deliverable:
+    async def _run_reviewer_phase(self, previous_deliverable: Deliverable) -> Deliverable:
         """Run intelligent review using the agent loop and structured feedback."""
         self.current_stage = "reviewer"
         metadata = dict(previous_deliverable.metadata)
@@ -244,10 +251,7 @@ Pay special attention to the reviewer's suggestions."""
             if check.get("status") != "failed":
                 continue
             description = f"Reviewer check failed: {check.get('name')}"
-            if any(
-                issue.get("description") == description
-                for issue in review_data["issues"]
-            ):
+            if any(issue.get("description") == description for issue in review_data["issues"]):
                 continue
             review_data["issues"].append(
                 {
@@ -255,8 +259,7 @@ Pay special attention to the reviewer's suggestions."""
                     "line_range": None,
                     "severity": "critical" if check.get("required", True) else "medium",
                     "description": description,
-                    "suggestion": check.get("output")
-                    or "Investigate and fix the failed check.",
+                    "suggestion": check.get("output") or "Investigate and fix the failed check.",
                 }
             )
             if check.get("required", True):
@@ -344,14 +347,10 @@ Pay special attention to the reviewer's suggestions."""
             if hasattr(submitted, "__await__"):
                 await submitted
         else:
-            raise RuntimeError(
-                "Department communication requires an orchestrator boundary"
-            )
+            raise RuntimeError("Department communication requires an orchestrator boundary")
         return f"Clarification request sent to Product: {question}"
 
-    async def _emit_engineering_event(
-        self, task_id: str, event_name: str, payload: dict
-    ) -> None:
+    async def _emit_engineering_event(self, task_id: str, event_name: str, payload: dict) -> None:
         await self._emit_lifecycle_event(task_id, event_name, payload)
         emit = getattr(self.agent_loop, "_emit", None)
         if callable(emit):
@@ -361,15 +360,12 @@ Pay special attention to the reviewer's suggestions."""
         payload = task.payload if task and isinstance(task.payload, dict) else {}
         task_context = task.context if task and isinstance(task.context, dict) else {}
         return {
-            "original_request": payload.get("original_request")
-            or (task.payload if task else ""),
-            "prd_content": payload.get("prd_content")
-            or task_context.get("prd_content"),
-            "design_spec": payload.get("design_spec")
-            or task_context.get("design_spec"),
-            "playbook_guidance": task_context.get("playbook_guidance")
-            or payload.get("playbook_guidance")
-            or [],
+            "original_request": payload.get("original_request") or (task.payload if task else ""),
+            "prd_content": payload.get("prd_content") or task_context.get("prd_content"),
+            "design_spec": payload.get("design_spec") or task_context.get("design_spec"),
+            "playbook_guidance": (
+                task_context.get("playbook_guidance") or payload.get("playbook_guidance") or []
+            ),
         }
 
     def _get_reviewer_system_prompt(self, context) -> str:
@@ -444,19 +440,14 @@ Be specific and actionable."""
         if coder is None:
             raise RuntimeError("Engineering reviewer requires an agent loop or coder.")
 
-        prompt = (
-            f"{self._get_reviewer_system_prompt(review_context)}\n\n"
-            f"Reviewer task:\n{task}"
-        )
+        prompt = f"{self._get_reviewer_system_prompt(review_context)}\n\n" f"Reviewer task:\n{task}"
         run_structured_async = getattr(coder, "run_structured_async", None)
         if callable(run_structured_async):
             return await run_structured_async(prompt, preproc=True, include_diff=False)
         run_async = getattr(coder, "run_async", None)
         if callable(run_async):
             return await run_async(prompt, preproc=True)
-        raise RuntimeError(
-            "Engineering reviewer coder does not support structured execution."
-        )
+        raise RuntimeError("Engineering reviewer coder does not support structured execution.")
 
     def _reviewer_model(self) -> str:
         config = getattr(self.agent_loop, "config", None)
@@ -559,9 +550,9 @@ Be specific and actionable."""
             normalized.append(
                 {
                     "file": issue.get("file"),
-                    "line_range": issue.get("line_range")
-                    or issue.get("line")
-                    or issue.get("lines"),
+                    "line_range": (
+                        issue.get("line_range") or issue.get("line") or issue.get("lines")
+                    ),
                     "severity": str(issue.get("severity") or "medium").lower(),
                     "description": str(
                         issue.get("description")
@@ -676,8 +667,7 @@ Be specific and actionable."""
                     {
                         "priority": "P0" if check.get("required", True) else "P1",
                         "issue": f"Reviewer check failed: {check.get('name')}",
-                        "action": check.get("output")
-                        or "Investigate and fix the failed check.",
+                        "action": check.get("output") or "Investigate and fix the failed check.",
                     }
                 )
             elif check.get("status") == "skipped":
@@ -686,11 +676,7 @@ Be specific and actionable."""
                 )
 
         return {
-            "summary": (
-                "Approved for QA."
-                if not priority_issues
-                else "Needs revision before QA."
-            ),
+            "summary": "Approved for QA." if not priority_issues else "Needs revision before QA.",
             "what_is_good": positives,
             "concerns": concerns,
             "priority_issues": priority_issues,
@@ -757,9 +743,7 @@ Be specific and actionable."""
         checks.append(self._check_result("git diff --check", diff_check, required=True))
 
         python_files = [path for path in changed_files if path.endswith(".py")]
-        existing_python_files = [
-            path for path in python_files if (root / path).exists()
-        ]
+        existing_python_files = [path for path in python_files if (root / path).exists()]
         if existing_python_files:
             command = ["python", "-m", "py_compile", *existing_python_files]
             py_compile = await self._run_command(command, root)
@@ -848,17 +832,13 @@ Be specific and actionable."""
         data = self._feedback_data(feedback)
         return data.get("issues") or []
 
-    def _review_feedback_summary(
-        self, feedback: Optional[Deliverable | dict]
-    ) -> Optional[str]:
+    def _review_feedback_summary(self, feedback: Optional[Deliverable | dict]) -> Optional[str]:
         if not feedback:
             return None
         data = self._feedback_data(feedback)
         issues = data.get("issues") or []
         if issues:
-            assessment = str(
-                data.get("overall_assessment") or data.get("summary") or ""
-            )
+            assessment = str(data.get("overall_assessment") or data.get("summary") or "")
             return (f"{len(issues)} issues found. " + assessment[:150]).strip()
 
         priority_issues = data.get("priority_issues") or []
@@ -913,13 +893,7 @@ Be specific and actionable."""
                 formatted.append(line)
             return "\n".join(formatted)
 
-        lines = [
-            str(
-                data.get("overall_assessment")
-                or data.get("summary")
-                or "Reviewer feedback"
-            )
-        ]
+        lines = [str(data.get("overall_assessment") or data.get("summary") or "Reviewer feedback")]
         for key, label in (
             ("priority_issues", "Priority issues"),
             ("concerns", "Concerns"),
@@ -963,9 +937,7 @@ Be specific and actionable."""
         instruction = task.payload.get("instruction")
         review_feedback = task.payload.get("review_feedback")
         playbook_guidance = (
-            task.context.get("playbook_guidance")
-            if isinstance(task.context, dict)
-            else None
+            task.context.get("playbook_guidance") if isinstance(task.context, dict) else None
         )
         if original_request:
             parts.append(f"Original request:\n{original_request}")
@@ -999,10 +971,7 @@ Be specific and actionable."""
         if isinstance(result, dict):
             coder_result = result.get("coder_result") or {}
             return (
-                result.get("content")
-                or result.get("summary")
-                or coder_result.get("summary")
-                or ""
+                result.get("content") or result.get("summary") or coder_result.get("summary") or ""
             )
         return getattr(result, "content", None) or getattr(result, "summary", "") or ""
 
@@ -1036,9 +1005,7 @@ Be specific and actionable."""
             metadata.update({"files": files, "commits": commits, "diffs": diffs})
             return metadata
 
-        files = (
-            getattr(result, "files", None) or getattr(result, "files_changed", []) or []
-        )
+        files = getattr(result, "files", None) or getattr(result, "files_changed", []) or []
         commits = getattr(result, "commits", []) or []
         commit_hash = getattr(result, "commit_hash", None)
         if commit_hash and commit_hash not in commits:

@@ -1,18 +1,33 @@
 #!/usr/bin/env python
 
+import asyncio
 import os
 import random
 import re
 import sys
+import threading
+import uuid
 from pathlib import Path
 
 import streamlit as st
 
 from aider import urls
+from aider.agent import AiderAgentLoop
+from aider.agent.loop import AgentLoopConfig
 from aider.coders import Coder
+from aider.company.audit import AuditLogViewer
+from aider.company.departments.devops import DevOpsDepartment
+from aider.company.departments.engineering import EngineeringDepartment
+from aider.company.departments.product import ProductDepartment
+from aider.company.departments.qa import QADepartment
+from aider.company.departments.ux import UXDepartment
+from aider.company.orchestrator import CompanyOrchestrator
+from aider.company.project import Project
+from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
 from aider.dump import dump  # noqa: F401
 from aider.io import InputOutput
 from aider.main import main as cli_main
+from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
 from aider.scrape import Scraper, has_playwright
 
 
@@ -91,6 +106,234 @@ def get_coder():
     return coder
 
 
+
+class DesktopCompanySession:
+    """Desktop/Streamlit façade over the same Company workflow used by Discord."""
+
+    def __init__(self, coder: Coder):
+        self.coder = coder
+        self.repo_path = str(Path(coder.root).resolve())
+        self.events = []
+        self.pending_runs = []
+        self.loop = asyncio.new_event_loop()
+        self.loop_thread = threading.Thread(
+            target=self._run_loop,
+            name="aider-desktop-company",
+            daemon=True,
+        )
+        self.loop_thread.start()
+
+        self._ensure_memories()
+        self.orchestrator = None
+        self.product = None
+        self.ux = None
+        self.engineering = None
+        self.qa = None
+        self.devops = None
+        self.active_project = Project(
+            project_id=str(uuid.uuid4()),
+            name=Path(self.repo_path).name,
+            phase="prototyping",
+        )
+        self._init_company_session()
+
+    def _run_loop(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    def _ensure_memories(self):
+        if not getattr(self.coder, "conversation_memory", None):
+            self.coder.conversation_memory = ConversationMemory()
+        project_memory = getattr(self.coder, "project_memory", None)
+        if not isinstance(project_memory, ProjectMemory):
+            project_memory = ProjectMemory(self.repo_path)
+            self.coder.project_memory = project_memory
+        project_memory.load()
+
+    def _init_company_session(self):
+        agent_loop = AiderAgentLoop(
+            coder=self.coder,
+            config=AgentLoopConfig(use_architect_mode=True),
+        )
+        project_memory = self.coder.project_memory
+        conversation_memory = self.coder.conversation_memory
+        self.engineering = EngineeringDepartment(
+            project_memory=project_memory,
+            agent_loop=agent_loop,
+            conversation_memory=conversation_memory,
+        )
+        self.product = ProductDepartment(project_memory=project_memory)
+        self.ux = UXDepartment(project_memory=project_memory)
+        self.qa = QADepartment(project_memory=project_memory)
+        self.devops = DevOpsDepartment(project_memory=project_memory)
+        self.orchestrator = CompanyOrchestrator(project_memory=project_memory)
+        self.orchestrator.active_project = self.active_project
+        for department in (
+            self.product,
+            self.ux,
+            self.engineering,
+            self.qa,
+            self.devops,
+        ):
+            self.orchestrator.register(department)
+        for department in (
+            self.product,
+            self.ux,
+            self.engineering,
+            self.qa,
+            self.devops,
+        ):
+            self.submit_background(department.run_loop())
+        self.orchestrator.on_deliverable(self._record_company_message)
+        self.submit_background(self.orchestrator.recover_pending_approvals())
+
+    async def _record_company_message(self, message):
+        self.events.append(message)
+
+    def submit_background(self, coro, label=None):
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        if label:
+            self.pending_runs.append((label, future))
+        return future
+
+    def start_prototype(self, prompt: str):
+        return self.submit_background(self._run_prototype(prompt), "Prototype")
+
+    def run_instruction(self, prompt: str):
+        return self.submit_background(self._run_instruction(prompt), "Engineering")
+
+    async def receive_human_input(self, prompt: str):
+        if self.active_project.phase == "prototyping" and not self.active_project.prd:
+            return await self._run_prototype(prompt)
+        return await self._run_instruction(prompt)
+
+    def run_auto(self, prompt: str):
+        return self.submit_background(self.receive_human_input(prompt), "Company")
+
+    async def _run_prototype(self, prompt: str):
+        task = CompanyTask(
+            task_id=str(uuid.uuid4()),
+            origin="ceo",
+            target="product",
+            artifact_type="raw_prompt",
+            payload=prompt,
+            blocking=False,
+            context={"project_name": Path(self.repo_path).name},
+        )
+        deliverable = await self.product.process(task)
+        await self.orchestrator._route(deliverable)
+        return {
+            "summary": deliverable.payload,
+            "content": deliverable.payload,
+            "artifact_type": deliverable.artifact_type,
+            "status": deliverable.status,
+            "metadata": deliverable.metadata,
+        }
+
+    async def _run_instruction(self, prompt: str):
+        task = CompanyTask(
+            task_id=str(uuid.uuid4()),
+            origin="ceo",
+            target="engineering",
+            artifact_type="raw_prompt",
+            payload=prompt,
+            blocking=False,
+        )
+        deliverable = await self.engineering.process(task)
+        await self.orchestrator._route(deliverable)
+        result = {
+            "summary": deliverable.payload,
+            "content": deliverable.payload,
+            "files": deliverable.metadata.get("files", []),
+            "files_changed": deliverable.metadata.get("files", []),
+            "commits": deliverable.metadata.get("commits", []),
+            "diffs": deliverable.metadata.get("diffs", []),
+            "status": deliverable.status,
+        }
+        self.coder.project_memory.update(
+            {"last_prompt": prompt, "last_result": deliverable.payload}
+        )
+        return result
+
+    def approve(self, task_id: str):
+        return self.submit_background(
+            self.orchestrator.handle_approval_response(
+                task_id,
+                True,
+                source="desktop",
+                metadata={"approved_by": "desktop"},
+            ),
+            f"Approve {task_id}",
+        )
+
+    def reject(self, task_id: str, reason: str = "Rejected from desktop"):
+        return self.submit_background(
+            self.orchestrator.handle_approval_response(
+                task_id,
+                False,
+                source="desktop",
+                reason=reason,
+                metadata={"action": "reject", "feedback": reason},
+            ),
+            f"Reject {task_id}",
+        )
+
+    def request_changes(self, task_id: str, feedback: str):
+        return self.submit_background(
+            self.orchestrator.handle_approval_response(
+                task_id,
+                False,
+                source="desktop",
+                reason=feedback,
+                metadata={"action": "revise", "feedback": feedback},
+            ),
+            f"Request changes {task_id}",
+        )
+
+    def pending_approvals(self):
+        return self.orchestrator.state.get_pending_approvals()
+
+    def audit_log(self, limit: int = 10) -> str:
+        return AuditLogViewer.from_project_memory(self.coder.project_memory).render_text(
+            limit=limit
+        )
+
+    def company_status(self) -> str:
+        return self.orchestrator.company_status()
+
+    def persist(self):
+        conversation_memory = getattr(self.coder, "conversation_memory", None)
+        project_memory = getattr(self.coder, "project_memory", None)
+        if isinstance(conversation_memory, ConversationMemory) and isinstance(
+            project_memory, ProjectMemory
+        ):
+            consolidate_conversation(conversation_memory, project_memory)
+            project_memory.persist()
+
+
+@st.cache_resource
+def get_desktop_company_session(_coder):
+    return DesktopCompanySession(_coder)
+
+
+def format_desktop_approval(approval: dict) -> str:
+    gate_name = approval.get("gate_name", "prd_approval")
+    gate_label = (
+        gate_name.replace("prd", "PRD")
+        .replace("_", " ")
+        .title()
+        .replace("Prd", "PRD")
+    )
+    preview = str(approval.get("artifact_preview", "")).strip()
+    if len(preview) > 1200:
+        preview = preview[:1200] + "…"
+    return (
+        f"**Gate:** {gate_label}\n\n"
+        f"**Department:** `{approval.get('department', 'unknown')}`\n\n"
+        f"**Task:** `{approval.get('task_id')}`\n\n"
+        f"**Preview:**\n\n{preview or '_No preview available._'}"
+    )
+
 class GUI:
     prompt = None
     prompt_as = "user"
@@ -159,6 +402,8 @@ class GUI:
                 self.do_settings_tab()
                 st.divider()
 
+            self.do_company_tab()
+            st.divider()
             # self.do_recommended_actions()
             self.do_add_to_chat()
             self.do_recent_msgs()
@@ -170,6 +415,128 @@ class GUI:
                 "This browser version of aider is experimental. Please share feedback in [GitHub"
                 " issues](https://github.com/Aider-AI/aider/issues)."
             )
+
+    def do_company_tab(self):
+        st.subheader("Company")
+        st.caption(
+            "Desktop controls for the same Product → UX → Engineering → QA → DevOps "
+            "workflow exposed in Discord."
+        )
+
+        self.state.company_enabled = st.toggle(
+            "Use Company workflow for chat",
+            value=self.state.company_enabled,
+            disabled=self.prompt_pending(),
+            help=(
+                "Routes prompts through Product prototyping first, then Engineering "
+                "for follow-up work. Turn this off to use the classic direct Aider chat."
+            ),
+        )
+        self.state.company_route = st.selectbox(
+            "Company route",
+            ["Auto", "Prototype", "Engineering"],
+            index=["Auto", "Prototype", "Engineering"].index(self.state.company_route),
+            disabled=self.prompt_pending() or not self.state.company_enabled,
+            help=(
+                "Auto mirrors Discord's human entry point. Prototype starts with Product/PRD. "
+                "Engineering skips PRD generation for existing-project tasks."
+            ),
+        )
+
+        if not self.state.company_enabled:
+            return
+
+        company = self.get_company()
+        if st.button("🔄 Refresh company state", key="company_refresh"):
+            st.rerun()
+
+        self.do_company_pending_runs(company)
+        self.do_company_approvals(company)
+
+        with st.expander("🏢 Dashboard", expanded=False):
+            st.code(company.company_status())
+
+        with st.expander("🧾 Audit log", expanded=False):
+            limit = st.slider("Audit events", 1, 25, 10, key="audit_log_limit")
+            st.code(company.audit_log(limit=limit))
+
+        with st.expander("📡 Company events", expanded=False):
+            if not company.events:
+                st.caption("No company events yet.")
+            for event in company.events[-10:]:
+                self.render_company_event(event)
+
+    def do_company_pending_runs(self, company):
+        remaining = []
+        for label, future in company.pending_runs:
+            if future.done():
+                try:
+                    result = future.result()
+                except Exception as err:
+                    self.info(f"{label} failed: {err}", echo=False)
+                    st.error(f"{label} failed: {err}")
+                else:
+                    summary = result.get("summary") if isinstance(result, dict) else result
+                    if summary:
+                        msg = f"{label} completed.\n\n{summary}"
+                        self.state.messages.append({"role": "assistant", "content": msg})
+                        st.success(f"{label} completed.")
+            else:
+                remaining.append((label, future))
+                st.info(f"{label} is running in the background.")
+        company.pending_runs = remaining
+
+    def do_company_approvals(self, company):
+        pending = [
+            approval
+            for approval in company.pending_approvals()
+            if approval.get("status") == "pending"
+        ]
+        if not pending:
+            st.caption("No pending approvals.")
+            return
+
+        st.warning(f"{len(pending)} approval request(s) need a decision.")
+        for approval in pending:
+            task_id = str(approval.get("task_id"))
+            with st.expander(f"Approval: {task_id}", expanded=True):
+                st.markdown(format_desktop_approval(approval))
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Approve", key=f"approve_{task_id}"):
+                        company.approve(task_id)
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Reject", key=f"reject_{task_id}"):
+                        company.reject(task_id)
+                        st.rerun()
+                feedback = st.text_area(
+                    "Request changes feedback",
+                    key=f"feedback_{task_id}",
+                    placeholder="Describe what should change before this is approved.",
+                )
+                if st.button("📝 Request changes", key=f"changes_{task_id}"):
+                    company.request_changes(
+                        task_id, feedback or "Changes requested from desktop"
+                    )
+                    st.rerun()
+
+    def render_company_event(self, event):
+        if isinstance(event, EventMessage):
+            if event.event == CompanyEvent.APPROVAL_REQUIRED:
+                st.warning(f"Approval required: {event.task_id}")
+                st.json(event.payload)
+            else:
+                st.json(event.__dict__)
+            return
+
+        department = getattr(event, "department", "company")
+        status = getattr(event, "status", "")
+        artifact_type = getattr(event, "artifact_type", "")
+        content = getattr(event, "content", None) or getattr(event, "payload", "")
+        with st.container(border=True):
+            st.write(f"**{department}** {artifact_type} {status}")
+            st.write(str(content)[:1200])
 
     def do_settings_tab(self):
         st.subheader("Settings")
@@ -440,6 +807,8 @@ class GUI:
         self.state.init("prompt")
         self.state.init("scraper")
         self.state.init("show_settings", False)
+        self.state.init("company_enabled", False)
+        self.state.init("company_route", "Auto")
 
         self.state.init("initial_inchat_files", self.coder.get_inchat_relative_files())
         root = Path(self.coder.root)
@@ -474,6 +843,7 @@ class GUI:
         self.initialize_state()
         self.env_path = self.state.env_path
         self.conf_path = self.state.conf_path
+        self.company = None
 
         self.do_messages_container()
         self.do_sidebar()
@@ -509,6 +879,11 @@ class GUI:
         # re-render the UI for the prompt_pending state
         st.rerun()
 
+    def get_company(self):
+        if self.company is None:
+            self.company = get_desktop_company_session(self.coder)
+        return self.company
+
     def prompt_pending(self):
         return self.state.prompt is not None
 
@@ -519,6 +894,10 @@ class GUI:
     def process_chat(self):
         prompt = self.state.prompt
         self.state.prompt = None
+
+        if self.state.company_enabled:
+            self.process_company_chat(prompt)
+            return
 
         # This duplicates logic from within Coder
         self.num_reflections = 0
@@ -558,6 +937,33 @@ class GUI:
             self.show_edit_info(edit)
 
         # re-render the UI for the non-prompt_pending state
+        st.rerun()
+
+
+    def process_company_chat(self, prompt):
+        route = self.state.company_route
+        if route == "Prototype":
+            future = self.get_company().start_prototype(prompt)
+        elif route == "Engineering":
+            future = self.get_company().run_instruction(prompt)
+        else:
+            future = self.get_company().run_auto(prompt)
+
+        with self.messages.chat_message("assistant"):
+            st.write(
+                f"Queued `{route}` company workflow. Use the Company sidebar to "
+                "refresh status, review approvals, open the dashboard, or inspect "
+                "the audit log."
+            )
+        self.state.messages.append(
+            {
+                "role": "assistant",
+                "content": (
+                    f"Queued `{route}` company workflow for background processing. "
+                    "Check the Company sidebar for progress and approvals."
+                ),
+            }
+        )
         st.rerun()
 
     def info(self, message, echo=True):

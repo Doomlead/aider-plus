@@ -1,15 +1,20 @@
 #!/usr/bin/env python
 
 import asyncio
+import atexit
+import concurrent.futures
+import logging
 import os
 import random
 import re
 import sys
 import threading
 import uuid
+from collections import deque
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from aider import urls
 from aider.agent import AiderAgentLoop
@@ -29,6 +34,10 @@ from aider.io import InputOutput
 from aider.main import main as cli_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
 from aider.scrape import Scraper, has_playwright
+
+logger = logging.getLogger(__name__)
+_COMPANY_SESSIONS = {}
+_COMPANY_SESSIONS_LOCK = threading.Lock()
 
 
 class CaptureIO(InputOutput):
@@ -106,7 +115,6 @@ def get_coder():
     return coder
 
 
-
 class DesktopCompanySession:
     """Desktop/Streamlit façade over the same Company workflow used by Discord."""
 
@@ -114,7 +122,13 @@ class DesktopCompanySession:
         self.coder = coder
         self.repo_path = str(Path(coder.root).resolve())
         self.events = []
+        self.event_queue = deque(maxlen=200)
+        self.event_version = 0
+        self.event_lock = threading.Lock()
         self.pending_runs = []
+        self.service_tasks = []
+        self.background_error = None
+        self._shutdown = False
         self.loop = asyncio.new_event_loop()
         self.loop_thread = threading.Thread(
             target=self._run_loop,
@@ -136,10 +150,21 @@ class DesktopCompanySession:
             phase="prototyping",
         )
         self._init_company_session()
+        atexit.register(self.shutdown)
 
     def _run_loop(self):
         asyncio.set_event_loop(self.loop)
-        self.loop.run_forever()
+        try:
+            self.loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(self.loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                self.loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            self.loop.close()
 
     def _ensure_memories(self):
         if not getattr(self.coder, "conversation_memory", None):
@@ -183,18 +208,107 @@ class DesktopCompanySession:
             self.qa,
             self.devops,
         ):
-            self.submit_background(department.run_loop())
+            self.submit_background(
+                department.run_loop(), f"{department.name} run loop", service=True
+            )
         self.orchestrator.on_deliverable(self._record_company_message)
-        self.submit_background(self.orchestrator.recover_pending_approvals())
+        self.orchestrator.on_background_error(self._record_background_error)
+        self.submit_background(
+            self.orchestrator.recover_pending_approvals(),
+            "Recover pending approvals",
+            service=True,
+        )
 
     async def _record_company_message(self, message):
-        self.events.append(message)
+        with self.event_lock:
+            self.events.append(message)
+            self.event_queue.append(message)
+            self.event_version += 1
 
-    def submit_background(self, coro, label=None):
-        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        if label:
+    async def _record_background_error(self, message: str):
+        self.background_error = message
+
+    async def _run_background(self, coro, label):
+        task = asyncio.create_task(coro, name=label)
+        try:
+            return await task
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            self.background_error = f"{label or 'Background task'} failed: {err}"
+            logger.exception("Desktop company background task failed: %s", label)
+            raise
+
+    def submit_background(self, coro, label=None, service=False):
+        if self._shutdown:
+            raise RuntimeError("Desktop company session is shut down")
+        future = asyncio.run_coroutine_threadsafe(
+            self._run_background(coro, label or "Company background task"), self.loop
+        )
+        future.add_done_callback(lambda done: self._log_background_result(label, done))
+        if service:
+            self.service_tasks.append((label or "Company service", future))
+        elif label:
             self.pending_runs.append((label, future))
         return future
+
+    def _log_background_result(self, label, future):
+        if future.cancelled():
+            logger.debug("Desktop company background task cancelled: %s", label)
+            return
+        try:
+            future.result()
+        except concurrent.futures.CancelledError:
+            logger.debug("Desktop company background task cancelled: %s", label)
+        except Exception as err:
+            self.background_error = f"{label or 'Background task'} failed: {err}"
+            logger.exception("Desktop company background task failed: %s", label)
+
+    def drain_events(self):
+        with self.event_lock:
+            events = list(self.event_queue)
+            self.event_queue.clear()
+            return events, self.event_version
+
+    def current_phase(self):
+        project = self.active_project
+        if project is not None:
+            return project.phase
+        return self.coder.project_memory.data.get("current_project_phase", "unknown")
+
+    def active_run_count(self):
+        return sum(1 for _, future in self.pending_runs if not future.done())
+
+    def is_active(self):
+        if self._shutdown:
+            return False
+        return any(not future.done() for _, future in self.service_tasks)
+
+    def shutdown(self):
+        if self._shutdown:
+            return
+        self._shutdown = True
+        futures = [future for _, future in self.pending_runs + self.service_tasks]
+        if self.orchestrator and self.loop.is_running():
+            try:
+                shutdown_future = asyncio.run_coroutine_threadsafe(
+                    self.orchestrator.shutdown(), self.loop
+                )
+                shutdown_future.result(timeout=5)
+            except Exception:
+                logger.exception("Desktop company orchestrator shutdown failed")
+        for future in futures:
+            future.cancel()
+        if self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.loop.stop)
+        if (
+            self.loop_thread.is_alive()
+            and threading.current_thread() is not self.loop_thread
+        ):
+            self.loop_thread.join(timeout=5)
+        with _COMPANY_SESSIONS_LOCK:
+            if _COMPANY_SESSIONS.get(self.repo_path) is self:
+                _COMPANY_SESSIONS.pop(self.repo_path, None)
 
     def start_prototype(self, prompt: str):
         return self.submit_background(self._run_prototype(prompt), "Prototype")
@@ -294,9 +408,9 @@ class DesktopCompanySession:
         return self.orchestrator.state.get_pending_approvals()
 
     def audit_log(self, limit: int = 10) -> str:
-        return AuditLogViewer.from_project_memory(self.coder.project_memory).render_text(
-            limit=limit
-        )
+        return AuditLogViewer.from_project_memory(
+            self.coder.project_memory
+        ).render_text(limit=limit)
 
     def company_status(self) -> str:
         return self.orchestrator.company_status()
@@ -311,18 +425,21 @@ class DesktopCompanySession:
             project_memory.persist()
 
 
-@st.cache_resource
 def get_desktop_company_session(_coder):
-    return DesktopCompanySession(_coder)
+    repo_path = str(Path(_coder.root).resolve())
+    with _COMPANY_SESSIONS_LOCK:
+        session = _COMPANY_SESSIONS.get(repo_path)
+        if session is not None and not session._shutdown:
+            return session
+        session = DesktopCompanySession(_coder)
+        _COMPANY_SESSIONS[repo_path] = session
+        return session
 
 
 def format_desktop_approval(approval: dict) -> str:
     gate_name = approval.get("gate_name", "prd_approval")
     gate_label = (
-        gate_name.replace("prd", "PRD")
-        .replace("_", " ")
-        .title()
-        .replace("Prd", "PRD")
+        gate_name.replace("prd", "PRD").replace("_", " ").title().replace("Prd", "PRD")
     )
     preview = str(approval.get("artifact_preview", "")).strip()
     if len(preview) > 1200:
@@ -333,6 +450,7 @@ def format_desktop_approval(approval: dict) -> str:
         f"**Task:** `{approval.get('task_id')}`\n\n"
         f"**Preview:**\n\n{preview or '_No preview available._'}"
     )
+
 
 class GUI:
     prompt = None
@@ -388,7 +506,9 @@ class GUI:
         undone = self.state.last_undone_commit_hash == commit_hash
         if not undone:
             with self.last_undo_empty:
-                if self.button(f"Undo commit `{commit_hash}`", key=f"undo_{commit_hash}"):
+                if self.button(
+                    f"Undo commit `{commit_hash}`", key=f"undo_{commit_hash}"
+                ):
                     self.do_undo(commit_hash)
 
     def do_sidebar(self):
@@ -403,6 +523,7 @@ class GUI:
                 st.divider()
 
             self.do_company_tab()
+            self.do_company_status_sidebar()
             st.divider()
             # self.do_recommended_actions()
             self.do_add_to_chat()
@@ -442,11 +563,28 @@ class GUI:
                 "Engineering skips PRD generation for existing-project tasks."
             ),
         )
+        self.state.company_auto_refresh = st.toggle(
+            "Auto-refresh company UI",
+            value=self.state.company_auto_refresh,
+            disabled=not self.state.company_enabled,
+            help=(
+                "Polls the background company session so approvals and dashboard "
+                "status stay current."
+            ),
+        )
 
         if not self.state.company_enabled:
             return
 
         company = self.get_company()
+        self.enable_company_polling(company)
+        new_events, event_version = company.drain_events()
+        if new_events:
+            self.state.company_event_version = event_version
+
+        if company.background_error:
+            st.error(company.background_error)
+
         if st.button("🔄 Refresh company state", key="company_refresh"):
             st.rerun()
 
@@ -460,11 +598,65 @@ class GUI:
             limit = st.slider("Audit events", 1, 25, 10, key="audit_log_limit")
             st.code(company.audit_log(limit=limit))
 
-        with st.expander("📡 Company events", expanded=False):
+        with st.expander("📡 Company events", expanded=bool(new_events)):
             if not company.events:
                 st.caption("No company events yet.")
             for event in company.events[-10:]:
                 self.render_company_event(event)
+
+    def do_company_status_sidebar(self):
+        if not self.state.company_enabled:
+            st.caption("Company Mode: Inactive")
+            return
+
+        company = self.get_company()
+        pending_count = len(
+            [
+                approval
+                for approval in company.pending_approvals()
+                if approval.get("status") == "pending"
+            ]
+        )
+        st.caption(
+            "Company Mode: Active" if company.is_active() else "Company Mode: Stopped"
+        )
+        st.metric(
+            "Current Phase", str(company.current_phase()).replace("_", " ").title()
+        )
+        st.metric("Pending Approvals", pending_count)
+        active_runs = company.active_run_count()
+        if active_runs:
+            st.caption(f"Background runs: {active_runs}")
+        if company.background_error:
+            st.error(company.background_error)
+
+    def enable_company_polling(self, company):
+        if not self.state.company_auto_refresh:
+            return
+        should_poll = (
+            company.active_run_count()
+            or company.pending_approvals()
+            or company.event_queue
+            or company.background_error
+        )
+        if not should_poll:
+            return
+        components.html(
+            """
+            <script>
+            const waitMs = 2500;
+            setTimeout(() => {
+              const doc = window.parent.document;
+              const buttons = Array.from(doc.querySelectorAll('button'));
+              const refresh = buttons.find((button) =>
+                (button.innerText || '').includes('Refresh company state')
+              );
+              if (refresh) { refresh.click(); }
+            }, waitMs);
+            </script>
+            """,
+            height=0,
+        )
 
     def do_company_pending_runs(self, company):
         remaining = []
@@ -476,10 +668,14 @@ class GUI:
                     self.info(f"{label} failed: {err}", echo=False)
                     st.error(f"{label} failed: {err}")
                 else:
-                    summary = result.get("summary") if isinstance(result, dict) else result
+                    summary = (
+                        result.get("summary") if isinstance(result, dict) else result
+                    )
                     if summary:
                         msg = f"{label} completed.\n\n{summary}"
-                        self.state.messages.append({"role": "assistant", "content": msg})
+                        self.state.messages.append(
+                            {"role": "assistant", "content": msg}
+                        )
                         st.success(f"{label} completed.")
             else:
                 remaining.append((label, future))
@@ -547,8 +743,12 @@ class GUI:
 
         with st.form("settings_form", clear_on_submit=False):
             model = st.text_input("Main model", value=conf_values.get("model", ""))
-            weak_model = st.text_input("Weak model", value=conf_values.get("weak-model", ""))
-            editor_model = st.text_input("Editor model", value=conf_values.get("editor-model", ""))
+            weak_model = st.text_input(
+                "Weak model", value=conf_values.get("weak-model", "")
+            )
+            editor_model = st.text_input(
+                "Editor model", value=conf_values.get("editor-model", "")
+            )
             openai_key = st.text_input(
                 "OpenAI API key",
                 value=env_values.get("OPENAI_API_KEY", ""),
@@ -588,7 +788,11 @@ class GUI:
             self._write_env_updates(self.env_path, updates)
             self._write_conf_updates(
                 self.conf_path,
-                {"model": model.strip(), "weak-model": weak_model.strip(), "editor-model": editor_model.strip()},
+                {
+                    "model": model.strip(),
+                    "weak-model": weak_model.strip(),
+                    "editor-model": editor_model.strip(),
+                },
             )
             self.info(f"Saved settings to `{self.env_path}` and `{self.conf_path}`.")
 
@@ -644,8 +848,12 @@ class GUI:
                 self.button("Create git repo", key=random.random(), help="?")
 
             with st.popover("Update your `.gitignore` file"):
-                st.write("It's best to keep aider's internal files out of your git repo.")
-                self.button("Add `.aider*` to `.gitignore`", key=random.random(), help="?")
+                st.write(
+                    "It's best to keep aider's internal files out of your git repo."
+                )
+                self.button(
+                    "Add `.aider*` to `.gitignore`", key=random.random(), help="?"
+                )
 
     def do_add_to_chat(self):
         # with st.expander("Add to the chat", expanded=True):
@@ -720,7 +928,9 @@ class GUI:
         if self.button("Clear chat history", help=text):
             self.coder.done_messages = []
             self.coder.cur_messages = []
-            self.info("Cleared chat history. Now the LLM can't see anything before this line.")
+            self.info(
+                "Cleared chat history. Now the LLM can't see anything before this line."
+            )
 
     def do_show_metrics(self):
         st.metric("Cost of last message send & reply", "$0.0019", help="foo")
@@ -809,6 +1019,8 @@ class GUI:
         self.state.init("show_settings", False)
         self.state.init("company_enabled", False)
         self.state.init("company_route", "Auto")
+        self.state.init("company_auto_refresh", True)
+        self.state.init("company_event_version", 0)
 
         self.state.init("initial_inchat_files", self.coder.get_inchat_relative_files())
         root = Path(self.coder.root)
@@ -939,15 +1151,14 @@ class GUI:
         # re-render the UI for the non-prompt_pending state
         st.rerun()
 
-
     def process_company_chat(self, prompt):
         route = self.state.company_route
         if route == "Prototype":
-            future = self.get_company().start_prototype(prompt)
+            self.get_company().start_prototype(prompt)
         elif route == "Engineering":
-            future = self.get_company().run_instruction(prompt)
+            self.get_company().run_instruction(prompt)
         else:
-            future = self.get_company().run_auto(prompt)
+            self.get_company().run_auto(prompt)
 
         with self.messages.chat_message("assistant"):
             st.write(
@@ -997,7 +1208,9 @@ class GUI:
         url = self.web_content
 
         if not self.state.scraper:
-            self.scraper = Scraper(print_error=self.info, playwright_available=has_playwright())
+            self.scraper = Scraper(
+                print_error=self.info, playwright_available=has_playwright()
+            )
 
         content = self.scraper.scrape(url) or ""
         if content.strip():

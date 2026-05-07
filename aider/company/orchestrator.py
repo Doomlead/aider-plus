@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import logging
 from typing import Awaitable, Callable, Dict, List, Optional, Union
 
 from aider.memory import ProjectMemory
@@ -19,6 +21,7 @@ from aider.company.schemas import (
 )
 
 CompanyMessage = Union[Deliverable, EventMessage]
+logger = logging.getLogger(__name__)
 
 
 class CompanyOrchestrator:
@@ -31,6 +34,9 @@ class CompanyOrchestrator:
         self.approvals.on_event(self._emit)
         self.departments: Dict[str, Department] = {}
         self._handlers: List[Callable[[CompanyMessage], Awaitable[None]]] = []
+        self._error_handlers: List[Callable[[str], Awaitable[None]]] = []
+        self._background_tasks: set[asyncio.Task] = set()
+        self._shutdown = False
 
     @property
     def _gates(self):
@@ -62,15 +68,80 @@ class CompanyOrchestrator:
 
     def register(self, dept: Department) -> None:
         self.departments[dept.name] = dept
-        dept._on_deliverable = lambda d: asyncio.create_task(self._route(d))
+
+        def route_deliverable(deliverable: Deliverable) -> None:
+            self.create_task(
+                self._route(deliverable),
+                label=f"route {dept.name} deliverable {deliverable.task_id}",
+            )
+
+        dept._on_deliverable = route_deliverable
 
         async def submit_task(task: CompanyTask) -> Optional[Deliverable]:
             return await self.submit(task)
 
         dept._submit_task = submit_task
 
+    def create_task(self, coro, label: Optional[str] = None) -> asyncio.Task:
+        """Create and track an orchestrator-owned background task."""
+        if self._shutdown:
+            raise RuntimeError("Company orchestrator is shutting down")
+        task = asyncio.create_task(coro, name=label)
+        self._background_tasks.add(task)
+
+        def _done(completed: asyncio.Task) -> None:
+            self._background_tasks.discard(completed)
+            if completed.cancelled():
+                return
+            try:
+                completed.result()
+            except Exception as err:
+                logger.exception(
+                    "Company orchestrator background task failed: %s",
+                    label or completed.get_name(),
+                )
+                if not self._shutdown:
+                    self.create_task(
+                        self._emit_background_error(label or completed.get_name(), err),
+                        label="report orchestrator background error",
+                    )
+
+        task.add_done_callback(_done)
+        return task
+
+    async def shutdown(self) -> None:
+        """Cancel orchestrator-owned tasks and wait for graceful exit."""
+        self._shutdown = True
+        tasks = [task for task in self._background_tasks if not task.done()]
+        tasks.extend(
+            task
+            for task in self.approvals._recovered_gate_tasks.values()
+            if not task.done()
+        )
+        for gate in self.approvals.gates.values():
+            if not gate.done():
+                gate.cancel()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            with contextlib.suppress(Exception):
+                await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
+        self.approvals._recovered_gate_tasks.clear()
+
     def on_deliverable(self, handler: Callable[[CompanyMessage], Awaitable[None]]):
         self._handlers.append(handler)
+
+    def on_background_error(self, handler: Callable[[str], Awaitable[None]]) -> None:
+        self._error_handlers.append(handler)
+
+    async def _emit_background_error(self, label: str, err: Exception) -> None:
+        message = f"{label} failed: {err}"
+        for handler in self._error_handlers:
+            try:
+                await handler(message)
+            except Exception:
+                logger.exception("Company background error handler failed")
 
     async def _emit(self, message: CompanyMessage) -> None:
         # Stream to Discord / event listeners
@@ -78,7 +149,7 @@ class CompanyOrchestrator:
             try:
                 await handler(message)
             except Exception:
-                pass
+                logger.exception("Company event handler failed")
 
     async def _route(self, d: Deliverable) -> None:
         self._log_event(
@@ -377,7 +448,10 @@ class CompanyOrchestrator:
             payload={
                 "deploy_report": d.content,
                 "deploy_metadata": dict(d.metadata),
-                "instruction": "Address the infrastructure deployment failure and resubmit the implementation.",
+                "instruction": (
+                    "Address the infrastructure deployment failure and resubmit "
+                    "the implementation."
+                ),
             },
             blocking=False,
             context=context,
@@ -503,9 +577,7 @@ class CompanyOrchestrator:
             lines.append(
                 "Artifacts: " + (", ".join(artifacts) if artifacts else "none")
             )
-        lines.append(
-            "Departments: " + (", ".join(sorted(self.departments)) or "none")
-        )
+        lines.append("Departments: " + (", ".join(sorted(self.departments)) or "none"))
         lines.append(f"Pending approvals: {len(pending)}")
         if pending:
             for approval in pending:
@@ -781,6 +853,7 @@ class CompanyOrchestrator:
         department: str = "orchestrator",
         metadata: Optional[dict] = None,
     ) -> None:
+        metadata = metadata or {}
         try:
             self.state.append_audit_event(
                 department=department,
@@ -789,7 +862,41 @@ class CompanyOrchestrator:
                 metadata=metadata,
             )
         except Exception:
+            logger.exception("Failed to append company audit event")
+
+        try:
+            asyncio.get_running_loop()
+            event_name = self._stream_event_name(event_type, department)
+            message = EventMessage(
+                event=event_name,
+                task_id=str(metadata.get("task_id", "")),
+                payload={
+                    "event_type": event_type,
+                    "department": department,
+                    "payload": payload,
+                },
+                metadata=dict(metadata),
+            )
+            self.create_task(
+                self._emit(message),
+                label=f"stream company event {event_name}",
+            )
+        except RuntimeError:
             pass
+
+    @staticmethod
+    def _stream_event_name(event_type: str, department: str) -> str:
+        if event_type == "approval_requested":
+            return "approval_requested"
+        if event_type == "task_submitted" and department == "product":
+            return "planning"
+        if event_type == "deliverable_produced" and department == "engineering":
+            return "engineering_complete"
+        if event_type == "deliverable_produced" and department == "qa":
+            return "qa_complete"
+        if event_type == "deliverable_produced" and department == "devops":
+            return "deployment_complete"
+        return event_type
 
     async def start(self) -> None:
         await asyncio.gather(

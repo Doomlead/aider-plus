@@ -54,9 +54,14 @@ class EngineeringDepartment(Department):
             await self._emit_engineering_event(
                 task.task_id,
                 "engineering_programmer_start",
-                {"iteration": iteration, "max_iterations": self.max_internal_iterations},
+                {
+                    "iteration": iteration,
+                    "max_iterations": self.max_internal_iterations,
+                },
             )
-            programmer_deliverable = await self._run_programmer_phase(task)
+            programmer_deliverable = await self._run_programmer_phase(
+                task, previous_deliverable=last_review
+            )
             last_programmer_deliverable = programmer_deliverable
 
             await self._emit_engineering_event(
@@ -142,34 +147,41 @@ class EngineeringDepartment(Department):
             review_passed=False,
         )
 
-    async def _run_programmer_phase(self, task: CompanyTask) -> Deliverable:
-        """Run the existing Architect → Editor implementation flow."""
+    async def _run_programmer_phase(
+        self, task: CompanyTask, previous_deliverable: Optional[Deliverable] = None
+    ) -> Deliverable:
+        """Run the existing Architect → Editor flow, applying reviewer feedback on revisions."""
         self.current_stage = "programmer"
         task_text = self._task_text(task)
-        previous_review_feedback = None
-        if self._review_feedback:
+        reviewer_feedback = None
+
+        if self._deliverable_needs_revision(previous_deliverable):
             self._revision_count += 1
-            previous_review_feedback = self._format_review_feedback(
-                self._review_feedback
-            )
-            self._last_reviewer_issues = self._review_feedback_summary(
-                self._review_feedback
-            )
+            reviewer_feedback = self._feedback_data(previous_deliverable)
+            review_feedback = self._format_review_feedback(previous_deliverable)
+            feedback_summary = self._review_feedback_summary(previous_deliverable)
+            self._last_reviewer_issues = feedback_summary
             await self._emit_engineering_event(
                 task.task_id,
                 "programmer_revision_start",
                 {
                     "revision_count": self._revision_count,
-                    "last_reviewer_issues": self._last_reviewer_issues,
+                    "last_reviewer_issues_count": len(
+                        self._feedback_issues(previous_deliverable)
+                    ),
+                    "last_reviewer_issues": feedback_summary,
+                    "has_previous_feedback": True,
                 },
             )
-            task_text = (
-                "Previous Code Review Feedback (CRITICAL - Address ALL issues):\n"
-                f"{previous_review_feedback}\n\n"
-                "Fix all issues listed above while still fulfilling the original PRD "
-                "and design spec.\n\n"
-                f"{task_text}"
-            )
+            task_text = f"""Previous Code Review Feedback (CRITICAL - Address ALL issues before proceeding):
+
+{review_feedback}
+
+Original Task:
+{task_text}
+
+Fix all issues raised by the reviewer while still fully satisfying the original PRD and design specifications.
+Pay special attention to the reviewer's suggestions."""
 
         record_department_memory = not self._uses_agent_conversation_memory()
         if record_department_memory:
@@ -184,8 +196,18 @@ class EngineeringDepartment(Department):
         metadata = self._result_metadata(result)
         metadata.setdefault("stage", "programmer")
         metadata.setdefault("revision_count", self._revision_count)
-        metadata.setdefault("review_feedback_applied", self._review_feedback)
+        metadata.setdefault("review_feedback_applied", reviewer_feedback)
         metadata.setdefault("last_reviewer_issues", self._last_reviewer_issues)
+        await self._emit_engineering_event(
+            task.task_id,
+            "programmer_complete",
+            {
+                "revision_count": self._revision_count,
+                "files_changed": len(
+                    metadata.get("changed_files") or metadata.get("files") or []
+                ),
+            },
+        )
         return Deliverable(
             task_id=task.task_id,
             department=self.name,
@@ -339,9 +361,12 @@ class EngineeringDepartment(Department):
         payload = task.payload if task and isinstance(task.payload, dict) else {}
         task_context = task.context if task and isinstance(task.context, dict) else {}
         return {
-            "original_request": payload.get("original_request") or (task.payload if task else ""),
-            "prd_content": payload.get("prd_content") or task_context.get("prd_content"),
-            "design_spec": payload.get("design_spec") or task_context.get("design_spec"),
+            "original_request": payload.get("original_request")
+            or (task.payload if task else ""),
+            "prd_content": payload.get("prd_content")
+            or task_context.get("prd_content"),
+            "design_spec": payload.get("design_spec")
+            or task_context.get("design_spec"),
             "playbook_guidance": task_context.get("playbook_guidance")
             or payload.get("playbook_guidance")
             or [],
@@ -483,7 +508,12 @@ Be specific and actionable."""
     def _looks_like_review_data(data) -> bool:
         return isinstance(data, dict) and any(
             key in data
-            for key in ("review_passed", "issues", "overall_assessment", "needs_revision")
+            for key in (
+                "review_passed",
+                "issues",
+                "overall_assessment",
+                "needs_revision",
+            )
         )
 
     @staticmethod
@@ -646,7 +676,8 @@ Be specific and actionable."""
                     {
                         "priority": "P0" if check.get("required", True) else "P1",
                         "issue": f"Reviewer check failed: {check.get('name')}",
-                        "action": check.get("output") or "Investigate and fix the failed check.",
+                        "action": check.get("output")
+                        or "Investigate and fix the failed check.",
                     }
                 )
             elif check.get("status") == "skipped":
@@ -655,7 +686,11 @@ Be specific and actionable."""
                 )
 
         return {
-            "summary": "Approved for QA." if not priority_issues else "Needs revision before QA.",
+            "summary": (
+                "Approved for QA."
+                if not priority_issues
+                else "Needs revision before QA."
+            ),
             "what_is_good": positives,
             "concerns": concerns,
             "priority_issues": priority_issues,
@@ -722,7 +757,9 @@ Be specific and actionable."""
         checks.append(self._check_result("git diff --check", diff_check, required=True))
 
         python_files = [path for path in changed_files if path.endswith(".py")]
-        existing_python_files = [path for path in python_files if (root / path).exists()]
+        existing_python_files = [
+            path for path in python_files if (root / path).exists()
+        ]
         if existing_python_files:
             command = ["python", "-m", "py_compile", *existing_python_files]
             py_compile = await self._run_command(command, root)
@@ -785,30 +822,46 @@ Be specific and actionable."""
         return None
 
     @staticmethod
-    def _review_feedback_summary(feedback: Optional[dict]) -> Optional[str]:
+    def _deliverable_needs_revision(deliverable: Optional[Deliverable]) -> bool:
+        if deliverable is None:
+            return False
+        return bool(
+            deliverable.metadata.get("needs_revision")
+            or deliverable.status == "needs_revision"
+            or deliverable.review_passed is False
+        )
+
+    @staticmethod
+    def _feedback_data(feedback: Optional[Deliverable | dict]) -> dict:
+        if feedback is None:
+            return {}
+        if isinstance(feedback, Deliverable):
+            return (
+                feedback.review_feedback
+                or feedback.metadata.get("review_feedback")
+                or feedback.metadata
+                or {}
+            )
+        return feedback
+
+    def _feedback_issues(self, feedback: Optional[Deliverable | dict]) -> list:
+        data = self._feedback_data(feedback)
+        return data.get("issues") or []
+
+    def _review_feedback_summary(
+        self, feedback: Optional[Deliverable | dict]
+    ) -> Optional[str]:
         if not feedback:
             return None
-        issues = feedback.get("issues") or []
+        data = self._feedback_data(feedback)
+        issues = data.get("issues") or []
         if issues:
-            summaries = []
-            for issue in issues[:5]:
-                if isinstance(issue, dict):
-                    severity = issue.get("severity")
-                    location = issue.get("file") or "general"
-                    description = issue.get("description") or issue.get("issue")
-                    if description:
-                        prefix = f"[{severity}] " if severity else ""
-                        summaries.append(f"{prefix}{location}: {description}")
-                elif issue:
-                    summaries.append(str(issue))
-            if summaries:
-                remaining = len(issues) - len(summaries)
-                summary = "; ".join(summaries)
-                if remaining > 0:
-                    summary += f"; +{remaining} more"
-                return summary
+            assessment = str(
+                data.get("overall_assessment") or data.get("summary") or ""
+            )
+            return (f"{len(issues)} issues found. " + assessment[:150]).strip()
 
-        priority_issues = feedback.get("priority_issues") or []
+        priority_issues = data.get("priority_issues") or []
         if priority_issues:
             summaries = []
             for issue in priority_issues[:5]:
@@ -831,44 +884,48 @@ Be specific and actionable."""
                     summary += f"; +{remaining} more"
                 return summary
 
-        summary = feedback.get("overall_assessment") or feedback.get("summary")
+        summary = data.get("overall_assessment") or data.get("summary")
         return str(summary) if summary else None
 
-    @staticmethod
-    def _format_review_feedback(feedback: dict) -> str:
-        if not feedback:
+    def _format_review_feedback(self, feedback: Deliverable | dict) -> str:
+        """Format reviewer feedback for the programmer prompt."""
+        data = self._feedback_data(feedback)
+        if not data:
             return "No reviewer feedback was provided."
+
+        issues = data.get("issues") or []
+        if issues:
+            formatted = []
+            for issue in issues:
+                if not isinstance(issue, dict):
+                    formatted.append(f"[MEDIUM] general: {issue}")
+                    continue
+                severity = str(issue.get("severity") or "medium").upper()
+                file = issue.get("file") or "unknown"
+                line_range = issue.get("line_range") or issue.get("line") or ""
+                if line_range and not str(line_range).startswith(":"):
+                    line_range = f":{line_range}"
+                desc = issue.get("description") or issue.get("issue") or ""
+                sugg = issue.get("suggestion") or issue.get("action") or ""
+                line = f"[{severity}] {file}{line_range}: {desc}"
+                if sugg:
+                    line += f"\n   → {sugg}"
+                formatted.append(line)
+            return "\n".join(formatted)
+
         lines = [
             str(
-                feedback.get("overall_assessment")
-                or feedback.get("summary")
+                data.get("overall_assessment")
+                or data.get("summary")
                 or "Reviewer feedback"
             )
         ]
-        issues = feedback.get("issues") or []
-        if issues:
-            lines.append("\nIssues:")
-            for issue in issues:
-                if not isinstance(issue, dict):
-                    lines.append(f"- {issue}")
-                    continue
-                location = issue.get("file") or "general"
-                line_range = issue.get("line_range")
-                if line_range:
-                    location = f"{location}:{line_range}"
-                severity = issue.get("severity") or "medium"
-                description = issue.get("description") or issue.get("issue") or issue
-                suggestion = issue.get("suggestion") or issue.get("action")
-                line = f"- [{severity}] {location} — {description}"
-                if suggestion:
-                    line += f" Suggestion: {suggestion}"
-                lines.append(line)
         for key, label in (
             ("priority_issues", "Priority issues"),
             ("concerns", "Concerns"),
             ("what_is_good", "What is good"),
         ):
-            values = feedback.get(key) or []
+            values = data.get(key) or []
             if not values:
                 continue
             lines.append(f"\n{label}:")

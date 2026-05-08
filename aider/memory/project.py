@@ -20,6 +20,19 @@ class ProjectMemory:
         "observability": {
             "turns_per_phase": {},
             "token_usage_per_department": {},
+            "qa_metrics": {
+                "total_runs": 0,
+                "passed": 0,
+                "failed": 0,
+                "no_tests": 0,
+                "pass_rate": 0.0,
+            },
+            "task_metrics": {
+                "total_tasks": 0,
+                "qa_revision_cycles": 0,
+                "engineering_revision_cycles": 0,
+                "avg_qa_revisions": 0.0,
+            },
         },
     }
 

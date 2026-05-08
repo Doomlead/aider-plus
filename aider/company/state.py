@@ -76,6 +76,25 @@ class CompanyStateManager:
             observability = {}
         observability.setdefault("turns_per_phase", {})
         observability.setdefault("token_usage_per_department", {})
+        observability.setdefault(
+            "qa_metrics",
+            {
+                "total_runs": 0,
+                "passed": 0,
+                "failed": 0,
+                "no_tests": 0,
+                "pass_rate": 0.0,
+            },
+        )
+        observability.setdefault(
+            "task_metrics",
+            {
+                "total_tasks": 0,
+                "qa_revision_cycles": 0,
+                "engineering_revision_cycles": 0,
+                "avg_qa_revisions": 0.0,
+            },
+        )
         return observability
 
     def record_phase_turn(self, phase: Optional[str], department: str) -> None:
@@ -87,37 +106,231 @@ class CompanyStateManager:
         self._memory.update({"observability": observability})
         self._memory.persist()
 
-    def record_department_tokens(self, department: str, token_usage: Any) -> None:
-        tokens = self._normalize_token_usage(token_usage)
-        if tokens <= 0:
+    # Approximate cost per 1M tokens by model family (input rate used as estimate).
+    # Update as needed; this is intentionally conservative and approximate.
+    _COST_PER_1M_TOKENS: dict[str, float] = {
+        "claude-opus": 15.00,
+        "claude-sonnet": 3.00,
+        "claude-haiku": 0.25,
+        "gpt-4o": 5.00,
+        "gpt-4": 30.00,
+        "gpt-3.5": 0.50,
+        "deepseek": 0.14,
+        "default": 1.00,
+    }
+
+    def record_department_tokens(
+        self,
+        department: str,
+        token_usage: Any,
+        *,
+        model: Optional[str] = None,
+    ) -> None:
+        """
+        Record a token usage event for *department*.
+
+        token_usage may be:
+          - None / 0           → ignored
+          - int                → treated as total_tokens only
+          - dict               → expects keys: total_tokens, prompt_tokens,
+                                 completion_tokens (all optional, all int)
+        """
+        parsed = self._parse_token_usage(token_usage)
+        if parsed["total_tokens"] <= 0:
             return
+
+        cost = self._estimate_cost(parsed, model)
         observability = self.get_observability()
-        usage = observability.setdefault("token_usage_per_department", {})
-        usage[department] = int(usage.get(department, 0) or 0) + tokens
+        usage_map = observability.setdefault("token_usage_per_department", {})
+
+        dept_record = usage_map.get(department)
+        if not isinstance(dept_record, dict):
+            # Handle legacy int records or missing keys.
+            legacy = int(dept_record) if isinstance(dept_record, (int, float)) else 0
+            dept_record = {
+                "total_tokens": legacy,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "estimated_cost_usd": 0.0,
+                "run_count": 0,
+            }
+        else:
+            dept_record = {
+                "total_tokens": int(dept_record.get("total_tokens", 0) or 0),
+                "prompt_tokens": int(dept_record.get("prompt_tokens", 0) or 0),
+                "completion_tokens": int(dept_record.get("completion_tokens", 0) or 0),
+                "estimated_cost_usd": float(
+                    dept_record.get("estimated_cost_usd", 0.0) or 0.0
+                ),
+                "run_count": int(dept_record.get("run_count", 0) or 0),
+            }
+
+        dept_record["total_tokens"] += parsed["total_tokens"]
+        dept_record["prompt_tokens"] += parsed["prompt_tokens"]
+        dept_record["completion_tokens"] += parsed["completion_tokens"]
+        dept_record["estimated_cost_usd"] = round(
+            dept_record["estimated_cost_usd"] + cost, 6
+        )
+        dept_record["run_count"] += 1
+        usage_map[department] = dept_record
+
+        self._memory.update({"observability": observability})
+        self._memory.persist()
+
+    def record_qa_result(self, test_passed: Optional[bool]) -> None:
+        """
+        Record a QA run outcome for pass-rate tracking.
+
+        Call this from the orchestrator immediately after QA produces a deliverable.
+
+        Args:
+            test_passed: True = passed, False = failed, None = no tests found.
+        """
+        observability = self.get_observability()
+        qa = observability.setdefault(
+            "qa_metrics",
+            {
+                "total_runs": 0,
+                "passed": 0,
+                "failed": 0,
+                "no_tests": 0,
+                "pass_rate": 0.0,
+            },
+        )
+        qa["total_runs"] = int(qa.get("total_runs", 0) or 0) + 1
+        if test_passed is True:
+            qa["passed"] = int(qa.get("passed", 0) or 0) + 1
+        elif test_passed is False:
+            qa["failed"] = int(qa.get("failed", 0) or 0) + 1
+        else:
+            qa["no_tests"] = int(qa.get("no_tests", 0) or 0) + 1
+
+        total = qa["total_runs"]
+        qa["pass_rate"] = round(qa["passed"] / total, 4) if total > 0 else 0.0
+        observability["qa_metrics"] = qa
+        self._memory.update({"observability": observability})
+        self._memory.persist()
+
+    def record_task_iteration(
+        self,
+        *,
+        qa_revision: bool = False,
+        engineering_revision: bool = False,
+    ) -> None:
+        """
+        Record a revision cycle event for convergence tracking.
+
+        Call with qa_revision=True each time QA routes back to Engineering,
+        and engineering_revision=True each time Engineering internally retries.
+        """
+        observability = self.get_observability()
+        tm = observability.setdefault(
+            "task_metrics",
+            {
+                "total_tasks": 0,
+                "qa_revision_cycles": 0,
+                "engineering_revision_cycles": 0,
+                "avg_qa_revisions": 0.0,
+            },
+        )
+
+        if qa_revision:
+            tm["qa_revision_cycles"] = int(tm.get("qa_revision_cycles", 0) or 0) + 1
+        if engineering_revision:
+            tm["engineering_revision_cycles"] = (
+                int(tm.get("engineering_revision_cycles", 0) or 0) + 1
+            )
+
+        # Recompute avg QA revisions per task (approximate: cycles / tasks).
+        total = int(tm.get("total_tasks", 0) or 0)
+        if total > 0:
+            tm["avg_qa_revisions"] = round(
+                int(tm.get("qa_revision_cycles", 0) or 0) / total, 2
+            )
+        observability["task_metrics"] = tm
+        self._memory.update({"observability": observability})
+        self._memory.persist()
+
+    def increment_task_count(self) -> None:
+        """Call once when a new top-level company task begins."""
+        observability = self.get_observability()
+        tm = observability.setdefault(
+            "task_metrics",
+            {
+                "total_tasks": 0,
+                "qa_revision_cycles": 0,
+                "engineering_revision_cycles": 0,
+                "avg_qa_revisions": 0.0,
+            },
+        )
+        tm["total_tasks"] = int(tm.get("total_tasks", 0) or 0) + 1
+        total = int(tm.get("total_tasks", 0) or 0)
+        if total > 0:
+            tm["avg_qa_revisions"] = round(
+                int(tm.get("qa_revision_cycles", 0) or 0) / total, 2
+            )
+        observability["task_metrics"] = tm
         self._memory.update({"observability": observability})
         self._memory.persist()
 
     @staticmethod
-    def _normalize_token_usage(token_usage: Any) -> int:
+    def _parse_token_usage(token_usage: Any) -> dict[str, int]:
+        """Return a dict with total_tokens, prompt_tokens, completion_tokens."""
         if isinstance(token_usage, int):
-            return token_usage
+            return {
+                "total_tokens": token_usage,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+            }
         if not isinstance(token_usage, dict):
-            return 0
-        for key in ("total_tokens", "tokens", "total"):
-            value = token_usage.get(key)
-            if isinstance(value, int):
-                return value
-        total = 0
-        for key in (
-            "prompt_tokens",
-            "completion_tokens",
-            "input_tokens",
-            "output_tokens",
-        ):
-            value = token_usage.get(key)
-            if isinstance(value, int):
-                total += value
-        return total
+            return {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}
+
+        prompt = int(
+            token_usage.get("prompt_tokens") or token_usage.get("input_tokens") or 0
+        )
+        completion = int(
+            token_usage.get("completion_tokens")
+            or token_usage.get("output_tokens")
+            or 0
+        )
+        total = int(
+            token_usage.get("total_tokens")
+            or token_usage.get("tokens")
+            or token_usage.get("total")
+            or (prompt + completion)
+            or 0
+        )
+        # If only total was given, distribute it (best effort).
+        if total > 0 and prompt == 0 and completion == 0:
+            prompt = int(total * 0.7)
+            completion = total - prompt
+        return {
+            "total_tokens": total,
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+        }
+
+    @classmethod
+    def _estimate_cost(cls, parsed: dict[str, int], model: Optional[str]) -> float:
+        """
+        Estimate USD cost from token counts and model name.
+
+        Uses a simple per-1M-token rate. Prompt and completion tokens are
+        weighted separately (completion is typically 3–5x more expensive).
+        Falls back to 'default' if model is unrecognised.
+        """
+        rate_per_1m = cls._COST_PER_1M_TOKENS["default"]
+        if model:
+            model_lower = model.lower()
+            for prefix, rate in cls._COST_PER_1M_TOKENS.items():
+                if prefix != "default" and prefix in model_lower:
+                    rate_per_1m = rate
+                    break
+
+        # Completion tokens cost ~3x prompt in most pricing models.
+        prompt_cost = parsed["prompt_tokens"] * rate_per_1m / 1_000_000
+        completion_cost = parsed["completion_tokens"] * rate_per_1m * 3 / 1_000_000
+        return round(prompt_cost + completion_cost, 6)
 
     def get_audit_log(self) -> List[dict]:
         records = self._memory.data.get("audit_log", [])

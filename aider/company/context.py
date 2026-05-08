@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
+from aider.company.playbook import PlaybookManager
 from aider.company.project import Project
 from aider.company.schemas import CompanyTask
 from aider.company.state import CompanyStateManager
@@ -126,48 +127,39 @@ class ContextBuilder:
 
     def _requested_playbook(self, requirements: list[str], task: CompanyTask) -> dict:
         """
-        Return a retrieval-filtered subset of playbook entries.
+        Return retrieval-ranked playbook patterns relevant to this task.
 
-        For each playbook category requested, score its entries against the
-        task query and keep only the top _MAX_PLAYBOOK_ITEMS. If a category
-        has fewer than that it's included in full.
+        Delegates to PlaybookManager.query() which:
+        - Handles both legacy string entries and structured pattern dicts
+        - Deduplicates at write time so the corpus is already clean
+        - Scores against the task query using MemoryRetriever
+        - Returns ordered by relevance, capped at _MAX_PLAYBOOK_ITEMS
         """
         want_all = "playbook.*" in requirements
         if not want_all and not any(r.startswith("playbook.") for r in requirements):
             return {}
 
-        playbook = self.state.get_playbook()
+        # Determine which categories were requested.
+        if want_all:
+            categories = None  # PlaybookManager.query() defaults to all
+        else:
+            categories = [
+                r.split(".", 1)[1]
+                for r in requirements
+                if r.startswith("playbook.")
+            ]
+
         query = self._task_query(task)
+        manager = PlaybookManager(self.state)
+        ranked = manager.query(
+            query,
+            categories=categories,
+            k=_MAX_PLAYBOOK_ITEMS,
+            min_score=_MIN_SCORE,
+        )
 
-        result: dict[str, list[str]] = {}
-
-        for key, values in playbook.items():
-            if not isinstance(values, list) or not values:
-                continue
-
-            # Check if this key was requested.
-            if not want_all and f"playbook.{key}" not in requirements:
-                continue
-
-            str_values = [str(v) for v in values if v]
-            if len(str_values) <= _MAX_PLAYBOOK_ITEMS:
-                # Small enough — no retrieval needed.
-                result[key] = str_values
-                continue
-
-            # Score and filter.
-            top = self.retrieve(
-                query, str_values, k=_MAX_PLAYBOOK_ITEMS, min_score=_MIN_SCORE
-            )
-            if top:
-                # Preserve original list order among winners.
-                top_texts = {chunk for chunk, _ in top}
-                result[key] = [v for v in str_values if v in top_texts]
-            else:
-                # Nothing scored — take the most recent items as a safe fallback.
-                result[key] = str_values[-_MAX_PLAYBOOK_ITEMS:]
-
-        return result
+        # ranked is already {category: [text, ...]} — pass through to formatting.
+        return ranked
 
     # ------------------------------------------------------------------
     # Query construction

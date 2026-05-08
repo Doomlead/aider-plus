@@ -7,10 +7,12 @@ import logging
 from typing import Awaitable, Callable, Dict, List, Optional, Union
 
 from aider.memory import ProjectMemory
+from aider.memory.pattern_extractor import AuditPatternExtractor
 from aider.company.approval import ApprovalManager
 from aider.company.context import ContextBuilder
 from aider.company.department import Department
 from aider.company.lifecycle import LifecycleEngine
+from aider.company.playbook import PlaybookManager
 from aider.company.project import Project
 from aider.company.state import CompanyStateManager
 from aider.company.schemas import (
@@ -894,49 +896,75 @@ class CompanyOrchestrator:
         if project is None:
             return
 
-        playbook = self.state.get_playbook()
-        playbook.setdefault("coding_standards", [])
-        playbook.setdefault("ux_preferences", [])
-        playbook.setdefault("deployment_gotchas", [])
+        playbook_manager = PlaybookManager(self.state)
 
+        # --- Extract structured patterns from the full audit log ---
+        extractor = AuditPatternExtractor(
+            self.state.get_audit_log(),
+            project_name=project.name,
+            project_id=project.project_id,
+        )
+        patterns = extractor.extract()
+
+        # --- Also synthesize from live deliverable state ---
+        # QA failure summary (richer than what's in the audit log alone)
         if project.qa_result and project.qa_result.status == "failure":
-            self._append_unique_playbook_item(
-                playbook["coding_standards"],
-                f"Previous QA failed for {project.name}: {project.qa_result.content}",
-            )
+            qa_payload = project.qa_result.payload
+            if isinstance(qa_payload, dict):
+                failed_tests = qa_payload.get("qa_feedback", {}) or {}
+                if isinstance(failed_tests, dict):
+                    failed_list = failed_tests.get("failed_tests", [])
+                else:
+                    failed_list = []
+                test_results = str(qa_payload.get("test_results", ""))[:300]
+            else:
+                failed_list = []
+                test_results = str(qa_payload)[:300]
 
+            if failed_list:
+                tests_str = ", ".join(str(t) for t in failed_list[:3])
+                summary = (
+                    f"QA failure in '{project.name}': tests [{tests_str}]. "
+                    f"{test_results}"
+                )
+            else:
+                summary = f"QA failure in '{project.name}': {test_results}"
+
+            if summary:
+                playbook_manager.append_raw("coding_standards", summary)
+
+        # Deployment failure from the live devops deliverable
         if d.department == "devops" and d.status == "failure":
-            self._append_unique_playbook_item(
-                playbook["deployment_gotchas"],
-                f"Previous deployment failed for {project.name}: {d.content}",
+            deploy_text = (
+                str(d.payload.get("summary", ""))
+                if isinstance(d.payload, dict)
+                else str(d.payload)
             )
-
-        for record in self.state.get_audit_log():
-            if (
-                not isinstance(record, dict)
-                or record.get("event_type") != "approval_resolved"
-            ):
-                continue
-            metadata = record.get("metadata", {})
-            if not isinstance(metadata, dict) or metadata.get("approved") is not False:
-                continue
-            feedback = metadata.get("reason") or metadata.get("feedback")
-            if feedback:
-                self._append_unique_playbook_item(
-                    playbook["ux_preferences"],
-                    f"CEO feedback from a previous approval: {feedback}",
+            if deploy_text:
+                playbook_manager.append_raw(
+                    "deployment_gotchas",
+                    f"Deployment failure in '{project.name}': {deploy_text[:300]}",
                 )
 
-        self.state.save_playbook(playbook)
+        # --- Merge all extracted patterns (with dedup and size cap) ---
+        playbook_manager.merge_patterns(patterns)
+
         self._log_event(
             "post_mortem_completed",
-            {"project_id": project.project_id, "phase": project.phase},
+            {
+                "project_id": project.project_id,
+                "phase": project.phase,
+                "patterns_extracted": {
+                    cat: len(pats) for cat, pats in patterns.items()
+                },
+            },
             "orchestrator",
             {"task_id": d.task_id},
         )
 
     @staticmethod
     def _append_unique_playbook_item(items: list, value: str) -> None:
+        """Deprecated: use PlaybookManager.append_raw() instead."""
         value = str(value)[:500]
         if value and value not in items:
             items.append(value)

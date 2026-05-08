@@ -125,6 +125,7 @@ class CompanyStateManager:
         token_usage: Any,
         *,
         model: Optional[str] = None,
+        cache_enabled: Optional[bool] = None,
     ) -> None:
         """
         Record a token usage event for *department*.
@@ -153,6 +154,8 @@ class CompanyStateManager:
                 "completion_tokens": 0,
                 "estimated_cost_usd": 0.0,
                 "run_count": 0,
+                "cached_runs": 0,
+                "uncached_runs": 0,
             }
         else:
             dept_record = {
@@ -163,6 +166,8 @@ class CompanyStateManager:
                     dept_record.get("estimated_cost_usd", 0.0) or 0.0
                 ),
                 "run_count": int(dept_record.get("run_count", 0) or 0),
+                "cached_runs": int(dept_record.get("cached_runs", 0) or 0),
+                "uncached_runs": int(dept_record.get("uncached_runs", 0) or 0),
             }
 
         dept_record["total_tokens"] += parsed["total_tokens"]
@@ -172,6 +177,10 @@ class CompanyStateManager:
             dept_record["estimated_cost_usd"] + cost, 6
         )
         dept_record["run_count"] += 1
+        if cache_enabled is True:
+            dept_record["cached_runs"] += 1
+        elif cache_enabled is False:
+            dept_record["uncached_runs"] += 1
         usage_map[department] = dept_record
 
         self._memory.update({"observability": observability})

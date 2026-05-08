@@ -7,8 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
-
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 class MemoryRepository(ABC):
@@ -41,6 +40,10 @@ class ProjectMemoryMigrator:
             migrated = self._migrate_to_v2(migrated)
             version = 2
 
+        if version < 3:
+            migrated = self._migrate_to_v3(migrated)
+            version = 3
+
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         self._ensure_defaults(migrated)
         return migrated
@@ -52,6 +55,70 @@ class ProjectMemoryMigrator:
                 "turns_per_phase": {},
                 "token_usage_per_department": {},
             }
+        return data
+
+    def _migrate_to_v3(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Expand token_usage_per_department from {dept: int} to {dept: UsageRecord}.
+        Add qa_metrics and task_metrics to observability.
+        """
+        observability = data.get("observability")
+        if not isinstance(observability, dict):
+            observability = {}
+            data["observability"] = observability
+
+        # Migrate flat token counts to structured records.
+        raw_usage = observability.get("token_usage_per_department", {})
+        if isinstance(raw_usage, dict):
+            structured: Dict[str, Any] = {}
+            for dept, value in raw_usage.items():
+                if isinstance(value, int):
+                    # Old format: just a total.
+                    structured[dept] = {
+                        "total_tokens": value,
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "estimated_cost_usd": 0.0,
+                        "run_count": 0,
+                    }
+                elif isinstance(value, dict):
+                    # Already structured — ensure all keys present.
+                    structured[dept] = {
+                        "total_tokens": int(value.get("total_tokens", 0) or 0),
+                        "prompt_tokens": int(value.get("prompt_tokens", 0) or 0),
+                        "completion_tokens": int(
+                            value.get("completion_tokens", 0) or 0
+                        ),
+                        "estimated_cost_usd": float(
+                            value.get("estimated_cost_usd", 0.0) or 0.0
+                        ),
+                        "run_count": int(value.get("run_count", 0) or 0),
+                    }
+            observability["token_usage_per_department"] = structured
+
+        # Add qa_metrics if absent.
+        observability.setdefault(
+            "qa_metrics",
+            {
+                "total_runs": 0,
+                "passed": 0,
+                "failed": 0,
+                "no_tests": 0,
+                "pass_rate": 0.0,
+            },
+        )
+
+        # Add task_metrics if absent.
+        observability.setdefault(
+            "task_metrics",
+            {
+                "total_tasks": 0,
+                "qa_revision_cycles": 0,
+                "engineering_revision_cycles": 0,
+                "avg_qa_revisions": 0.0,
+            },
+        )
+
         return data
 
     def _ensure_defaults(self, data: Dict[str, Any]) -> None:
@@ -75,6 +142,27 @@ class ProjectMemoryMigrator:
             observability["turns_per_phase"] = {}
         if not isinstance(observability.get("token_usage_per_department"), dict):
             observability["token_usage_per_department"] = {}
+
+        # v3 keys
+        observability.setdefault(
+            "qa_metrics",
+            {
+                "total_runs": 0,
+                "passed": 0,
+                "failed": 0,
+                "no_tests": 0,
+                "pass_rate": 0.0,
+            },
+        )
+        observability.setdefault(
+            "task_metrics",
+            {
+                "total_tasks": 0,
+                "qa_revision_cycles": 0,
+                "engineering_revision_cycles": 0,
+                "avg_qa_revisions": 0.0,
+            },
+        )
 
 
 class JsonMemoryRepository(MemoryRepository):
@@ -143,22 +231,18 @@ class SQLiteMemoryRepository(MemoryRepository):
     def _ensure_database(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     version INTEGER PRIMARY KEY
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS project_memory (
                     key TEXT PRIMARY KEY,
                     schema_version INTEGER NOT NULL,
                     data TEXT NOT NULL
                 )
-                """
-            )
+                """)
             existing = {
                 row[0] for row in conn.execute("SELECT version FROM schema_migrations")
             }

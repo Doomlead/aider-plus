@@ -105,79 +105,6 @@ def make_new_repo(git_root, io):
     return repo
 
 
-def _handle_approval_cli(action: str, gate_id: str, reason: Optional[str] = None) -> int:
-    """
-    Resolve a pending approval gate from the CLI without requiring Discord.
-    Reads .aider/project_memory.json, finds the gate, writes the resolution,
-    and prints confirmation. The next orchestrator run picks it up via recovery.
-
-    Usage:
-        aider approve <gate-id>
-        aider reject <gate-id> [reason]
-    """
-    import json as _json
-
-    memory_path = Path(".aider") / "project_memory.json"
-    if not memory_path.exists():
-        print(f"No project memory found at {memory_path}. Are you in a project directory?")
-        return 1
-
-    try:
-        data = _json.loads(memory_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        print(f"Failed to read project memory: {e}")
-        return 1
-
-    pending = data.get("pending_approvals", [])
-    matched = None
-    for approval in pending:
-        if str(approval.get("task_id")) == gate_id:
-            matched = approval
-            break
-
-    if matched is None:
-        print(f"No pending approval found with gate-id: {gate_id}")
-        print("Pending gates:")
-        if not pending:
-            print("  (none)")
-        for a in pending:
-            if a.get("status") == "pending":
-                print(
-                    f"  {a.get('task_id')}  [{a.get('gate_name')}]  "
-                    f"{str(a.get('artifact_preview', ''))[:60]}"
-                )
-        return 1
-
-    if matched.get("status") != "pending":
-        print(f"Gate {gate_id} is already resolved (status: {matched.get('status')}).")
-        return 0
-
-    # Write the resolution into the record. ApprovalManager.recover_pending_approvals
-    # checks status == "pending" to decide whether to re-emit; setting it to
-    # "approved" / "rejected" here means the next recovery pass skips it cleanly.
-    # The orchestrator's _complete_recovered_gate will NOT be re-entered for this gate
-    # because the future is never created — instead we write a sidecar file that the
-    # Discord/bot facade checks on startup via a new hook (see Step 2 below).
-    matched["status"] = "approved" if action == "approve" else "rejected"
-    matched["cli_resolution"] = {
-        "action": action,
-        "reason": reason or ("Approved via CLI" if action == "approve" else "Rejected via CLI"),
-        "resolved_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
-        "source": "cli",
-    }
-
-    try:
-        memory_path.write_text(_json.dumps(data, indent=2), encoding="utf-8")
-    except Exception as e:
-        print(f"Failed to write resolution: {e}")
-        return 1
-
-    symbol = "✅" if action == "approve" else "❌"
-    print(f"{symbol} Gate '{matched.get('gate_name')}' ({gate_id}) {action}d via CLI.")
-    print("The orchestrator will pick this up on next startup via approval recovery.")
-    return 0
-
-
 def setup_git(git_root, io):
     if git is None:
         return
@@ -553,6 +480,87 @@ def sanity_check_repo(repo, io):
     return False
 
 
+def _handle_approval_cli(action: str, gate_id: str, reason: Optional[str] = None) -> int:
+    """
+    Resolve a pending approval gate from the CLI without requiring Discord.
+
+    Reads .aider/project_memory.json, finds the matching pending approval by
+    task_id, writes the resolution in-place, and prints confirmation.
+    ApprovalManager.recover_pending_approvals honours cli_resolution records
+    on next orchestrator startup.
+
+    Usage:
+        aider approve <gate-id>
+        aider reject <gate-id> [reason]
+    """
+    import json as _json
+    from datetime import datetime as _dt
+
+    memory_path = Path(".aider") / "project_memory.json"
+    if not memory_path.exists():
+        print(f"No project memory found at {memory_path}.")
+        print("Run this command from your project directory (where .aider/ lives).")
+        return 1
+
+    try:
+        data = _json.loads(memory_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"Failed to read project memory: {exc}")
+        return 1
+
+    pending = data.get("pending_approvals", [])
+    matched = None
+    for approval in pending:
+        if str(approval.get("task_id")) == gate_id:
+            matched = approval
+            break
+
+    if matched is None:
+        print(f"No approval found with gate-id: {gate_id}")
+        active = [a for a in pending if a.get("status") == "pending"]
+        if active:
+            print("\nPending gates:")
+            for a in active:
+                preview = str(a.get("artifact_preview", ""))[:60].replace("\n", " ")
+                print(f"  {a.get('task_id')}  [{a.get('gate_name')}]  {preview}")
+        else:
+            print("No pending gates found.")
+        return 1
+
+    if matched.get("status") != "pending":
+        existing = matched.get("cli_resolution", {})
+        print(
+            f"Gate {gate_id} is already resolved "
+            f"(status: {matched.get('status')}, "
+            f"action: {existing.get('action', 'unknown')})."
+        )
+        return 0
+
+    matched["status"] = "approved" if action == "approve" else "rejected"
+    matched["cli_resolution"] = {
+        "action": action,
+        "reason": reason or (
+            "Approved via CLI" if action == "approve" else "Rejected via CLI"
+        ),
+        "resolved_at": _dt.utcnow().isoformat() + "Z",
+        "source": "cli",
+    }
+
+    try:
+        memory_path.write_text(_json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        print(f"Failed to write resolution: {exc}")
+        return 1
+
+    symbol = "✅" if action == "approve" else "❌"
+    gate_name = matched.get("gate_name", "approval")
+    print(f"{symbol} Gate '{gate_name}' ({gate_id}) {action}d via CLI.")
+    if reason:
+        print(f"   Reason: {reason}")
+    print("The orchestrator will pick this up on next startup via approval recovery.")
+    return 0
+
+
 def main(argv=None, input=None, output=None, force_git_root=None, return_coder=False):
     report_uncaught_exceptions()
 
@@ -562,7 +570,10 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         io = InputOutput(pretty=True, yes=False, input=input, output=output)
         return run_onboarding(io)
 
-    if argv and argv[0] in {"approve", "reject"} and len(argv) >= 2:
+    if argv and argv[0] in {"approve", "reject"}:
+        if len(argv) < 2:
+            print(f"Usage: aider {argv[0]} <gate-id> [reason]")
+            return 1
         return _handle_approval_cli(argv[0], argv[1], argv[2] if len(argv) > 2 else None)
 
     if git is None:

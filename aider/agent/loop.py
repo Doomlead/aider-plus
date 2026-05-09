@@ -69,10 +69,18 @@ class AgentContext:
 class AiderAgentLoop:
     """Thin multi-step agent loop for orchestrating one primary aider coding tool."""
 
-    def __init__(self, *, coder, callback: Optional[Callable[[str, dict], Awaitable[None]]] = None, config: Optional[AgentLoopConfig] = None):
+    def __init__(
+        self,
+        *,
+        coder,
+        callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
+        config: Optional[AgentLoopConfig] = None,
+        enable_prompt_caching: bool = True,
+    ):
         self.coder = coder
         self.callback = callback
         self.config = config or AgentLoopConfig()
+        self.enable_prompt_caching = enable_prompt_caching
         self._ensure_onboarded_state()
         self.editor_coder = self._build_editor_coder()
         self.architect_coder = self._build_architect_coder()
@@ -217,7 +225,31 @@ class AiderAgentLoop:
             project_memory=project_state,
         )
 
-    async def _call_llm(self, messages: list[dict]) -> Any:
+    def _apply_cache_control(
+        self,
+        kwargs: dict[str, Any],
+        enable_caching: bool | None = None,
+    ) -> dict[str, Any]:
+        """Merge prompt caching controls into LiteLLM kwargs when enabled."""
+        cache_enabled = (
+            enable_caching
+            if enable_caching is not None
+            else self.enable_prompt_caching
+        )
+        if not cache_enabled:
+            return kwargs
+
+        extra_body = dict(kwargs.pop("extra_body", None) or {})
+        extra_body.setdefault("cache_control", {"type": "ephemeral"})
+        kwargs["extra_body"] = extra_body
+        return kwargs
+
+    async def _call_llm(
+        self,
+        messages: list[dict],
+        *,
+        enable_caching: bool | None = None,
+    ) -> Any:
         extra_params = dict(getattr(self.coder.main_model, "extra_params", {}) or {})
         kwargs = {
             "model": self.coder.main_model.name,
@@ -227,6 +259,7 @@ class AiderAgentLoop:
             "temperature": 0,
             **extra_params,
         }
+        kwargs = self._apply_cache_control(kwargs, enable_caching)
         return await asyncio.to_thread(litellm.completion, **kwargs)
 
 
@@ -236,6 +269,8 @@ class AiderAgentLoop:
         task: str,
         system_prompt: str,
         model: str | None = None,
+        enable_caching: bool | None = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Run a structured, non-editing LLM task through the agent loop."""
         selected_model = model or self.coder.main_model.name
@@ -244,20 +279,30 @@ class AiderAgentLoop:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": task},
         ]
+        request_kwargs = {
+            "model": selected_model,
+            "messages": messages,
+            "temperature": 0,
+            **extra_params,
+            **kwargs,
+        }
+        request_kwargs = self._apply_cache_control(request_kwargs, enable_caching)
         await self._emit("structured_review_start", {"model": selected_model})
         completion = await asyncio.to_thread(
             litellm.completion,
-            model=selected_model,
-            messages=messages,
-            temperature=0,
-            **extra_params,
+            **request_kwargs,
         )
         message = completion.choices[0].message
         content = getattr(message, "content", None) or ""
         await self._emit("structured_review_complete", {"model": selected_model})
         return {"content": content, "model": selected_model}
 
-    async def run(self, user_message: str) -> Dict[str, Any]:
+    async def run(
+        self,
+        user_message: str,
+        *,
+        enable_caching: bool | None = None,
+    ) -> Dict[str, Any]:
         conversation_memory = getattr(self.coder, "conversation_memory", None)
         if isinstance(conversation_memory, ConversationMemory):
             conversation_memory.add(role="user", content=user_message)
@@ -273,7 +318,7 @@ class AiderAgentLoop:
                 {"role": "system", "content": context.system_prompt},
                 {"role": "user", "content": user_turn_content},
             ]
-            completion = await self._call_llm(messages)
+            completion = await self._call_llm(messages, enable_caching=enable_caching)
             message = completion.choices[0].message
             tool_calls = getattr(message, "tool_calls", None) or []
 

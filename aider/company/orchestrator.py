@@ -9,6 +9,7 @@ from typing import Awaitable, Callable, Dict, List, Optional, Union
 from aider.memory import ProjectMemory
 from aider.memory.pattern_extractor import AuditPatternExtractor
 from aider.company.approval import ApprovalManager
+from aider.company.config import CompanyConfig, default_company_config
 from aider.company.context import ContextBuilder
 from aider.company.department import Department
 from aider.company.lifecycle import LifecycleEngine
@@ -28,7 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 class CompanyOrchestrator:
-    def __init__(self, project_memory: ProjectMemory):
+    def __init__(
+        self,
+        project_memory: ProjectMemory,
+        company_config: CompanyConfig | None = None,
+    ):
+        self.company_config = company_config or default_company_config()
         self.state = CompanyStateManager(project_memory)
         self.context_builder = ContextBuilder(self.state)
         self.lifecycle = LifecycleEngine(self.state)
@@ -71,6 +77,7 @@ class CompanyOrchestrator:
 
     def register(self, dept: Department) -> None:
         self.departments[dept.name] = dept
+        self._apply_department_config(dept.name, dept)
 
         def route_deliverable(deliverable: Deliverable) -> None:
             self.create_task(
@@ -85,6 +92,39 @@ class CompanyOrchestrator:
 
         dept._submit_task = submit_task
         dept._on_event = self._emit
+
+    def _apply_department_configs(self) -> None:
+        """Wire CompanyConfig values into registered department agent loops."""
+        for dept_name, department in self.departments.items():
+            self._apply_department_config(dept_name, department)
+
+    def _apply_department_config(self, dept_name: str, department: Department) -> None:
+        """Wire one DepartmentConfig into a department-owned agent loop."""
+        dept_config = self.company_config.for_department(dept_name)
+        agent_loop = getattr(department, "agent_loop", None)
+        if agent_loop is None:
+            return
+
+        agent_loop.enable_prompt_caching = dept_config.enable_prompt_caching
+
+        loop_config = getattr(agent_loop, "config", None)
+        if loop_config is not None:
+            loop_config.department_config = dept_config
+
+        reviewer_config = self.company_config.departments.get("reviewer")
+        if reviewer_config is not None:
+            agent_loop.reviewer_department_config = reviewer_config
+            if (
+                loop_config is not None
+                and getattr(loop_config, "reviewer_model", None) is None
+            ):
+                loop_config.reviewer_model = reviewer_config.preferred_model
+
+        if dept_config.preferred_model:
+            if hasattr(agent_loop, "model"):
+                agent_loop.model = dept_config.preferred_model
+            elif loop_config is not None and hasattr(loop_config, "model"):
+                loop_config.model = dept_config.preferred_model
 
     def create_task(self, coro, label: Optional[str] = None) -> asyncio.Task:
         """Create and track an orchestrator-owned background task."""
@@ -623,7 +663,17 @@ class CompanyOrchestrator:
         model = d.metadata.get("model") or (
             d.payload.get("model") if isinstance(d.payload, dict) else None
         )
-        self.state.record_department_tokens(d.department, token_usage, model=model)
+        cache_enabled = (
+            d.metadata.get("cache_enabled")
+            if self.company_config.record_caching_stats
+            else None
+        )
+        self.state.record_department_tokens(
+            d.department,
+            token_usage,
+            model=model,
+            cache_enabled=cache_enabled,
+        )
 
     def company_status(self) -> str:
         project = self.active_project
@@ -684,9 +734,16 @@ class CompanyOrchestrator:
                     total = rec.get("total_tokens", 0)
                     cost = rec.get("estimated_cost_usd", 0.0)
                     runs = rec.get("run_count", 0)
+                    cached = rec.get("cached_runs", 0)
+                    uncached = rec.get("uncached_runs", 0)
+                    cache_info = (
+                        f", {cached} cached/{uncached} uncached"
+                        if (cached + uncached) > 0
+                        else ""
+                    )
                     lines.append(
                         f"  {dept}: {total:,} tokens "
-                        f"(~${cost:.4f} USD, {runs} runs)"
+                        f"(~${cost:.4f} USD, {runs} runs{cache_info})"
                     )
                 else:
                     lines.append(f"  {dept}: {rec} tokens")

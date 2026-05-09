@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import re
 import shlex
@@ -198,7 +199,10 @@ Pay special attention to the reviewer's suggestions."""
         if record_department_memory:
             self.conversation.add(role="user", content=task_text)
 
-        result = await self.agent_loop.run(task_text)
+        result = await self._run_agent_loop(
+            task_text,
+            enable_caching=self._caching_enabled(),
+        )
 
         content = self._result_content(result)
         if content and record_department_memory:
@@ -209,6 +213,7 @@ Pay special attention to the reviewer's suggestions."""
         metadata.setdefault("revision_count", self._revision_count)
         metadata.setdefault("review_feedback_applied", reviewer_feedback)
         metadata.setdefault("last_reviewer_issues", self._last_reviewer_issues)
+        metadata.setdefault("cache_enabled", self._caching_enabled())
         await self._emit_engineering_event(
             task.task_id,
             "programmer_complete",
@@ -301,6 +306,7 @@ Pay special attention to the reviewer's suggestions."""
                 "reviewer_feedback_summary": reviewer_feedback_summary,
             }
         )
+        metadata["cache_enabled"] = self._caching_enabled(role="reviewer")
         payload = previous_deliverable.payload
         if review_data["needs_revision"]:
             payload = (
@@ -331,6 +337,55 @@ Pay special attention to the reviewer's suggestions."""
             review_feedback=review_data,
             review_passed=review_data["review_passed"],
         )
+
+
+    async def _run_agent_loop(
+        self,
+        task_text: str,
+        *,
+        enable_caching: bool,
+    ):
+        """Run the agent loop while preserving compatibility with older loops."""
+        if self._callable_accepts_kw(self.agent_loop.run, "enable_caching"):
+            return await self.agent_loop.run(
+                task_text,
+                enable_caching=enable_caching,
+            )
+        return await self.agent_loop.run(task_text)
+
+    @staticmethod
+    def _callable_accepts_kw(func, kwarg: str) -> bool:
+        """Return whether *func* accepts *kwarg* or arbitrary keyword args."""
+        try:
+            signature = inspect.signature(func)
+        except (TypeError, ValueError):
+            return False
+        return kwarg in signature.parameters or any(
+            param.kind is inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        )
+
+    def _caching_enabled(self, role: str = "engineering") -> bool:
+        """
+        Resolve the caching flag for this department call.
+
+        Checks, in order:
+        1. DepartmentConfig attached to the agent loop config by the orchestrator.
+        2. DepartmentConfig attached directly to the agent loop for reviewer overrides.
+        3. The agent loop's enable_prompt_caching flag.
+        4. True, preserving the opt-out default for company orchestration.
+        """
+        loop_config = getattr(self.agent_loop, "config", None)
+        dept_config = getattr(loop_config, "department_config", None)
+        if role == "reviewer":
+            dept_config = (
+                getattr(self.agent_loop, "reviewer_department_config", None)
+                or dept_config
+            )
+        if dept_config is not None:
+            return bool(getattr(dept_config, "enable_prompt_caching", True))
+
+        return bool(getattr(self.agent_loop, "enable_prompt_caching", True))
 
     async def request_spec_clarification(self, question: str) -> str:
         """Ask Product to clarify an ambiguous or incomplete PRD detail."""
@@ -428,11 +483,14 @@ Be specific and actionable."""
         )
         run_structured = getattr(self.agent_loop, "run_structured", None)
         if callable(run_structured):
-            return await run_structured(
-                task=task,
-                system_prompt=self._get_reviewer_system_prompt(review_context),
-                model=reviewer_model,
-            )
+            kwargs = {
+                "task": task,
+                "system_prompt": self._get_reviewer_system_prompt(review_context),
+                "model": reviewer_model,
+            }
+            if self._callable_accepts_kw(run_structured, "enable_caching"):
+                kwargs["enable_caching"] = self._caching_enabled(role="reviewer")
+            return await run_structured(**kwargs)
 
         coder = getattr(self.agent_loop, "architect_coder", None) or getattr(
             self.agent_loop, "coder", None

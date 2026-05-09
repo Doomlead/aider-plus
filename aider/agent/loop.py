@@ -75,6 +75,7 @@ class AiderAgentLoop:
         coder,
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
         config: Optional[AgentLoopConfig] = None,
+        tool_registry: ToolRegistry | None = None,
         enable_prompt_caching: bool = True,
     ):
         self.coder = coder
@@ -84,7 +85,7 @@ class AiderAgentLoop:
         self._ensure_onboarded_state()
         self.editor_coder = self._build_editor_coder()
         self.architect_coder = self._build_architect_coder()
-        self.tool_registry = ToolRegistry()
+        self.tool_registry = tool_registry or ToolRegistry()
         self.tool_registry.register(
             Tool(
                 name="aider_coder",
@@ -145,6 +146,10 @@ class AiderAgentLoop:
         if self.config.architect_model:
             kwargs["main_model"] = models.Model(self.config.architect_model)
         return self.coder.clone(**kwargs)
+
+    @property
+    def default_model(self) -> str:
+        return self.coder.main_model.name
 
     async def _emit(self, event_name: str, payload: dict):
         if self.callback:
@@ -225,17 +230,21 @@ class AiderAgentLoop:
             project_memory=project_state,
         )
 
+    def _resolve_cache_enabled(self, enable_caching: bool | None = None) -> bool:
+        return (
+            enable_caching
+            if enable_caching is not None
+            else self.enable_prompt_caching
+        )
+
     def _apply_cache_control(
         self,
         kwargs: dict[str, Any],
         enable_caching: bool | None = None,
     ) -> dict[str, Any]:
-        """Merge prompt caching controls into LiteLLM kwargs when enabled."""
-        cache_enabled = (
-            enable_caching
-            if enable_caching is not None
-            else self.enable_prompt_caching
-        )
+        """Merge high-level prompt caching controls into LLM kwargs."""
+        cache_enabled = self._resolve_cache_enabled(enable_caching)
+        kwargs["cache_prompts"] = cache_enabled
         if not cache_enabled:
             return kwargs
 
@@ -246,22 +255,37 @@ class AiderAgentLoop:
 
     async def _call_llm(
         self,
-        messages: list[dict],
+        messages: list[dict] | None = None,
         *,
+        task: str | None = None,
+        system_prompt: str | None = None,
+        model: str | None = None,
         enable_caching: bool | None = None,
+        enable_prompt_caching: bool | None = None,
+        **kwargs,
     ) -> Any:
+        if messages is None:
+            messages = [
+                {"role": "system", "content": system_prompt or ""},
+                {"role": "user", "content": task or ""},
+            ]
+        cache_override = (
+            enable_prompt_caching
+            if enable_prompt_caching is not None
+            else enable_caching
+        )
         extra_params = dict(getattr(self.coder.main_model, "extra_params", {}) or {})
-        kwargs = {
-            "model": self.coder.main_model.name,
+        request_kwargs = {
+            "model": model or self.coder.main_model.name,
             "messages": messages,
             "tools": self.tool_registry.get_tool_definitions(),
             "tool_choice": "auto",
             "temperature": 0,
             **extra_params,
+            **kwargs,
         }
-        kwargs = self._apply_cache_control(kwargs, enable_caching)
-        return await asyncio.to_thread(litellm.completion, **kwargs)
-
+        request_kwargs = self._apply_cache_control(request_kwargs, cache_override)
+        return await asyncio.to_thread(litellm.completion, **request_kwargs)
 
     async def run_structured(
         self,
@@ -273,24 +297,16 @@ class AiderAgentLoop:
         **kwargs,
     ) -> Dict[str, Any]:
         """Run a structured, non-editing LLM task through the agent loop."""
-        selected_model = model or self.coder.main_model.name
-        extra_params = dict(getattr(self.coder.main_model, "extra_params", {}) or {})
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": task},
-        ]
-        request_kwargs = {
-            "model": selected_model,
-            "messages": messages,
-            "temperature": 0,
-            **extra_params,
-            **kwargs,
-        }
-        request_kwargs = self._apply_cache_control(request_kwargs, enable_caching)
+        selected_model = model or self.default_model
         await self._emit("structured_review_start", {"model": selected_model})
-        completion = await asyncio.to_thread(
-            litellm.completion,
-            **request_kwargs,
+        completion = await self._call_llm(
+            task=task,
+            system_prompt=system_prompt,
+            model=selected_model,
+            enable_prompt_caching=self._resolve_cache_enabled(enable_caching),
+            tools=None,
+            tool_choice=None,
+            **kwargs,
         )
         message = completion.choices[0].message
         content = getattr(message, "content", None) or ""

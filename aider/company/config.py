@@ -43,22 +43,31 @@ class CompanyConfig:
             observability section of project memory.
     """
 
-    departments: Dict[str, DepartmentConfig] = field(default_factory=dict)
     default_enable_caching: bool = True
+    departments: Dict[str, DepartmentConfig] = field(default_factory=dict)
     record_caching_stats: bool = True
 
-    def for_department(self, name: str) -> DepartmentConfig:
+    def get_department_config(self, name: str) -> DepartmentConfig:
         """
-        Return the DepartmentConfig for *name*, falling back to a default.
+        Return the DepartmentConfig for *name*, falling back to company defaults.
 
-        Never raises, so callers don't need to guard against missing entries.
+        Department keys are matched case-insensitively so callers can use
+        user-facing labels without having to normalize them first.
         """
-        if name in self.departments:
-            return self.departments[name]
+        key = name.lower()
+        if key in self.departments:
+            return self.departments[key]
+        for dept_name, dept_config in self.departments.items():
+            if dept_name.lower() == key:
+                return dept_config
         return DepartmentConfig(
             name=name,
             enable_prompt_caching=self.default_enable_caching,
         )
+
+    def for_department(self, name: str) -> DepartmentConfig:
+        """Return the DepartmentConfig for *name* (backwards-compatible alias)."""
+        return self.get_department_config(name)
 
 
 def default_company_config() -> CompanyConfig:

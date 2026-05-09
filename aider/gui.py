@@ -21,6 +21,7 @@ from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
 from aider.coders import Coder
 from aider.company.audit import AuditLogViewer
+from aider.company.config import default_company_config
 from aider.company.departments.devops import DevOpsDepartment
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
@@ -205,16 +206,33 @@ class DesktopCompanySession:
         )
         project_memory = self.coder.project_memory
         conversation_memory = self.coder.conversation_memory
+        company_config = default_company_config()
         self.engineering = EngineeringDepartment(
             project_memory=project_memory,
             agent_loop=agent_loop,
             conversation_memory=conversation_memory,
+            config=company_config.get_department_config("engineering"),
         )
-        self.product = ProductDepartment(project_memory=project_memory)
-        self.ux = UXDepartment(project_memory=project_memory)
-        self.qa = QADepartment(project_memory=project_memory)
-        self.devops = DevOpsDepartment(project_memory=project_memory)
-        self.orchestrator = CompanyOrchestrator(project_memory=project_memory)
+        self.product = ProductDepartment(
+            project_memory=project_memory,
+            config=company_config.get_department_config("product"),
+        )
+        self.ux = UXDepartment(
+            project_memory=project_memory,
+            config=company_config.get_department_config("ux"),
+        )
+        self.qa = QADepartment(
+            project_memory=project_memory,
+            config=company_config.get_department_config("qa"),
+        )
+        self.devops = DevOpsDepartment(
+            project_memory=project_memory,
+            config=company_config.get_department_config("devops"),
+        )
+        self.orchestrator = CompanyOrchestrator(
+            project_memory=project_memory,
+            company_config=company_config,
+        )
         self.orchestrator.active_project = self.active_project
         for department in (
             self.product,

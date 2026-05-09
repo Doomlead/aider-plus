@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from aider.company.config import DepartmentConfig
 from aider.company.department import Department
 from aider.company.schemas import CompanyTask, Deliverable
 from aider.agent.loop import AiderAgentLoop
@@ -30,8 +31,9 @@ class EngineeringDepartment(Department):
         project_memory: ProjectMemory,
         agent_loop: AiderAgentLoop,
         conversation_memory: Optional[ConversationMemory] = None,
+        config: Optional[DepartmentConfig] = None,
     ):
-        super().__init__(project_memory, conversation_memory)
+        super().__init__(project_memory, conversation_memory, config=config)
         self.agent_loop = agent_loop
         self.tools = ["aider_coder"]
         self.current_stage: str = "programmer"
@@ -198,7 +200,11 @@ Pay special attention to the reviewer's suggestions."""
         if record_department_memory:
             self.conversation.add(role="user", content=task_text)
 
-        result = await self.agent_loop.run(task_text)
+        result = await self.agent_loop.run(
+            task_text,
+            enable_caching=self._get_caching_enabled(),
+            model=self._preferred_model(),
+        )
 
         content = self._result_content(result)
         if content and record_department_memory:
@@ -432,6 +438,7 @@ Be specific and actionable."""
                 task=task,
                 system_prompt=self._get_reviewer_system_prompt(review_context),
                 model=reviewer_model,
+                enable_caching=self._get_caching_enabled(),
             )
 
         coder = getattr(self.agent_loop, "architect_coder", None) or getattr(
@@ -450,10 +457,11 @@ Be specific and actionable."""
         raise RuntimeError("Engineering reviewer coder does not support structured execution.")
 
     def _reviewer_model(self) -> str:
-        config = getattr(self.agent_loop, "config", None)
+        agent_config = getattr(self.agent_loop, "config", None)
         return (
-            getattr(config, "reviewer_model", None)
-            or getattr(config, "architect_model", None)
+            self._preferred_model()
+            or getattr(agent_config, "reviewer_model", None)
+            or getattr(agent_config, "architect_model", None)
             or "claude-3-7-sonnet-20250219"
         )
 

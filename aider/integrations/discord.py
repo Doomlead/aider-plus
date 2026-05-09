@@ -14,6 +14,7 @@ from typing import Awaitable, Callable, Dict, Optional, Set
 
 from aider.agent import AiderAgentLoop
 from aider.company.audit import AuditLogViewer
+from aider.company.config import default_company_config
 from aider.agent.loop import AgentLoopConfig
 from aider.company.approval import ApprovalManager
 from aider.company.orchestrator import CompanyOrchestrator
@@ -237,6 +238,7 @@ class DiscordAiderBot:
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
         company_event_callback: Optional[Callable[[object], Awaitable[None]]] = None,
     ) -> EngineeringDepartment:
+        company_config = default_company_config()
         agent_loop = AiderAgentLoop(
             coder=coder,
             callback=callback,
@@ -245,29 +247,38 @@ class DiscordAiderBot:
                 architect_model=self.config.architect_model,
                 editor_model=self.config.editor_model,
             ),
+            enable_prompt_caching=company_config.default_enable_caching,
         )
         self.engineering = EngineeringDepartment(
             project_memory=coder.project_memory,
             agent_loop=agent_loop,
             conversation_memory=coder.conversation_memory,
+            config=company_config.get_department_config("engineering"),
         )
         self.product = ProductDepartment(
             project_memory=coder.project_memory,
             conversation_memory=None,
+            config=company_config.get_department_config("product"),
         )
         self.ux = UXDepartment(
             project_memory=coder.project_memory,
             conversation_memory=None,
+            config=company_config.get_department_config("ux"),
         )
         self.qa = QADepartment(
             project_memory=coder.project_memory,
             conversation_memory=None,
+            config=company_config.get_department_config("qa"),
         )
         self.devops = DevOpsDepartment(
             project_memory=coder.project_memory,
             conversation_memory=None,
+            config=company_config.get_department_config("devops"),
         )
-        self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
+        self.orchestrator = CompanyOrchestrator(
+            project_memory=coder.project_memory,
+            company_config=company_config,
+        )
         self.orchestrator.active_project = self.active_project
         self.orchestrator.register(self.product)
         self.orchestrator.register(self.ux)

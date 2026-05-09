@@ -9,6 +9,7 @@ from typing import Awaitable, Callable, Dict, List, Optional, Union
 from aider.memory import ProjectMemory
 from aider.memory.pattern_extractor import AuditPatternExtractor
 from aider.company.approval import ApprovalManager
+from aider.company.config import CompanyConfig, default_company_config
 from aider.company.context import ContextBuilder
 from aider.company.department import Department
 from aider.company.lifecycle import LifecycleEngine
@@ -28,7 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 class CompanyOrchestrator:
-    def __init__(self, project_memory: ProjectMemory):
+    def __init__(
+        self,
+        project_memory: ProjectMemory,
+        company_config: Optional[CompanyConfig] = None,
+    ):
+        self.config = company_config or default_company_config()
         self.state = CompanyStateManager(project_memory)
         self.context_builder = ContextBuilder(self.state)
         self.lifecycle = LifecycleEngine(self.state)
@@ -70,6 +76,7 @@ class CompanyOrchestrator:
         return self.state.memory
 
     def register(self, dept: Department) -> None:
+        dept.config = self.config.get_department_config(dept.name)
         self.departments[dept.name] = dept
 
         def route_deliverable(deliverable: Deliverable) -> None:

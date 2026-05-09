@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Awaitable, Optional, List, Callable
 
 from aider.company.audit import append_audit_event
+from aider.company.config import DepartmentConfig
 from aider.company.interfaces import Deliverable
 from aider.memory import ProjectMemory, ConversationMemory
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
@@ -18,7 +19,9 @@ class Department(ABC):
         self,
         project_memory: ProjectMemory,
         conversation_memory: Optional[ConversationMemory] = None,
+        config: Optional[DepartmentConfig] = None,
     ):
+        self.config = config or DepartmentConfig(name=self.name)
         self.memory = project_memory
         self.conversation = conversation_memory or ConversationMemory()
         self.inbox: asyncio.Queue[CompanyTask] = asyncio.Queue()
@@ -40,6 +43,12 @@ class Department(ABC):
 
     def get_context_requirements(self) -> list[str]:
         return ["playbook.*"]
+
+    def _get_caching_enabled(self) -> bool:
+        return self.config.enable_prompt_caching
+
+    def _preferred_model(self) -> Optional[str]:
+        return self.config.preferred_model
 
     async def receive(self, task: CompanyTask) -> None:
         await self.inbox.put(task)

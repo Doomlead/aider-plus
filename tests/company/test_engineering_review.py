@@ -22,8 +22,10 @@ class FakeAgentLoop:
             {"conversation_memory": ConversationMemory(), "repo": None, "root": None},
         )()
 
-    async def run(self, task_text):
+    async def run(self, task_text, *, enable_caching=None, model=None):
         self.last_task_text = task_text
+        self.last_enable_caching = enable_caching
+        self.last_model = model
         return self.results.pop(0)
 
     async def _emit(self, event_name, payload):
@@ -167,9 +169,14 @@ class StructuredReviewAgentLoop(FakeAgentLoop):
         self.structured_result = structured_result
         self.structured_calls = []
 
-    async def run_structured(self, *, task, system_prompt, model):
+    async def run_structured(self, *, task, system_prompt, model, enable_caching=None):
         self.structured_calls.append(
-            {"task": task, "system_prompt": system_prompt, "model": model}
+            {
+                "task": task,
+                "system_prompt": system_prompt,
+                "model": model,
+                "enable_caching": enable_caching,
+            }
         )
         return self.structured_result
 
@@ -237,6 +244,7 @@ def test_reviewer_phase_uses_structured_agent_feedback(tmp_path):
             "Implementation needs a bounds check before QA."
         )
         assert loop.structured_calls[0]["model"] == "claude-3-7-sonnet-20250219"
+        assert loop.structured_calls[0]["enable_caching"] is True
         assert (
             "Original PRD / Requirements" in loop.structured_calls[0]["system_prompt"]
         )

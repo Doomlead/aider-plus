@@ -299,7 +299,7 @@ Use this for queues, CI jobs, service wrappers, or Discord/desktop backends that
 ```python
 from aider.agent.loop import AiderAgentLoop
 
-loop = AiderAgentLoop(coder, enable_prompt_caching=True)
+loop = AiderAgentLoop(coder=coder, enable_prompt_caching=True)
 result = await loop.run("Add validation and tests for the payment payload")
 ```
 
@@ -374,9 +374,9 @@ Aider Plus adds memory layers that are separate from git history:
 
 Aider Plus preserves upstream prompt-cache behavior for normal coder usage and adds Company-level controls:
 
-- `AiderAgentLoop(..., enable_prompt_caching=True|False)` controls whether agent LLM calls add cache-control metadata by default.
-- `AiderAgentLoop.run(..., enable_caching=...)` and `run_structured(..., enable_caching=...)` can override caching per call.
-- `CompanyConfig.default_enable_caching` controls departments without explicit overrides.
+- `AiderAgentLoop(..., enable_prompt_caching=True|False)` controls the high-level `cache_prompts` flag for agent LLM calls and adds cache-control metadata where supported.
+- `AiderAgentLoop.run(..., enable_caching=...)` and `run_structured(..., enable_caching=...)` can override caching per call without changing Aider `Coder` message formatting.
+- `CompanyConfig.default_enable_caching` controls departments without explicit overrides; `get_department_config()` resolves department names case-insensitively.
 - `DepartmentConfig.enable_prompt_caching` can toggle caching for Product, UX, Engineering, reviewer, QA, and DevOps independently.
 - `DepartmentConfig.preferred_model` can steer department/reviewer calls toward a preferred model.
 - The default company config enables caching for Product, UX, Engineering, and reviewer calls, while disabling it for smaller QA and DevOps calls.

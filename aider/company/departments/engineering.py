@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from aider.company.department import Department
+from aider.company.config import DepartmentConfig
 from aider.company.schemas import CompanyTask, Deliverable
 from aider.agent.loop import AiderAgentLoop
 from aider.memory import ProjectMemory, ConversationMemory
@@ -31,8 +32,9 @@ class EngineeringDepartment(Department):
         project_memory: ProjectMemory,
         agent_loop: AiderAgentLoop,
         conversation_memory: Optional[ConversationMemory] = None,
+        config: Optional[DepartmentConfig] = None,
     ):
-        super().__init__(project_memory, conversation_memory)
+        super().__init__(project_memory, conversation_memory, config=config)
         self.agent_loop = agent_loop
         self.tools = ["aider_coder"]
         self.current_stage: str = "programmer"
@@ -384,6 +386,9 @@ Pay special attention to the reviewer's suggestions."""
             )
         if dept_config is not None:
             return bool(getattr(dept_config, "enable_prompt_caching", True))
+
+        if self.config is not None:
+            return self._get_caching_enabled()
 
         return bool(getattr(self.agent_loop, "enable_prompt_caching", True))
 

@@ -100,7 +100,8 @@ class CompanyOrchestrator:
 
     def _apply_department_config(self, dept_name: str, department: Department) -> None:
         """Wire one DepartmentConfig into a department-owned agent loop."""
-        dept_config = self.company_config.for_department(dept_name)
+        dept_config = self.company_config.get_department_config(dept_name)
+        department.config = dept_config
         agent_loop = getattr(department, "agent_loop", None)
         if agent_loop is None:
             return

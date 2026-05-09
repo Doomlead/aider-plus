@@ -75,11 +75,12 @@ def format_approval_required_message(event: EventMessage) -> str:
     )
     handoff_to = payload.get("handoff_to") or "engineering"
     handoff_label = str(handoff_to).replace("_", " ").title()
-    title = (
-        "📋 **Product Department Deliverable Ready**"
-        if gate_name == "prd_approval"
-        else "🧪 **QA Release Approval Required**"
-    )
+    if gate_name == "prd_approval":
+        title = "📋 **Product Department Deliverable Ready**"
+    elif gate_name == "clarification_approval":
+        title = "❓ **Product Clarification Required**"
+    else:
+        title = "🧪 **QA Release Approval Required**"
     preview = str(payload.get("artifact_preview", "")).strip()
     quoted_preview = "\n".join(
         f"> {line}" if line else ">" for line in preview.splitlines()
@@ -253,7 +254,8 @@ class DiscordAiderBot:
         )
         self.product = ProductDepartment(
             project_memory=coder.project_memory,
-            conversation_memory=None,
+            agent_loop=agent_loop,
+            conversation_memory=coder.conversation_memory,
         )
         self.ux = UXDepartment(
             project_memory=coder.project_memory,

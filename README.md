@@ -62,10 +62,10 @@ Aider Plus currently includes:
 - **Prompt-caching controls**: agent calls can apply ephemeral cache-control metadata, Company workflows can configure cache behavior per department, and observability records cached versus uncached runs.
 - **Tool registry and department permissions**: tools are centrally registered, authorization happens before execution, and departments can be restricted by allowlists with structured permission errors.
 - **Company workflow engine**: `CompanyOrchestrator` coordinates projects, department registration, lifecycle transitions, handoffs, approval gates, event recording, background task management, audit viewing, post-mortem outcomes, observability, and playbook learning.
-- **Product, UX, Engineering, QA, and DevOps departments**: Product drafts PRDs and clarification requests, UX creates design handoffs, Engineering implements, QA runs targeted checks and release reports, and DevOps performs deployment/release completion.
+- **Product, UX, Engineering, QA, and DevOps departments**: Product now uses structured LLM calls to detect ambiguity, open CEO clarification gates, generate typed PRDs, self-review requirements for quality, and hand off Markdown plus structured PRD metadata; UX creates design handoffs, Engineering implements, QA runs targeted checks and release reports, and DevOps performs deployment/release completion.
 - **Engineering programmer/reviewer loop**: Engineering runs programmer and reviewer phases, extracts structured reviewer feedback, injects that feedback into revision prompts, loops internally up to bounded limits, records reviewer issues, and fails safely if review cannot pass.
 - **QA feedback rerouting**: failed QA can route non-blocking feedback back to Engineering for bounded revision cycles instead of treating every QA failure as a terminal stop.
-- **Approval gates**: PRD and release approvals can block lifecycle progress, persist across restarts, recover pending approval UIs, and accept approve/reject/request-changes decisions from Discord, GUI, or CLI.
+- **Approval gates**: clarification, PRD, and release approvals can block lifecycle progress, persist across restarts, recover pending approval UIs, and accept approve/reject/request-changes decisions from Discord, GUI, or CLI.
 - **Project lifecycle state machine**: projects move through prototyping, design, development, QA, release-ready, deployment, completed, blocked, revision, and post-mortem paths.
 - **Discord integration**: Discord sessions can run direct engineering tasks, start `/prototype` product flows, display approval buttons/modals, recover pending approvals, show audit logs, show company status dashboards, consolidate memory, and enforce repo policies.
 - **Browser and desktop UI**: Streamlit/browser mode and a pywebview desktop wrapper expose classic chat plus Company Mode dashboards, approvals, audit logs, project memory, routing controls, pending-run status, and OpenRouter key entry.
@@ -115,8 +115,8 @@ The agent runtime provides:
 
 The Company runtime models a small software organization:
 
-- **Product** turns a raw idea into a PRD or asks clarifying questions.
-- **PRD approval** can block downstream work until a human approves, rejects, or requests changes.
+- **Product** checks ambiguity, asks 1–3 targeted clarification questions when needed, turns clear requests into typed/self-reviewed PRDs, and preserves both Markdown and structured PRD dictionaries for downstream departments.
+- **Clarification approval** can block PRD drafting until a human supplies answers; **PRD approval** can block downstream work until a human approves, rejects, or requests changes.
 - **UX** produces design context when needed.
 - **Engineering** implements using programmer/reviewer sub-phases and bounded revision prompts.
 - **QA** runs targeted checks, records pass/fail/no-test outcomes, and can route failures back to Engineering for a bounded fix cycle.
@@ -165,7 +165,7 @@ User / Script / Discord / GUI
         +--> CompanyOrchestrator
                 |
                 +--> CompanyConfig / DepartmentConfig
-                +--> Product -> PRD approval
+                +--> Product -> optional clarification approval -> PRD approval
                 +--> UX -> design handoff
                 +--> Engineering programmer/reviewer loop
                 +--> QA -> pass/fail/no-test metrics or Engineering reroute
@@ -305,7 +305,7 @@ result = await loop.run("Add validation and tests for the payment payload")
 
 ### 4) Company prototype flow
 
-Use `CompanyOrchestrator`, Discord `/prototype`, or Company Mode in the GUI to route a raw product idea through PRD creation, approval, UX/design, Engineering implementation, reviewer revisions, QA, release approval, DevOps, and post-mortem learning.
+Use `CompanyOrchestrator`, Discord `/prototype`, or Company Mode in the GUI to route a raw product idea through Product ambiguity detection, optional CEO clarification, typed PRD creation, PRD approval, UX/design, Engineering implementation, reviewer revisions, QA, release approval, DevOps, and post-mortem learning.
 
 ### 5) Retrieval-aware playbook learning
 
@@ -321,8 +321,9 @@ Start `aider --desktop`, enable Company Mode, choose Auto/Prototype/Engineering 
 
 The Company system is centered on typed interfaces and persisted state:
 
-- `CompanyTask`: normalized work request with task id, department target, description, context, source, payload, and metadata.
-- `Deliverable`: department output with status, payload, metadata, task id, and department name.
+- `CompanyTask`: normalized work request with task id, origin/target departments, artifact type, payload, blocking flag, and context.
+- `Deliverable`: department output with status, payload/content alias, metadata, task id, artifact type, and department name.
+- `PRD` and `ClarificationRequest`: typed Product artifacts for structured requirements, Markdown previews, and approval recovery.
 - `CompanyEvent`: lifecycle/audit event emitted by departments and the orchestrator.
 - `Department`: base interface for context requirements, tool allowlists, and task handling.
 - `DepartmentConfig`: per-department prompt caching and preferred model settings.
@@ -337,15 +338,17 @@ The Company system is centered on typed interfaces and persisted state:
 ### Lifecycle overview
 
 1. A user submits a raw idea or task.
-2. Product produces a PRD or asks clarifying questions.
-3. PRD approval can block work until a human approves, rejects, or requests changes.
-4. UX produces a design handoff when the project requires design.
-5. Engineering receives relevant PRD/design/playbook context and runs a programmer/reviewer implementation loop.
-6. QA runs checks and records pass, fail, or no-test outcomes.
-7. Failed QA can send structured feedback back to Engineering for bounded revision cycles.
-8. Release approval can block deployment.
-9. DevOps records deployment/release completion.
-10. Post-mortem handling records outcomes, extracts audit patterns, updates the deduplicated playbook, and advances final lifecycle state.
+2. Product checks whether the request is clear enough to write a PRD.
+3. If the request is ambiguous, Product opens a clarification approval gate so a human can answer targeted questions before PRD drafting resumes.
+4. Product generates a typed PRD, converts it to Markdown for review, self-reviews quality, and stores structured PRD metadata for downstream handoffs.
+5. PRD approval can block work until a human approves, rejects, or requests changes.
+6. UX produces a design handoff when the project requires design.
+7. Engineering receives relevant PRD/design/playbook context and runs a programmer/reviewer implementation loop.
+8. QA runs checks and records pass, fail, or no-test outcomes.
+9. Failed QA can send structured feedback back to Engineering for bounded revision cycles.
+10. Release approval can block deployment.
+11. DevOps records deployment/release completion.
+12. Post-mortem handling records outcomes, extracts audit patterns, updates the deduplicated playbook, and advances final lifecycle state.
 
 ### Department isolation
 
@@ -409,9 +412,9 @@ orchestrator = CompanyOrchestrator(project_memory, company_config=company_config
 Discord support is implemented as a headless integration layer:
 
 - `DiscordAiderBot` can run headless Aider tasks for allowed repositories.
-- `/prototype` starts Product-led PRD creation and approval flow.
+- `/prototype` starts Product-led ambiguity detection, optional clarification approval, typed PRD creation, and PRD approval flow.
 - Engineering tasks run through the Company orchestrator rather than bypassing department boundaries.
-- Approval buttons and modals let humans approve, reject, or request changes for PRD/release gates.
+- Approval buttons and modals let humans approve, reject, or request changes for clarification, PRD, and release gates.
 - Pending approvals can be recovered after restart from project memory.
 - Audit logs and company status can be surfaced in Discord.
 - Conversation memory and dream consolidation keep bot sessions compact.
@@ -439,7 +442,7 @@ Aider Plus keeps upstream browser GUI behavior and adds richer Company Mode plus
 - The GUI sidebar can pause/resume Company Mode, select Auto/Prototype/Engineering routing, bypass the next prompt for direct Aider chat, refresh status, and surface pending approvals.
 - Main GUI tabs include Chat, Company Dashboard, Approvals, Audit Log, and Project Memory.
 - The Company Dashboard shows lifecycle phase progress, pending approvals, recent deliverables, changed files, observability metrics, and raw company status.
-- Approval pages provide approve, reject, and request-changes interactions.
+- Approval pages provide approve, reject, and request-changes interactions, and the optional feedback field is used as the answer body for clarification approvals.
 - Background workflow execution is isolated from the Streamlit request thread and exposes pending-run and error indicators.
 - Model/settings UI includes OpenRouter API key handling.
 
@@ -697,4 +700,4 @@ The following table summarizes every non-merge commit visible in this branch's c
 | `a95cc75` | Added retrieval-aware playbook pattern extraction, bounded deduplicated playbook querying, post-mortem learning integration, and pattern/playbook tests. |
 | `e517c98` | Refreshed this README to describe the completed short-, medium-, and long-term Aider Plus capability tiers and updated the Aider Plus commit summary. |
 | `c6ac28c` | Added Company prompt-caching controls, per-department cache configuration, preferred model hooks, and cached/uncached observability tracking. |
-| `(this commit)` | Fully refreshed this README to encompass the current repository capabilities and expanded the bottom commit table to summarize every visible Aider Plus branch commit. |
+| `(this commit)` | Added LLM-powered Product ambiguity detection, CEO clarification approval gates, typed/self-reviewed PRDs, structured PRD handoffs to UX/Engineering, Product agent-loop wiring in GUI/Discord startup, clarification-aware desktop/Discord approval copy, and a README refresh for current Aider Plus behavior. |

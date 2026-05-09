@@ -210,7 +210,11 @@ class DesktopCompanySession:
             agent_loop=agent_loop,
             conversation_memory=conversation_memory,
         )
-        self.product = ProductDepartment(project_memory=project_memory)
+        self.product = ProductDepartment(
+            project_memory=project_memory,
+            agent_loop=agent_loop,
+            conversation_memory=conversation_memory,
+        )
         self.ux = UXDepartment(project_memory=project_memory)
         self.qa = QADepartment(project_memory=project_memory)
         self.devops = DevOpsDepartment(project_memory=project_memory)
@@ -392,13 +396,17 @@ class DesktopCompanySession:
         )
         return result
 
-    def approve(self, task_id: str):
+    def approve(self, task_id: str, feedback: str = ""):
+        metadata = {"approved_by": "desktop"}
+        if feedback:
+            metadata.update({"reason": feedback, "feedback": feedback})
         return self.submit_background(
             self.orchestrator.handle_approval_response(
                 task_id,
                 True,
                 source="desktop",
-                metadata={"approved_by": "desktop"},
+                reason=feedback or None,
+                metadata=metadata,
             ),
             f"Approve {task_id}",
         )
@@ -848,7 +856,10 @@ class GUI:
                     if st.button(
                         "✅ Approve", key=f"approve_{task_id}", use_container_width=True
                     ):
-                        company.approve(task_id)
+                        approval_feedback = (
+                            feedback if gate_name == "clarification_approval" else ""
+                        )
+                        company.approve(task_id, approval_feedback)
                         st.rerun()
                 with col2:
                     if st.button(

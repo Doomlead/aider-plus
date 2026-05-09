@@ -226,6 +226,61 @@ class CompanyOrchestrator:
             return False
 
         if project.phase == "prototyping" and d.department == "product":
+            # Product determined the request was too vague. Raise an approval
+            # gate so the CEO can answer the questions, then re-submit to Product.
+            if d.artifact_type == "clarification":
+                clarification_task = CompanyTask(
+                    task_id=d.task_id,
+                    origin="product",
+                    target="product",
+                    artifact_type="clarification",
+                    payload=d.payload,
+                    blocking=True,
+                    context={
+                        **d.metadata.get("context", {}),
+                        "gate_name": "clarification_approval",
+                        "approver_role": "ceo",
+                        "artifact_preview": d.metadata.get("artifact_preview", d.payload),
+                        "clarification_questions": d.metadata.get(
+                            "clarification_questions", []
+                        ),
+                        "original_request": d.metadata.get("original_request", ""),
+                        "handoff_to": "product",
+                    },
+                )
+                decision = await self.approvals.create_request(clarification_task)
+                self.approvals.close_request(clarification_task.task_id)
+                if decision.approved:
+                    # CEO answered — re-submit to Product with the answer as context.
+                    ceo_answer = (
+                        decision.reason
+                        or decision.metadata.get("reason")
+                        or decision.metadata.get("feedback")
+                        or ""
+                    )
+                    original_request = d.metadata.get("original_request", "")
+                    resubmit_context = dict(d.metadata.get("context", {}))
+                    resubmit_context["clarification_answers"] = ceo_answer
+                    resubmit_task = CompanyTask(
+                        task_id=d.task_id,
+                        origin="ceo",
+                        target="product",
+                        artifact_type="raw_prompt",
+                        payload={
+                            "original_request": original_request,
+                            "clarification_answers": ceo_answer,
+                            "prompt": (
+                                f"{original_request}\n\n"
+                                f"CEO clarification answers:\n{ceo_answer}"
+                            ),
+                        },
+                        blocking=False,
+                        context=resubmit_context,
+                    )
+                    if "product" in self.departments:
+                        await self.submit(resubmit_task)
+                return True
+
             if d.artifact_type == "prd" and d.status == "success":
                 project.prd = str(d.content)
                 project.requires_design = bool(d.metadata.get("requires_design", False))
@@ -349,10 +404,13 @@ class CompanyOrchestrator:
                 "ux",
             }
         ):
+            prd_content = d.payload if isinstance(d.payload, str) else str(d.payload)
             payload = {
                 "original_request": d.metadata.get("original_request"),
-                "prd_content": d.content,
+                "prd_content": prd_content,
+                "prd_structured": d.metadata.get("prd_structured"),
                 "prd_metadata": dict(d.metadata),
+                "open_questions": d.metadata.get("open_questions", []),
             }
             context.update(payload)
         elif d.department == "ux" and next_target == "engineering":
@@ -883,6 +941,7 @@ class CompanyOrchestrator:
                 "previous_prd": self._prd_content(task),
                 "ceo_feedback": feedback,
                 "revision_count": revision_count,
+                "original_request": previous_metadata.get("original_request", ""),
             },
             blocking=False,
             context={

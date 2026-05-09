@@ -71,6 +71,122 @@ class QAFeedback:
 
 
 @dataclass
+class PRD:
+    """
+    Structured Product Requirements Document.
+
+    All list fields default to empty so callers can build incrementally.
+    The ``to_markdown()`` method produces the artifact preview string that
+    gets injected into Engineering / UX context.
+    """
+
+    title: str
+    problem_statement: str
+    goals: list[str] = field(default_factory=list)
+    success_metrics: list[str] = field(default_factory=list)
+    user_stories: list[str] = field(default_factory=list)
+    acceptance_criteria: list[str] = field(default_factory=list)
+    technical_considerations: list[str] = field(default_factory=list)
+    out_of_scope: list[str] = field(default_factory=list)
+    priority: str = "MVP"
+    open_questions: list[str] = field(default_factory=list)
+    version: str = "1.0"
+
+    def to_markdown(self) -> str:
+        """Return the PRD as a Markdown string for context injection."""
+
+        def _bullet(items: list[str]) -> str:
+            return "\n".join(f"- {item}" for item in items) if items else "- TBD"
+
+        return f"""# PRD: {self.title}
+**Version:** {self.version}  **Priority:** {self.priority}
+
+## Problem Statement
+{self.problem_statement}
+
+## Goals
+{_bullet(self.goals)}
+
+## Success Metrics
+{_bullet(self.success_metrics)}
+
+## User Stories
+{_bullet(self.user_stories)}
+
+## Acceptance Criteria
+{_bullet(self.acceptance_criteria)}
+
+## Technical Considerations
+{_bullet(self.technical_considerations)}
+
+## Out of Scope
+{_bullet(self.out_of_scope)}
+
+## Open Questions
+{_bullet(self.open_questions) if self.open_questions else "None"}
+"""
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "problem_statement": self.problem_statement,
+            "goals": self.goals,
+            "success_metrics": self.success_metrics,
+            "user_stories": self.user_stories,
+            "acceptance_criteria": self.acceptance_criteria,
+            "technical_considerations": self.technical_considerations,
+            "out_of_scope": self.out_of_scope,
+            "priority": self.priority,
+            "open_questions": self.open_questions,
+            "version": self.version,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PRD":
+        return cls(
+            title=str(d.get("title", "Untitled")),
+            problem_statement=str(d.get("problem_statement", "")),
+            goals=list(d.get("goals", [])),
+            success_metrics=list(d.get("success_metrics", [])),
+            user_stories=list(d.get("user_stories", [])),
+            acceptance_criteria=list(d.get("acceptance_criteria", [])),
+            technical_considerations=list(d.get("technical_considerations", [])),
+            out_of_scope=list(d.get("out_of_scope", [])),
+            priority=str(d.get("priority", "MVP")),
+            open_questions=list(d.get("open_questions", [])),
+            version=str(d.get("version", "1.0")),
+        )
+
+
+@dataclass
+class ClarificationRequest:
+    """
+    Wraps a set of clarification questions from Product to the CEO.
+    Stored in task.context["clarification_request"] for approval recovery.
+    """
+
+    questions: list[str]
+    original_request: str
+    task_id: str
+
+    def to_dict(self) -> dict:
+        return {
+            "questions": self.questions,
+            "original_request": self.original_request,
+            "task_id": self.task_id,
+        }
+
+    def format_for_approval(self) -> str:
+        qs = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(self.questions))
+        return (
+            "**Product needs clarification before writing the PRD.**\n\n"
+            f"**Original request:** {self.original_request[:500]}\n\n"
+            f"**Questions:**\n{qs}\n\n"
+            "*Please answer these questions and approve to continue.*"
+        )
+
+
+@dataclass
 class CompanyTask:
     task_id: str
     origin: str  # e.g. "ceo", "product"
@@ -83,6 +199,7 @@ class CompanyTask:
         "test_report",
         "deploy_request",
         "memo",
+        "clarification",
         "general",
     ]
     payload: Any
@@ -94,10 +211,12 @@ __all__ = [
     "ApprovalDecision",
     "ApprovalRequest",
     "CompanyEvent",
+    "ClarificationRequest",
     "CompanyTask",
     "Deliverable",
     "DepartmentOutput",
     "EventMessage",
+    "PRD",
     "ProcessResult",
     "QAFeedback",
 ]

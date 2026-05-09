@@ -851,24 +851,44 @@ class GUI:
                         "Add notes for approval, describe requested changes, or explain why this is rejected."
                     ),
                 )
+                is_clarification = gate_name == "clarification_approval"
                 col1, col2, col3 = st.columns(3)
                 with col1:
+                    approve_label = (
+                        "✅ Submit Answers" if is_clarification else "✅ Approve"
+                    )
                     if st.button(
-                        "✅ Approve", key=f"approve_{task_id}", use_container_width=True
+                        approve_label,
+                        key=f"approve_{task_id}",
+                        use_container_width=True,
+                        help=(
+                            "Your answers above will be sent to Product to write the PRD."
+                            if is_clarification
+                            else None
+                        ),
                     ):
-                        approval_feedback = (
-                            feedback if gate_name == "clarification_approval" else ""
-                        )
-                        company.approve(task_id, approval_feedback)
+                        # For clarification, pass feedback text as the CEO's answers.
+                        company.approve(task_id, feedback=feedback or "")
                         st.rerun()
                 with col2:
+                    changes_label = (
+                        "⏩ Skip Clarification"
+                        if is_clarification
+                        else "📝 Request Changes"
+                    )
                     if st.button(
-                        "📝 Request Changes",
+                        changes_label,
                         key=f"changes_{task_id}",
                         use_container_width=True,
                     ):
                         company.request_changes(
-                            task_id, feedback or "Changes requested from desktop"
+                            task_id,
+                            feedback
+                            or (
+                                "Proceed without clarification"
+                                if is_clarification
+                                else "Changes requested from desktop"
+                            ),
                         )
                         st.rerun()
                 with col3:

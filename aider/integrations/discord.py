@@ -491,16 +491,15 @@ def build_discord_client(*args, **kwargs):
         def __init__(
             self, approval_manager: ApprovalManager, task_id: str, gate_name: str
         ):
-            title = (
-                "Request Release Changes"
-                if gate_name == "release_approval"
-                else "Request PRD Changes"
-            )
-            label = (
-                "Feedback for Engineering"
-                if gate_name == "release_approval"
-                else "Feedback for Product"
-            )
+            if gate_name == "release_approval":
+                title = "Request Release Changes"
+                label = "Feedback for Engineering"
+            elif gate_name == "clarification_approval":
+                title = "Answer Clarification Questions"
+                label = "Your answers for Product"
+            else:
+                title = "Request PRD Changes"
+                label = "Feedback for Product"
             super().__init__(title=title)
             self.approval_manager = approval_manager
             self.task_id = task_id
@@ -514,20 +513,35 @@ def build_discord_client(*args, **kwargs):
             self.add_item(self.feedback)
 
         async def on_submit(self, interaction):
-            await self.approval_manager.handle_approval_response(
-                self.task_id,
-                False,
-                source="discord",
-                reason=str(self.feedback.value),
-                metadata={"action": "revise", "feedback": str(self.feedback.value)},
-            )
-            destination = (
-                "Engineering" if self.gate_name == "release_approval" else "Product"
-            )
-            await interaction.response.send_message(
-                f"📝 Change request sent back to {destination}.",
-                ephemeral=True,
-            )
+            answer = str(self.feedback.value)
+            if self.gate_name == "clarification_approval":
+                # CEO answered the questions — approve with answers as context.
+                await self.approval_manager.handle_approval_response(
+                    self.task_id,
+                    True,
+                    source="discord",
+                    reason=answer,
+                    metadata={"action": "answered", "feedback": answer},
+                )
+                await interaction.response.send_message(
+                    "✅ Answers submitted. Product will generate the PRD now.",
+                    ephemeral=True,
+                )
+            else:
+                await self.approval_manager.handle_approval_response(
+                    self.task_id,
+                    False,
+                    source="discord",
+                    reason=answer,
+                    metadata={"action": "revise", "feedback": answer},
+                )
+                destination = (
+                    "Engineering" if self.gate_name == "release_approval" else "Product"
+                )
+                await interaction.response.send_message(
+                    f"📝 Change request sent back to {destination}.",
+                    ephemeral=True,
+                )
 
     class ApprovalView(discord.ui.View):
         def __init__(
@@ -547,15 +561,17 @@ def build_discord_client(*args, **kwargs):
             )
             for child in self.children:
                 child.disabled = True
-            content = (
-                "This approval was already resolved from another message."
-                if not resolved
-                else (
-                    "✅ Release approved. DevOps deployment has started."
-                    if self.gate_name == "release_approval"
-                    else "✅ PRD approved. Engineering handoff has started."
+            if not resolved:
+                content = "This approval was already resolved from another message."
+            elif self.gate_name == "release_approval":
+                content = "✅ Release approved. DevOps deployment has started."
+            elif self.gate_name == "clarification_approval":
+                content = (
+                    "✅ Clarification skipped. Product will proceed with the "
+                    "original request."
                 )
-            )
+            else:
+                content = "✅ PRD approved. Engineering handoff has started."
             await interaction.response.edit_message(content=content, view=self)
 
         @discord.ui.button(label="Reject", emoji="❌", style=discord.ButtonStyle.danger)
@@ -565,15 +581,17 @@ def build_discord_client(*args, **kwargs):
             )
             for child in self.children:
                 child.disabled = True
-            content = (
-                "This approval was already resolved from another message."
-                if not resolved
-                else (
-                    "❌ Release rejected and routed back to Engineering."
-                    if self.gate_name == "release_approval"
-                    else "❌ PRD rejected and routed back to Product."
+            if not resolved:
+                content = "This approval was already resolved from another message."
+            elif self.gate_name == "release_approval":
+                content = "❌ Release rejected and routed back to Engineering."
+            elif self.gate_name == "clarification_approval":
+                content = (
+                    "❌ Clarification cancelled. The project request will not "
+                    "proceed."
                 )
-            )
+            else:
+                content = "❌ PRD rejected and routed back to Product."
             await interaction.response.edit_message(content=content, view=self)
 
         @discord.ui.button(

@@ -414,13 +414,13 @@ class CompanyOrchestrator:
             }
             context.update(payload)
         elif d.department == "ux" and next_target == "engineering":
-            prd_content = context.get("prd_content")
+            prd_content = context.get("prd_content") or ""
             design_spec_md = d.payload if isinstance(d.payload, str) else str(d.payload)
+
             payload = {
                 "original_request": context.get("original_request"),
                 "prd_content": prd_content,
                 "prd_structured": context.get("prd_structured"),
-                "prd_metadata": dict(context.get("prd_metadata", {})),
                 "design_spec": design_spec_md,
                 "design_spec_structured": d.metadata.get("design_spec_structured"),
                 "design_metadata": dict(d.metadata),

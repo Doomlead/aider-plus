@@ -13,6 +13,7 @@ from aider.company.config import DepartmentConfig
 from aider.company.schemas import CompanyTask, Deliverable
 from aider.agent.loop import AiderAgentLoop
 from aider.memory import ProjectMemory, ConversationMemory
+from aider.memory.pattern_extractor import AuditPatternExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -450,8 +451,6 @@ Address ALL reviewer feedback from the previous round if present.
             review_data["needs_revision"] = True
             review_data["review_passed"] = False
 
-        reviewer_feedback_summary = review_data.get("overall_assessment", "")[:500]
-
         # Enforce max review iterations
         review_iteration = int(metadata.get("review_iteration", 0) or 0) + 1
         max_iterations = getattr(self.config, "max_review_iterations", 3) if self.config else 3
@@ -461,13 +460,25 @@ Address ALL reviewer feedback from the previous round if present.
             review_data["review_passed"] = True
             review_data["needs_revision"] = False
             review_data["overall_assessment"] += (
-                f"\n\n[Forced approval after {max_iterations} review iterations.]"
+                f"\n\n[FORCED APPROVAL after {max_iterations} review iterations. "
+                "Human executive should review manually before release.]"
             )
+
             await self._emit_engineering_event(
                 previous_deliverable.task_id,
                 "reviewer_forced_approval",
-                {"review_iteration": review_iteration, "max_iterations": max_iterations},
+                {
+                    "review_iteration": review_iteration,
+                    "max_iterations": max_iterations,
+                    "warning": (
+                        "Forced approval due to iteration limit - manual review strongly "
+                        "recommended"
+                    ),
+                    "severity": "warning",
+                },
             )
+
+        reviewer_feedback_summary = review_data.get("overall_assessment", "")[:500]
 
         metadata.update(
             {
@@ -513,7 +524,7 @@ Address ALL reviewer feedback from the previous round if present.
         )
 
         self._record_reviewer_metrics(review_data, review_iteration)
-        self._learn_reviewer_playbook_pattern(review_data)
+        self._learn_reviewer_playbook_pattern(review_data, previous_deliverable.task_id)
 
         return Deliverable(
             task_id=previous_deliverable.task_id,
@@ -1016,8 +1027,6 @@ Be specific and actionable."""
         for issue in issues:
             issue_type = self._review_issue_type(issue)
             issue_type_counts[issue_type] = int(issue_type_counts.get(issue_type, 0) or 0) + 1
-            if issue_type_counts[issue_type] == 3:
-                self._learn_reviewer_playbook_pattern(issue_type)
         stats["most_common_issues"] = [
             key
             for key, _ in sorted(issue_type_counts.items(), key=lambda item: item[1], reverse=True)[
@@ -1043,46 +1052,73 @@ Be specific and actionable."""
             return "malformed_reviewer_output"
         return "general"
 
-    def _learn_reviewer_playbook_pattern(self, issue_data) -> None:
-        if isinstance(issue_data, dict):
-            if "issues" in issue_data:
-                for issue in issue_data.get("issues") or []:
-                    self._learn_reviewer_playbook_pattern(self._review_issue_type(issue))
-                return
-            issue_type = self._review_issue_type(issue_data)
-        elif isinstance(issue_data, list):
-            for issue in issue_data:
-                self._learn_reviewer_playbook_pattern(issue)
+    def _learn_reviewer_playbook_pattern(self, review_data: dict, task_id: str) -> None:
+        """Only learn systemic patterns that appear across multiple tasks."""
+        issues = review_data.get("issues", [])
+        if not issues:
             return
-        else:
-            issue_type = str(issue_data or "general")
 
-        patterns = {
-            "missing_tests": "Always add or update tests for reviewed behavior changes.",
-            "accessibility": "Always validate UI changes against accessibility requirements.",
-            "error_handling": (
-                "Always add explicit error handling around external calls and failure-prone operations."
-            ),
-            "security": (
-                "Always review security-sensitive inputs, authentication, and authorization paths."
-            ),
-            "malformed_reviewer_output": (
-                "Reviewer responses must be valid JSON matching the required schema."
-            ),
-            "general": "Resolve repeated reviewer feedback before QA handoff.",
+        extractor = AuditPatternExtractor(self._get_audit_log())
+        for issue in issues[:5]:  # limit per review
+            issue_type = self._review_issue_type(issue)
+            if not issue_type:
+                continue
+
+            # Require evidence from at least 3 distinct tasks before playbook entry.
+            if extractor.count_occurrences(issue_type, min_unique_tasks=3) >= 2:
+                self._append_reviewer_playbook_entry(
+                    issue_type,
+                    issue,
+                    metadata={"task_id": task_id},
+                )
+
+    def _get_audit_log(self) -> list[dict]:
+        get_audit_log = getattr(self.memory, "get_audit_log", None)
+        if callable(get_audit_log):
+            records = get_audit_log()
+        else:
+            records = self.memory.data.get("audit_log", [])
+        if not isinstance(records, list):
+            return []
+        return [record for record in records if isinstance(record, dict)]
+
+    def _append_reviewer_playbook_entry(
+        self, issue_type: str, issue: dict, metadata: Optional[dict] = None
+    ) -> None:
+        entry = f"Recurring issue type '{issue_type}': {issue.get('description')}"
+        entry_metadata = {
+            "severity": issue.get("severity"),
+            "suggestion": issue.get("suggestion"),
         }
+        if metadata:
+            entry_metadata.update(metadata)
+
+        append_playbook_entry = getattr(self.memory, "append_playbook_entry", None)
+        if callable(append_playbook_entry):
+            append_playbook_entry(
+                category="code_review",
+                entry=entry,
+                metadata=entry_metadata,
+            )
+            return
+
         playbook = self.memory.data.setdefault("playbook", {})
-        entries = playbook.setdefault("coding_standards", [])
-        text = patterns.get(issue_type, patterns["general"])
-        if not any(text in str(entry) for entry in entries):
+        entries = playbook.setdefault("code_review", [])
+        existing_texts = [
+            existing.get("text") if isinstance(existing, dict) else str(existing)
+            for existing in entries
+        ]
+        if entry not in existing_texts:
             entries.append(
                 {
-                    "text": text,
-                    "pattern": text,
+                    "text": entry,
+                    "pattern": entry,
                     "context": f"Reviewer repeatedly flagged {issue_type.replace('_', ' ')}.",
                     "source": "reviewer_feedback",
+                    "metadata": entry_metadata,
                 }
             )
+            self.memory.persist()
 
     @staticmethod
     def _reviewer_prompt(context: dict) -> str:
@@ -1211,14 +1247,14 @@ Be specific and actionable."""
             return ""
 
         max_diff_lines = 500
-        lines = str(diff).split("\n")
+        lines = str(diff).splitlines()
         if len(lines) > max_diff_lines:
-            truncated = "\n".join(lines[:max_diff_lines])
-            remaining = len(lines) - max_diff_lines
-            return (
-                f"{truncated}\n\n"
-                f"[TRUNCATED: {remaining} more lines. Focus on critical changes above.]"
+            diff = "\n".join(lines[:max_diff_lines])
+            diff += (
+                "\n\n[WARNING: Diff truncated to first 500 lines for reviewer. "
+                "Do not assume untouched sections are correct. Focus only on provided changes.]\n"
             )
+
         return str(diff)
 
     async def _run_targeted_checks(self, changed_files: list[str]) -> list[dict]:

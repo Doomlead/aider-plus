@@ -243,6 +243,65 @@ def test_reviewer_phase_uses_structured_agent_feedback(tmp_path):
     asyncio.run(run_test())
 
 
+def test_reviewer_forced_approval_emits_warning_event(tmp_path):
+    async def run_test():
+        memory = ProjectMemory(str(tmp_path))
+        loop = StructuredReviewAgentLoop(
+            {
+                "content": json.dumps(
+                    {
+                        "review_passed": False,
+                        "issues": [
+                            {
+                                "description": "Missing tests for the new behavior",
+                                "suggestion": "Add assertions",
+                            }
+                        ],
+                        "overall_assessment": "Implementation still needs review fixes.",
+                        "needs_revision": True,
+                    }
+                )
+            }
+        )
+        department = EngineeringDepartment(
+            project_memory=memory,
+            agent_loop=loop,
+            conversation_memory=loop.coder.conversation_memory,
+        )
+        emitted = []
+
+        async def on_event(message):
+            emitted.append(message)
+
+        department._on_event = on_event
+
+        async def no_checks(changed_files):
+            return []
+
+        department._run_targeted_checks = no_checks
+        previous = Deliverable(
+            task_id="task-force",
+            department="engineering",
+            artifact_type="code",
+            payload="implemented",
+            status="success",
+            metadata={"files": ["app.py"], "review_iteration": 2},
+        )
+
+        review = await department._run_reviewer_phase(previous)
+
+        forced_event = emitted[0].payload
+        assert review.review_passed is True
+        assert review.metadata["needs_revision"] is False
+        assert "[FORCED APPROVAL after 3 review iterations." in review.metadata[
+            "overall_assessment"
+        ]
+        assert forced_event["name"] == "reviewer_forced_approval"
+        assert forced_event["severity"] == "warning"
+        assert "manual review strongly recommended" in forced_event["warning"]
+
+    asyncio.run(run_test())
+
 def test_reviewer_phase_resolves_active_task_for_design_context(tmp_path):
     class TaskRepository:
         def __init__(self, task):
@@ -344,12 +403,13 @@ def test_implementation_diff_prefers_summary_and_truncates(tmp_path):
 
         assert "line 499" in result
         assert "line 500" not in result
-        assert "[TRUNCATED: 1 more lines" in result
+        assert "[WARNING: Diff truncated to first 500 lines for reviewer." in result
+        assert "Do not assume untouched sections are correct." in result
 
     asyncio.run(run_test())
 
 
-def test_reviewer_metrics_and_playbook_learning(tmp_path):
+def test_reviewer_metrics_tracks_issues_without_noisy_playbook_learning(tmp_path):
     memory = ProjectMemory(str(tmp_path))
     loop = FakeAgentLoop([])
     department = EngineeringDepartment(
@@ -375,10 +435,49 @@ def test_reviewer_metrics_and_playbook_learning(tmp_path):
     assert stats["approval_rate"] == 0.0
     assert stats["avg_issues_per_review"] == 1.0
     assert stats["most_common_issues"] == ["missing_tests"]
-    assert any(
-        "Always add or update tests" in str(entry)
-        for entry in memory.data["playbook"]["coding_standards"]
+    assert memory.data["playbook"]["coding_standards"] == []
+
+
+def test_reviewer_playbook_learning_requires_multiple_tasks(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    loop = FakeAgentLoop([])
+    department = EngineeringDepartment(
+        project_memory=memory,
+        agent_loop=loop,
+        conversation_memory=loop.coder.conversation_memory,
     )
+    review_data = {
+        "review_passed": False,
+        "issues": [
+            {
+                "severity": "high",
+                "description": "Missing tests for the new behavior",
+                "suggestion": "Add assertions",
+            }
+        ],
+    }
+    memory.update(
+        {
+            "audit_log": [
+                {
+                    "event_type": "engineering_revision_needed",
+                    "metadata": {"task_id": f"task-{index}"},
+                    "payload": {
+                        "feedback": review_data,
+                        "reviewer_feedback_summary": "Missing tests and assertions",
+                    },
+                }
+                for index in range(3)
+            ]
+        }
+    )
+
+    department._learn_reviewer_playbook_pattern(review_data, "task-current")
+
+    entries = memory.data["playbook"]["code_review"]
+    assert len(entries) == 1
+    assert entries[0]["text"].startswith("Recurring issue type 'missing_tests'")
+    assert entries[0]["metadata"]["task_id"] == "task-current"
 
 
 def test_handoff_task_propagates_prd_and_design_context(tmp_path):

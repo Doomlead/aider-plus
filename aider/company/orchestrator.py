@@ -396,28 +396,25 @@ class CompanyOrchestrator:
             }
             context.update(payload)
         elif d.department == "ux" and next_target == "engineering":
-            prd_content = context.get("prd_content") or context.get("prd_summary") or ""
+            prd_content = context.get("prd_content") or ""
             design_spec_md = d.payload if isinstance(d.payload, str) else str(d.payload)
-            design_spec_structured = (
-                metadata.get("design_spec_structured")
-                or metadata.get("design_spec")
-                or (d.payload if isinstance(d.payload, dict) else None)
-            )
 
             payload = {
                 "original_request": context.get("original_request"),
                 "prd_content": prd_content,
-                "prd_summary": context.get("prd_summary") or prd_content,
                 "prd_structured": context.get("prd_structured"),
-                "design_spec": design_spec_structured or design_spec_md,
-                "design_spec_summary": design_spec_md if isinstance(d.payload, str) else None,
-                "design_spec_structured": design_spec_structured,
-                "design_metadata": metadata,
+                "prd_summary": context.get("prd_summary") or self._synthesize_prd_summary(context),
+                "design_spec": design_spec_md,
+                "design_spec_structured": d.metadata.get("design_spec_structured"),
+                "design_spec_summary": d.metadata.get("design_spec_summary"),
+                "ux_self_review": d.metadata.get("self_review_notes"),
+                "design_metadata": dict(d.metadata),
             }
-            ux_review = metadata.get("self_review")
-            if ux_review:
-                payload["ux_self_review"] = ux_review
-            context.update({key: value for key, value in payload.items() if value is not None})
+            if payload["ux_self_review"] is None:
+                payload["ux_self_review"] = d.metadata.get("self_review")
+            if payload["design_spec_summary"] is None and isinstance(d.payload, str):
+                payload["design_spec_summary"] = design_spec_md
+            context.update(payload)
         elif (
             d.department == "product" and next_target == "engineering" and d.artifact_type == "memo"
         ):
@@ -449,6 +446,17 @@ class CompanyOrchestrator:
         task.context.setdefault("design_spec_structured", context.get("design_spec_structured"))
         task.context["playbook_guidance"] = self._get_relevant_playbooks(task)
         return task
+
+    def _synthesize_prd_summary(self, context: dict) -> str:
+        """Build a concise PRD summary from structured context when none was provided."""
+        prd = context.get("prd_structured")
+        if isinstance(prd, dict):
+            return (
+                f"{prd.get('title', '')}\n"
+                f"{prd.get('overview') or prd.get('problem_statement', '')}\n"
+                f"Requirements: {prd.get('requirements') or prd.get('acceptance_criteria', [])}"
+            )
+        return str(context.get("prd_content") or "")
 
     def _get_relevant_playbooks(self, task: CompanyTask) -> list[str]:
         """Return playbook guidance relevant to an orchestrator handoff task."""

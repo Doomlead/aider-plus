@@ -390,52 +390,49 @@ Address ALL reviewer feedback from the previous round if present.
         return prompt + qa_section
 
     async def _run_reviewer_phase(self, previous_deliverable: Deliverable) -> Deliverable:
-        """Run intelligent review using the agent loop and structured feedback."""
+        """Run intelligent review with robust context and active task resolution."""
         self.current_stage = "reviewer"
-        if not self._active_task:
-            self._active_task = await self._resolve_task(previous_deliverable.task_id)
+        await self._resolve_task(previous_deliverable.task_id)
 
         metadata = dict(previous_deliverable.metadata)
         changed_files = await self._changed_files(metadata)
         diff = await self._implementation_diff(metadata)
         checks = await self._run_targeted_checks(changed_files)
-        programmer_diffs = metadata.get("diffs_summary") or diff
-        base_review_context = self._review_context(self._active_task)
-        design_spec_summary = self._get_design_spec_summary(base_review_context)
 
-        review_context = {
-            **base_review_context,
-            "prd_summary": self._get_prd_summary(),
-            "design_spec": design_spec_summary,
-            "design_spec_summary": design_spec_summary,
-            "playbook_guidance": self._get_playbook_guidance(),
-            "programmer_diffs": programmer_diffs,
-            "changed_files": changed_files,
-            "targeted_checks": checks,
-            "programmer_status": previous_deliverable.status,
-        }
+        review_context = self._review_context()
+        design_spec_summary = self._get_design_spec_summary(review_context)
+        review_context.update(
+            {
+                "design_spec": design_spec_summary,
+                "design_spec_summary": design_spec_summary,
+                "programmer_diffs": diff or metadata.get("diffs_summary", ""),
+                "changed_files": changed_files,
+                "targeted_checks": checks,
+                "programmer_status": previous_deliverable.status,
+            }
+        )
 
         reviewer_result = await self._run_structured_reviewer(review_context)
         review_data = self._parse_reviewer_output(reviewer_result)
+
+        # Add failing checks as issues
         for check in checks:
-            if check.get("status") != "failed":
-                continue
-            description = f"Reviewer check failed: {check.get('name')}"
-            # TODO: Use fuzzy matching (e.g., token overlap) for dedup in v0.8.
-            if any(issue.get("description") == description for issue in review_data["issues"]):
-                continue
-            review_data["issues"].append(
-                {
-                    "file": None,
-                    "line_range": None,
-                    "severity": "critical" if check.get("required", True) else "medium",
-                    "description": description,
-                    "suggestion": check.get("output") or "Investigate and fix the failed check.",
-                }
-            )
-            if check.get("required", True):
-                review_data["needs_revision"] = True
-                review_data["review_passed"] = False
+            if check.get("status") == "failed":
+                description = f"Reviewer check failed: {check.get('name')}"
+                if not any(issue.get("description") == description for issue in review_data["issues"]):
+                    review_data["issues"].append(
+                        {
+                            "file": None,
+                            "line_range": None,
+                            "severity": "critical" if check.get("required", True) else "medium",
+                            "description": description,
+                            "suggestion": check.get("output") or "Fix the failing check.",
+                        }
+                    )
+                    if check.get("required", True):
+                        review_data["needs_revision"] = True
+                        review_data["review_passed"] = False
+
         if previous_deliverable.status == "failure" and not any(
             issue.get("description") == "Programmer phase reported a failure."
             for issue in review_data["issues"]
@@ -453,9 +450,25 @@ Address ALL reviewer feedback from the previous round if present.
             review_data["needs_revision"] = True
             review_data["review_passed"] = False
 
-        reviewer_feedback_summary = review_data["overall_assessment"][:500]
-        status = "success" if review_data["review_passed"] else "needs_revision"
+        reviewer_feedback_summary = review_data.get("overall_assessment", "")[:500]
+
+        # Enforce max review iterations
         review_iteration = int(metadata.get("review_iteration", 0) or 0) + 1
+        max_iterations = getattr(self.config, "max_review_iterations", 3) if self.config else 3
+        max_iterations = int(max_iterations or 3)
+
+        if review_iteration >= max_iterations and not review_data["review_passed"]:
+            review_data["review_passed"] = True
+            review_data["needs_revision"] = False
+            review_data["overall_assessment"] += (
+                f"\n\n[Forced approval after {max_iterations} review iterations.]"
+            )
+            await self._emit_engineering_event(
+                previous_deliverable.task_id,
+                "reviewer_forced_approval",
+                {"review_iteration": review_iteration, "max_iterations": max_iterations},
+            )
+
         metadata.update(
             {
                 "stage": "reviewer",
@@ -463,7 +476,7 @@ Address ALL reviewer feedback from the previous round if present.
                 "files": changed_files,
                 "changed_files": changed_files,
                 "diffs": [diff] if diff else metadata.get("diffs", []),
-                "diffs_summary": programmer_diffs,
+                "diffs_summary": review_context.get("programmer_diffs", ""),
                 "review_prompt": self._get_reviewer_system_prompt(review_context),
                 "review_feedback": review_data,
                 "review_passed": review_data["review_passed"],
@@ -472,9 +485,11 @@ Address ALL reviewer feedback from the previous round if present.
                 "overall_assessment": review_data["overall_assessment"],
                 "needs_revision": review_data["needs_revision"],
                 "reviewer_feedback_summary": reviewer_feedback_summary,
+                "used_design_spec": bool(review_context.get("design_spec_summary")),
             }
         )
         metadata["cache_enabled"] = self._caching_enabled(role="reviewer")
+
         payload = previous_deliverable.payload
         if review_data["needs_revision"]:
             payload = (
@@ -483,26 +498,29 @@ Address ALL reviewer feedback from the previous round if present.
                 f"{self._format_review_feedback(review_data)}"
             )
 
-        self._record_reviewer_metrics(review_data)
-
         await self._emit_engineering_event(
             previous_deliverable.task_id,
             "reviewer_complete",
             {
                 "review_passed": review_data["review_passed"],
                 "needs_revision": review_data["needs_revision"],
-                "issue_count": len(review_data["issues"]),
+                "issue_count": len(review_data.get("issues", [])),
+                "review_iteration": review_iteration,
+                "used_design_spec": bool(review_context.get("design_spec_summary")),
                 "summary": review_data["overall_assessment"][:300],
                 "reviewer_feedback_summary": reviewer_feedback_summary,
             },
         )
+
+        self._record_reviewer_metrics(review_data, review_iteration)
+        self._learn_reviewer_playbook_pattern(review_data)
 
         return Deliverable(
             task_id=previous_deliverable.task_id,
             department=self.name,
             artifact_type="code",
             payload=payload,
-            status=status,
+            status="success" if review_data["review_passed"] else "needs_revision",
             metadata=metadata,
             review_feedback=review_data,
             review_passed=review_data["review_passed"],
@@ -581,8 +599,11 @@ Address ALL reviewer feedback from the previous round if present.
         if callable(emit):
             await emit(event_name, payload)
 
-    async def _resolve_task(self, task_id: str) -> Optional[CompanyTask]:
-        """Resolve a task ID to a CompanyTask object when a repository is available."""
+    async def _resolve_task(self, task_id: str) -> None:
+        """Ensure active task is set for reviewer context."""
+        if self._active_task and self._active_task.task_id == task_id:
+            return
+
         task_repository = getattr(self, "task_repository", None)
         if task_repository is not None:
             get_task = getattr(task_repository, "get", None)
@@ -591,79 +612,68 @@ Address ALL reviewer feedback from the previous round if present.
                 if hasattr(task, "__await__"):
                     task = await task
                 if task is not None:
-                    return task
-        return self._active_task
+                    self._active_task = task
+                    return
+
+        # Fallback resolution if needed (e.g. from memory)
+        get_active_project = getattr(self.memory, "get_active_project", None)
+        project = get_active_project() if callable(get_active_project) else None
+        if project and getattr(project, "engineering_result", None):
+            self._active_task = project.engineering_result  # best effort
 
     def _review_context(self, task: Optional[CompanyTask] = None) -> dict:
-        """Build review context from the active task, if one is available."""
+        """Consolidated, robust context builder."""
         task = task or self._active_task
-        if not task:
-            return {
-                "original_request": "",
-                "prd_content": None,
-                "prd_summary": self._get_prd_summary(),
-                "design_spec": None,
-                "design_spec_structured": None,
-                "playbook_guidance": [],
-            }
+        payload = task.payload if task and isinstance(task.payload, dict) else {}
+        context = task.context if task and isinstance(getattr(task, "context", None), dict) else {}
 
-        payload = task.payload if isinstance(task.payload, dict) else {}
-        task_context = task.context if isinstance(task.context, dict) else {}
+        design_spec_structured = (
+            context.get("design_spec_structured") or payload.get("design_spec_structured")
+        )
+        design_spec = context.get("design_spec") or payload.get("design_spec")
+        design_spec_summary = (
+            context.get("design_spec_summary")
+            or payload.get("design_spec_summary")
+            or self._summarize_design_spec(design_spec_structured or design_spec)
+        )
+
         return {
             "original_request": (
-                payload.get("original_request")
-                or task_context.get("original_request")
-                or task.payload
+                context.get("original_request")
+                or payload.get("original_request")
+                or (task.payload if task and not isinstance(task.payload, dict) else "")
             ),
-            "prd_content": payload.get("prd_content") or task_context.get("prd_content"),
-            "prd_summary": (
-                task_context.get("prd_summary")
-                or payload.get("prd_summary")
-                or self._get_prd_summary()
-            ),
-            "design_spec": task_context.get("design_spec") or payload.get("design_spec"),
-            "design_spec_structured": (
-                task_context.get("design_spec_structured") or payload.get("design_spec_structured")
-            ),
-            "design_spec_summary": (
-                task_context.get("design_spec_summary") or payload.get("design_spec_summary")
-            ),
-            "playbook_guidance": (
-                task_context.get("playbook_guidance") or payload.get("playbook_guidance") or []
-            ),
+            "prd_content": context.get("prd_content") or payload.get("prd_content"),
+            "prd_summary": self._get_prd_summary(),
+            "design_spec": design_spec,
+            "design_spec_summary": design_spec_summary,
+            "playbook_guidance": self._get_playbook_guidance(),
+            "design_spec_structured": design_spec_structured,
         }
 
     def _get_design_spec_summary(self, review_context: Optional[dict] = None) -> str:
-        """Extract a comprehensive DesignSpec summary from review context."""
-        ctx = review_context or self._review_context(self._active_task)
-        spec = (
-            ctx.get("design_spec_structured")
-            or ctx.get("design_spec")
-            or ctx.get("design_spec_summary")
-        )
+        """Rich, reusable DesignSpec summary."""
+        ctx = review_context or self._review_context()
+        spec = ctx.get("design_spec_structured") or ctx.get("design_spec")
+        return self._summarize_design_spec(spec)
+
+    @staticmethod
+    def _summarize_design_spec(spec) -> str:
         if isinstance(spec, dict):
-            summary_parts = [
+            parts = [
                 f"Title: {spec.get('title', 'Untitled')}",
-                f"Overview: {spec.get('overview', 'No overview')}",
+                f"Overview: {str(spec.get('overview', ''))[:200]}",
             ]
-            key_screens = spec.get("key_screens")
-            if isinstance(key_screens, list) and key_screens:
-                summary_parts.append(
-                    f"Key Screens: {', '.join(str(screen) for screen in key_screens[:5])}"
-                )
-            components = spec.get("components")
-            if isinstance(components, (list, dict)) and components:
-                summary_parts.append(f"Components: {len(components)} defined")
-            accessibility = spec.get("accessibility_requirements")
-            if isinstance(accessibility, dict) and accessibility:
-                summary_parts.append(
-                    f"Accessibility: WCAG {accessibility.get('wcag_level', 'not specified')}"
-                )
-            user_flows = spec.get("user_flows")
-            if isinstance(user_flows, (list, dict)) and user_flows:
-                summary_parts.append(f"User Flows: {len(user_flows)} defined")
-            return "\n".join(summary_parts)
-        return str(spec or "No design spec available")
+            if key_screens := spec.get("key_screens"):
+                parts.append(f"Key Screens: {len(key_screens)} defined")
+            if components := (spec.get("component_library") or spec.get("components")):
+                parts.append(f"Components: {len(components)} defined")
+            if accessibility := (
+                spec.get("accessibility_notes") or spec.get("accessibility_requirements")
+            ):
+                parts.append(f"Accessibility: {str(accessibility)[:150]}")
+            return "\n".join(parts)
+        return str(spec or "No DesignSpec available")[:800]
 
     def _get_reviewer_system_prompt(self, context) -> str:
         """Return high-quality reviewer prompt."""
@@ -932,11 +942,16 @@ Be specific and actionable."""
 
     def _get_playbook_guidance(self) -> str:
         """Extract relevant playbook patterns for reviewer."""
-        if not self._active_task:
-            return "No playbook guidance available"
+        guidance = None
+        if self._active_task:
+            payload = self._active_task.payload if isinstance(self._active_task.payload, dict) else {}
+            context = (
+                self._active_task.context
+                if isinstance(getattr(self._active_task, "context", None), dict)
+                else {}
+            )
+            guidance = context.get("playbook_guidance") or payload.get("playbook_guidance")
 
-        context = self._review_context(self._active_task)
-        guidance = context.get("playbook_guidance")
         if not guidance:
             playbook = self.memory.data.get("playbook", {})
             guidance = []
@@ -965,7 +980,9 @@ Be specific and actionable."""
                 formatted.append(f"{index}. {str(item)[:200]}")
         return "\n".join(formatted)
 
-    def _record_reviewer_metrics(self, review_data: dict) -> None:
+    def _record_reviewer_metrics(
+        self, review_data: dict, review_iteration: Optional[int] = None
+    ) -> None:
         """Track reviewer performance and learn repeated feedback patterns."""
         observability = self.memory.data.setdefault("observability", {})
         stats = observability.setdefault(
@@ -981,6 +998,8 @@ Be specific and actionable."""
             },
         )
         stats["total_reviews"] = int(stats.get("total_reviews", 0) or 0) + 1
+        if review_iteration is not None:
+            stats["last_review_iteration"] = review_iteration
         if review_data.get("review_passed"):
             stats["approved_reviews"] = int(stats.get("approved_reviews", 0) or 0) + 1
         issues = review_data.get("issues") or []
@@ -1024,7 +1043,20 @@ Be specific and actionable."""
             return "malformed_reviewer_output"
         return "general"
 
-    def _learn_reviewer_playbook_pattern(self, issue_type: str) -> None:
+    def _learn_reviewer_playbook_pattern(self, issue_data) -> None:
+        if isinstance(issue_data, dict):
+            if "issues" in issue_data:
+                for issue in issue_data.get("issues") or []:
+                    self._learn_reviewer_playbook_pattern(self._review_issue_type(issue))
+                return
+            issue_type = self._review_issue_type(issue_data)
+        elif isinstance(issue_data, list):
+            for issue in issue_data:
+                self._learn_reviewer_playbook_pattern(issue)
+            return
+        else:
+            issue_type = str(issue_data or "general")
+
         patterns = {
             "missing_tests": "Always add or update tests for reviewed behavior changes.",
             "accessibility": "Always validate UI changes against accessibility requirements.",

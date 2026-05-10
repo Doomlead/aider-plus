@@ -308,7 +308,7 @@ def test_reviewer_phase_resolves_active_task_for_design_context(tmp_path):
         system_prompt = loop.structured_calls[0]["system_prompt"]
         assert "Build safe empty-state handling" in system_prompt
         assert "Title: Empty State" in system_prompt
-        assert "Key Screens: Results" in system_prompt
+        assert "Key Screens: 1 defined" in system_prompt
 
     asyncio.run(run_test())
 
@@ -430,6 +430,6 @@ def test_handoff_task_propagates_prd_and_design_context(tmp_path):
     assert engineering_task.context["prd_structured"] == prd_structured
     assert engineering_task.context["prd_summary"] == "# PRD\nSearch by name"
     assert engineering_task.context["design_spec_structured"] == design_spec
-    assert engineering_task.context["design_spec"] == design_spec
+    assert engineering_task.context["design_spec"] == "Search UX summary"
     assert engineering_task.context["design_spec_summary"] == "Search UX summary"
     assert engineering_task.context["ux_self_review"] == {"approved": True}

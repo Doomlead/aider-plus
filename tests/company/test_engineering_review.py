@@ -2,6 +2,7 @@ import asyncio
 import json
 
 from aider.company.departments.engineering import EngineeringDepartment
+from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.schemas import CompanyTask, Deliverable
 from aider.memory import ConversationMemory, ProjectMemory
 
@@ -248,3 +249,128 @@ def test_reviewer_phase_uses_structured_agent_feedback(tmp_path):
         )
 
     asyncio.run(run_test())
+
+
+
+def test_reviewer_phase_resolves_active_task_for_design_context(tmp_path):
+    class TaskRepository:
+        def __init__(self, task):
+            self.task = task
+
+        async def get(self, task_id):
+            assert task_id == self.task.task_id
+            return self.task
+
+    async def run_test():
+        memory = ProjectMemory(str(tmp_path))
+        loop = StructuredReviewAgentLoop(
+            {
+                "content": json.dumps(
+                    {
+                        "review_passed": True,
+                        "issues": [],
+                        "overall_assessment": "Implementation matches the design spec.",
+                        "needs_revision": False,
+                    }
+                )
+            }
+        )
+        department = EngineeringDepartment(
+            project_memory=memory,
+            agent_loop=loop,
+            conversation_memory=loop.coder.conversation_memory,
+        )
+        task = CompanyTask(
+            task_id="task-3",
+            origin="ux",
+            target="engineering",
+            artifact_type="design_spec",
+            payload={},
+            context={
+                "prd_summary": "Build safe empty-state handling",
+                "design_spec_structured": {
+                    "title": "Empty State",
+                    "overview": "Show clear fallback UI.",
+                    "key_screens": ["Results"],
+                },
+            },
+        )
+        department.task_repository = TaskRepository(task)
+
+        async def no_checks(changed_files):
+            return []
+
+        department._run_targeted_checks = no_checks
+        previous = Deliverable(
+            task_id="task-3",
+            department="engineering",
+            artifact_type="code",
+            payload="implemented",
+            status="success",
+            metadata={"files": ["app.py"]},
+        )
+
+        review = await department._run_reviewer_phase(previous)
+
+        assert review.status == "success"
+        assert department._active_task is task
+        system_prompt = loop.structured_calls[0]["system_prompt"]
+        assert "Build safe empty-state handling" in system_prompt
+        assert "Title: Empty State" in system_prompt
+        assert "Key Screens: ['Results']" in system_prompt
+
+    asyncio.run(run_test())
+
+
+def test_handoff_task_propagates_prd_and_design_context(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    orchestrator = CompanyOrchestrator(memory)
+    prd_structured = {
+        "title": "Search",
+        "problem_statement": "Users need to find records.",
+        "acceptance_criteria": ["Search by name"],
+    }
+    product_deliverable = Deliverable(
+        task_id="task-4",
+        department="product",
+        artifact_type="prd",
+        payload="# PRD\nSearch by name",
+        status="success",
+        metadata={
+            "original_request": "Add search",
+            "prd_structured": prd_structured,
+            "open_questions": [],
+        },
+    )
+
+    ux_task = orchestrator._handoff_task(product_deliverable, "ux")
+
+    assert ux_task.context["prd_structured"] == prd_structured
+    assert ux_task.context["prd_summary"] == "# PRD\nSearch by name"
+
+    design_spec = {
+        "title": "Search UX",
+        "overview": "Search box with results list.",
+        "key_screens": ["Search"],
+    }
+    ux_deliverable = Deliverable(
+        task_id="task-4",
+        department="ux",
+        artifact_type="design_spec",
+        payload="Search UX summary",
+        status="success",
+        metadata={
+            "context": ux_task.context,
+            "design_spec_structured": design_spec,
+            "self_review": {"approved": True},
+        },
+    )
+
+    engineering_task = orchestrator._handoff_task(ux_deliverable, "engineering")
+
+    assert engineering_task.context["prd_structured"] == prd_structured
+    assert engineering_task.context["prd_summary"] == "# PRD\nSearch by name"
+    assert engineering_task.context["design_spec_structured"] == design_spec
+    assert engineering_task.context["design_spec"] == design_spec
+    assert engineering_task.context["design_spec_summary"] == "Search UX summary"
+    assert engineering_task.context["ux_self_review"] == {"approved": True}

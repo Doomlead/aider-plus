@@ -276,6 +276,8 @@ Address ALL reviewer feedback from the previous round if present.
         return (
             context.get("prd_content")
             or payload.get("prd_content")
+            or context.get("prd_summary")
+            or payload.get("prd_summary")
             or payload.get("original_request")
             or str(task.payload)
         )
@@ -359,15 +361,22 @@ Address ALL reviewer feedback from the previous round if present.
     async def _run_reviewer_phase(self, previous_deliverable: Deliverable) -> Deliverable:
         """Run intelligent review using the agent loop and structured feedback."""
         self.current_stage = "reviewer"
+        if not self._active_task:
+            self._active_task = await self._resolve_task(previous_deliverable.task_id)
+
         metadata = dict(previous_deliverable.metadata)
         changed_files = await self._changed_files(metadata)
         diff = await self._implementation_diff(metadata)
         checks = await self._run_targeted_checks(changed_files)
         programmer_diffs = metadata.get("diffs_summary") or diff
+        base_review_context = self._review_context(self._active_task)
+        design_spec_summary = self._get_design_spec_summary(base_review_context)
 
         review_context = {
+            **base_review_context,
             "prd_summary": self._get_prd_summary(),
-            "design_spec": self._get_design_spec(),
+            "design_spec": design_spec_summary,
+            "design_spec_summary": design_spec_summary,
             "playbook_guidance": self._get_playbook_guidance(),
             "programmer_diffs": programmer_diffs,
             "changed_files": changed_files,
@@ -381,6 +390,7 @@ Address ALL reviewer feedback from the previous round if present.
             if check.get("status") != "failed":
                 continue
             description = f"Reviewer check failed: {check.get('name')}"
+            # TODO: Use fuzzy matching (e.g., token overlap) for dedup in v0.8.
             if any(issue.get("description") == description for issue in review_data["issues"]):
                 continue
             review_data["issues"].append(
@@ -539,17 +549,75 @@ Address ALL reviewer feedback from the previous round if present.
         if callable(emit):
             await emit(event_name, payload)
 
-    def _review_context(self, task: Optional[CompanyTask]) -> dict:
-        payload = task.payload if task and isinstance(task.payload, dict) else {}
-        task_context = task.context if task and isinstance(task.context, dict) else {}
+    async def _resolve_task(self, task_id: str) -> Optional[CompanyTask]:
+        """Resolve a task ID to a CompanyTask object when a repository is available."""
+        task_repository = getattr(self, "task_repository", None)
+        if task_repository is not None:
+            get_task = getattr(task_repository, "get", None)
+            if callable(get_task):
+                task = get_task(task_id)
+                if hasattr(task, "__await__"):
+                    task = await task
+                if task is not None:
+                    return task
+        return self._active_task
+
+    def _review_context(self, task: Optional[CompanyTask] = None) -> dict:
+        """Build review context from the active task, if one is available."""
+        task = task or self._active_task
+        if not task:
+            return {
+                "original_request": "",
+                "prd_content": None,
+                "prd_summary": self._get_prd_summary(),
+                "design_spec": None,
+                "design_spec_structured": None,
+                "playbook_guidance": [],
+            }
+
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        task_context = task.context if isinstance(task.context, dict) else {}
         return {
-            "original_request": payload.get("original_request") or (task.payload if task else ""),
+            "original_request": (
+                payload.get("original_request")
+                or task_context.get("original_request")
+                or task.payload
+            ),
             "prd_content": payload.get("prd_content") or task_context.get("prd_content"),
-            "design_spec": payload.get("design_spec") or task_context.get("design_spec"),
+            "prd_summary": (
+                task_context.get("prd_summary")
+                or payload.get("prd_summary")
+                or self._get_prd_summary()
+            ),
+            "design_spec": task_context.get("design_spec") or payload.get("design_spec"),
+            "design_spec_structured": (
+                task_context.get("design_spec_structured")
+                or payload.get("design_spec_structured")
+            ),
+            "design_spec_summary": (
+                task_context.get("design_spec_summary")
+                or payload.get("design_spec_summary")
+            ),
             "playbook_guidance": (
                 task_context.get("playbook_guidance") or payload.get("playbook_guidance") or []
             ),
         }
+
+    def _get_design_spec_summary(self, review_context: Optional[dict] = None) -> str:
+        """Extract a compact DesignSpec summary from review context."""
+        ctx = review_context or self._review_context()
+        spec = (
+            ctx.get("design_spec_summary")
+            or ctx.get("design_spec")
+            or ctx.get("design_spec_structured")
+        )
+        if isinstance(spec, dict):
+            return (
+                f"Title: {spec.get('title')}\n"
+                f"Overview: {spec.get('overview')}\n"
+                f"Key Screens: {spec.get('key_screens', [])}"
+            )
+        return str(spec or "No design spec available")
 
     def _get_reviewer_system_prompt(self, context) -> str:
         """Return high-quality reviewer prompt."""

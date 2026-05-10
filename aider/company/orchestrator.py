@@ -394,6 +394,7 @@ class CompanyOrchestrator:
     def _handoff_task(self, d: Deliverable, next_target: str) -> CompanyTask:
         payload = d.payload
         context = dict(d.metadata.get("context", {}))
+        metadata = dict(d.metadata or {})
 
         if (
             d.department == "product"
@@ -406,26 +407,37 @@ class CompanyOrchestrator:
         ):
             prd_content = d.payload if isinstance(d.payload, str) else str(d.payload)
             payload = {
-                "original_request": d.metadata.get("original_request"),
+                "original_request": metadata.get("original_request"),
                 "prd_content": prd_content,
-                "prd_structured": d.metadata.get("prd_structured"),
-                "prd_metadata": dict(d.metadata),
-                "open_questions": d.metadata.get("open_questions", []),
+                "prd_summary": prd_content,
+                "prd_structured": metadata.get("prd_structured") or metadata.get("prd"),
+                "prd_metadata": metadata,
+                "open_questions": metadata.get("open_questions", []),
             }
             context.update(payload)
         elif d.department == "ux" and next_target == "engineering":
-            prd_content = context.get("prd_content") or ""
+            prd_content = context.get("prd_content") or context.get("prd_summary") or ""
             design_spec_md = d.payload if isinstance(d.payload, str) else str(d.payload)
+            design_spec_structured = (
+                metadata.get("design_spec_structured")
+                or metadata.get("design_spec")
+                or (d.payload if isinstance(d.payload, dict) else None)
+            )
 
             payload = {
                 "original_request": context.get("original_request"),
                 "prd_content": prd_content,
+                "prd_summary": context.get("prd_summary") or prd_content,
                 "prd_structured": context.get("prd_structured"),
-                "design_spec": design_spec_md,
-                "design_spec_structured": d.metadata.get("design_spec_structured"),
-                "design_metadata": dict(d.metadata),
+                "design_spec": design_spec_structured or design_spec_md,
+                "design_spec_summary": design_spec_md if isinstance(d.payload, str) else None,
+                "design_spec_structured": design_spec_structured,
+                "design_metadata": metadata,
             }
-            context.update(payload)
+            ux_review = metadata.get("self_review")
+            if ux_review:
+                payload["ux_self_review"] = ux_review
+            context.update({key: value for key, value in payload.items() if value is not None})
         elif (
             d.department == "product"
             and next_target == "engineering"
@@ -433,9 +445,18 @@ class CompanyOrchestrator:
         ):
             payload = {
                 "clarification_response": d.content,
-                "clarification_metadata": dict(d.metadata),
+                "clarification_metadata": metadata,
                 **context,
             }
+
+        if "prd_summary" not in context and "prd_structured" in context:
+            prd = context["prd_structured"]
+            if isinstance(prd, dict):
+                context["prd_summary"] = (
+                    f"{prd.get('title', '')}\n"
+                    f"{prd.get('overview') or prd.get('problem_statement', '')}\n"
+                    f"Requirements: {prd.get('requirements') or prd.get('acceptance_criteria', [])}"
+                )
 
         return CompanyTask(
             task_id=d.task_id,

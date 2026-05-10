@@ -149,81 +149,102 @@ class EngineeringDepartment(Department):
     async def _run_programmer_phase(
         self, task: CompanyTask, previous_deliverable: Optional[Deliverable] = None
     ) -> Deliverable:
-        """Run the existing Architect → Editor flow, applying reviewer feedback on revisions."""
+        """Programmer phase: incorporate PRD + DesignSpec + previous reviewer feedback."""
         self.current_stage = "programmer"
-        task_text = self._task_text(task)
-        qa_feedback_dict = (
-            task.context.get("qa_feedback") if isinstance(task.context, dict) else None
-        )
-        if qa_feedback_dict:
-            from aider.company.schemas import QAFeedback
 
-            fb = QAFeedback.from_dict(qa_feedback_dict)
-            qa_section = (
-                f"\n\n## QA Revision {fb.revision_number} — Fix Required\n\n"
-                f"The following tests failed and must be fixed before re-submission:\n"
-                + "\n".join(f"- {t}" for t in fb.failed_tests)
-                + f"\n\n**Failure output (truncated):**\n```\n{fb.failure_output[:1500]}\n```\n\n"
-                f"**Recommended fixes:**\n"
-                + "\n".join(f"- {r}" for r in fb.recommended_fixes)
-                + f"\n\n**PRD reminder:** {fb.prd_excerpt}\n"
-            )
-            task_text += qa_section
-        reviewer_feedback = None
+        base_instruction = self._extract_instruction(task)
+        prd_text = self._get_prd_context(task)
+        design_text = self._get_design_context(task)
+        reviewer_feedback = ""
+        reviewer_feedback_data = None
 
         if self._deliverable_needs_revision(previous_deliverable):
-            self._revision_count += 1
-            reviewer_feedback = self._feedback_data(previous_deliverable)
-            review_feedback = self._format_review_feedback(previous_deliverable)
+            previous_revision_count = previous_deliverable.metadata.get("revision_count", 0)
+            revision_count = previous_revision_count + 1
+            reviewer_feedback_data = self._feedback_data(previous_deliverable)
+            reviewer_feedback = self._format_review_feedback(previous_deliverable)
             feedback_summary = self._review_feedback_summary(previous_deliverable)
             self._last_reviewer_issues = feedback_summary
             await self._emit_engineering_event(
                 task.task_id,
                 "programmer_revision_start",
                 {
-                    "revision_count": self._revision_count,
+                    "revision_count": revision_count,
                     "last_reviewer_issues_count": len(self._feedback_issues(previous_deliverable)),
                     "last_reviewer_issues": feedback_summary,
+                    "has_reviewer_feedback": True,
                     "has_previous_feedback": True,
                 },
             )
-            task_text = f"""Previous Code Review Feedback (CRITICAL - Address ALL issues before proceeding):
+        else:
+            revision_count = 1
 
-{review_feedback}
+        full_prompt = f"""Original Request / PRD:
+{prd_text}
 
-Original Task:
-{task_text}
+Design Specification:
+{design_text}
 
-Fix all issues raised by the reviewer while still fully satisfying the original PRD and design specifications.
-Pay special attention to the reviewer's suggestions."""
+{reviewer_feedback}
+
+Task:
+{base_instruction}
+
+Implement this feature following the PRD and design spec above.
+Address ALL reviewer feedback from the previous round if present.
+"""
+
+        full_prompt = self._append_qa_feedback(full_prompt, task)
 
         record_department_memory = not self._uses_agent_conversation_memory()
         if record_department_memory:
-            self.conversation.add(role="user", content=task_text)
+            self.conversation.add(role="user", content=full_prompt)
 
-        result = await self._run_agent_loop(
-            task_text,
-            enable_caching=self._caching_enabled(),
-        )
+        result = await self._execute_programmer_coder(full_prompt, task)
 
         content = self._result_content(result)
         if content and record_department_memory:
             self.conversation.add(role="assistant", content=content)
 
         metadata = self._result_metadata(result)
-        metadata.setdefault("stage", "programmer")
-        metadata.setdefault("revision_count", self._revision_count)
-        metadata.setdefault("review_feedback_applied", reviewer_feedback)
-        metadata.setdefault("last_reviewer_issues", self._last_reviewer_issues)
-        metadata.setdefault("cache_enabled", self._caching_enabled())
+        changed_files = metadata.get("changed_files") or metadata.get("files") or []
+        diffs_summary = self._result_diffs_summary(result, metadata)
+        commits = metadata.get("commits") or []
+        result_metadata = self._raw_result_metadata(result)
+        if result_metadata:
+            metadata.update(result_metadata)
+
+        metadata.update(
+            {
+                "stage": "programmer",
+                "changed_files": changed_files,
+                "files": changed_files,
+                "diffs_summary": diffs_summary,
+                "commits": commits,
+                "revision_count": revision_count,
+                "review_feedback_applied": reviewer_feedback_data,
+                "last_reviewer_issues": (
+                    self._review_feedback_summary(previous_deliverable)
+                    if previous_deliverable
+                    else None
+                ),
+                "used_prd": bool(prd_text),
+                "used_design_spec": bool(design_text),
+                "cache_enabled": self._caching_enabled(),
+            }
+        )
+        self._revision_count = revision_count
+
         await self._emit_engineering_event(
             task.task_id,
             "programmer_complete",
             {
-                "revision_count": self._revision_count,
-                "files_changed": len(metadata.get("changed_files") or metadata.get("files") or []),
+                "revision_count": revision_count,
+                "files_changed": len(changed_files),
+                "used_design_spec": bool(design_text),
             },
         )
+
         return Deliverable(
             task_id=task.task_id,
             department=self.name,
@@ -232,6 +253,108 @@ Pay special attention to the reviewer's suggestions."""
             status="failure" if self._result_error(result) else "success",
             metadata=metadata,
         )
+
+    async def _execute_programmer_coder(self, full_prompt: str, task: CompanyTask):
+        """Run the Architect → Editor programmer coder with the rich prompt."""
+        return await self._run_agent_loop(
+            full_prompt,
+            enable_caching=self._caching_enabled(),
+        )
+
+    def _get_prd_context(self, task: CompanyTask) -> str:
+        """Extract structured or raw PRD from context/payload."""
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        context = task.context if isinstance(task.context, dict) else {}
+        prd = context.get("prd_structured") or payload.get("prd_structured")
+        if isinstance(prd, dict):
+            return (
+                f"Title: {prd.get('title')}\n"
+                f"Problem: {prd.get('problem_statement')}\n"
+                "Acceptance Criteria:\n"
+                + "\n".join(f"- {c}" for c in prd.get("acceptance_criteria", []))
+            )
+        return (
+            context.get("prd_content")
+            or payload.get("prd_content")
+            or payload.get("original_request")
+            or str(task.payload)
+        )
+
+    def _get_design_context(self, task: CompanyTask) -> str:
+        """Extract structured or raw DesignSpec from context/payload."""
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        context = task.context if isinstance(task.context, dict) else {}
+        spec = context.get("design_spec_structured") or payload.get("design_spec_structured")
+        if isinstance(spec, dict):
+            return (
+                f"Design Title: {spec.get('title')}\n"
+                f"Overview: {spec.get('overview')}\n"
+                f"Key Screens: {spec.get('key_screens', [])}"
+            )
+        return context.get("design_spec") or payload.get("design_spec") or ""
+
+    @staticmethod
+    def _extract_instruction(task: CompanyTask) -> str:
+        """Get the core instruction from various possible locations."""
+        if isinstance(task.payload, dict):
+            return (
+                task.payload.get("instruction") or task.payload.get("prompt") or str(task.payload)
+            )
+        return str(task.payload)
+
+    @staticmethod
+    def _raw_result_metadata(result) -> dict:
+        if isinstance(result, dict):
+            return dict(result.get("metadata") or {})
+        return dict(getattr(result, "metadata", None) or {})
+
+    @staticmethod
+    def _result_diffs_summary(result, metadata: dict) -> str:
+        if isinstance(result, dict):
+            coder_result = result.get("coder_result") or {}
+            return (
+                result.get("diffs_summary")
+                or coder_result.get("diffs_summary")
+                or metadata.get("diffs_summary")
+                or EngineeringDepartment._join_diffs(metadata.get("diffs"))
+                or ""
+            )
+        return (
+            getattr(result, "diffs_summary", None)
+            or metadata.get("diffs_summary")
+            or EngineeringDepartment._join_diffs(metadata.get("diffs"))
+            or ""
+        )
+
+    @staticmethod
+    def _join_diffs(diffs) -> str:
+        if isinstance(diffs, str):
+            return diffs
+        if isinstance(diffs, list):
+            return "\n".join(str(diff) for diff in diffs if diff)
+        return ""
+
+    def _append_qa_feedback(self, prompt: str, task: CompanyTask) -> str:
+        """Append structured QA feedback when Engineering is handling a QA revision."""
+        qa_feedback_dict = (
+            task.context.get("qa_feedback") if isinstance(task.context, dict) else None
+        )
+        if not qa_feedback_dict:
+            return prompt
+
+        from aider.company.schemas import QAFeedback
+
+        fb = QAFeedback.from_dict(qa_feedback_dict)
+        qa_section = (
+            f"\n\n## QA Revision {fb.revision_number} — Fix Required\n\n"
+            "The following tests failed and must be fixed before re-submission:\n"
+            + "\n".join(f"- {t}" for t in fb.failed_tests)
+            + f"\n\n**Failure output (truncated):**\n```\n{fb.failure_output[:1500]}\n```\n\n"
+            "**Recommended fixes:**\n"
+            + "\n".join(f"- {r}" for r in fb.recommended_fixes)
+            + f"\n\n**PRD reminder:** {fb.prd_excerpt}\n"
+        )
+        return prompt + qa_section
 
     async def _run_reviewer_phase(self, previous_deliverable: Deliverable) -> Deliverable:
         """Run intelligent review using the agent loop and structured feedback."""
@@ -644,13 +767,13 @@ Be specific and actionable."""
         return bool(value)
 
     def _get_prd_summary(self) -> str:
-        context = self._review_context(self._active_task)
-        prd = context.get("prd_content") or self.memory.data.get("prd")
+        prd = self._get_prd_context(self._active_task) if self._active_task else None
+        prd = prd or self.memory.data.get("prd")
         return str(prd or "No PRD available")
 
     def _get_design_spec(self) -> str:
-        context = self._review_context(self._active_task)
-        design_spec = context.get("design_spec") or self.memory.data.get("design_spec")
+        design_spec = self._get_design_context(self._active_task) if self._active_task else None
+        design_spec = design_spec or self.memory.data.get("design_spec")
         return str(design_spec or "No design spec")
 
     def _get_playbook_guidance(self) -> str:

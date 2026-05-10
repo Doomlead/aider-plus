@@ -114,18 +114,19 @@ def test_engineering_loops_back_to_programmer_when_review_needs_revision(tmp_pat
 
         assert deliverable.status == "success"
         assert deliverable.review_passed is True
-        assert loop.last_task_text.startswith(
-            "Previous Code Review Feedback "
-            "(CRITICAL - Address ALL issues before proceeding):"
-        )
+        assert loop.last_task_text.startswith("Original Request / PRD:")
+        assert "Build the feature" in loop.last_task_text
+        assert "Design Specification:" in loop.last_task_text
         assert "[HIGH] app.py:12-14: Add a missing assertion." in loop.last_task_text
         assert "→ Update the implementation." in loop.last_task_text
-        assert "Original Task:" in loop.last_task_text
+        assert "Task:" in loop.last_task_text
         assert (
-            "Fix all issues raised by the reviewer while still fully satisfying "
-            "the original PRD and design specifications."
+            "Implement this feature following the PRD and design spec above."
         ) in loop.last_task_text
-        assert deliverable.metadata["revision_count"] == 1
+        assert (
+            "Address ALL reviewer feedback from the previous round if present."
+        ) in loop.last_task_text
+        assert deliverable.metadata["revision_count"] == 2
         assert deliverable.metadata["last_reviewer_issues"] == (
             "1 issues found. Needs revision before QA."
         )
@@ -140,7 +141,7 @@ def test_engineering_loops_back_to_programmer_when_review_needs_revision(tmp_pat
             "engineering_reviewer_start",
             "engineering_review_approved",
         ]
-        assert emitted[5].payload["revision_count"] == 1
+        assert emitted[5].payload["revision_count"] == 2
         assert emitted[5].payload["last_reviewer_issues_count"] == 1
         assert emitted[5].payload["last_reviewer_issues"] == (
             "1 issues found. Needs revision before QA."

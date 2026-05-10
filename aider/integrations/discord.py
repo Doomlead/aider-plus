@@ -259,7 +259,8 @@ class DiscordAiderBot:
         )
         self.ux = UXDepartment(
             project_memory=coder.project_memory,
-            conversation_memory=None,
+            agent_loop=agent_loop,
+            conversation_memory=coder.conversation_memory,
         )
         self.qa = QADepartment(
             project_memory=coder.project_memory,

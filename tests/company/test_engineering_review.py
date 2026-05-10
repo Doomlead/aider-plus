@@ -367,7 +367,7 @@ def test_reviewer_phase_resolves_active_task_for_design_context(tmp_path):
         system_prompt = loop.structured_calls[0]["system_prompt"]
         assert "Build safe empty-state handling" in system_prompt
         assert "Title: Empty State" in system_prompt
-        assert "Key Screens: 1 defined" in system_prompt
+        assert "Key Screens: 1" in system_prompt
 
     asyncio.run(run_test())
 

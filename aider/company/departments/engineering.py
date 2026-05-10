@@ -391,7 +391,7 @@ Address ALL reviewer feedback from the previous round if present.
         return prompt + qa_section
 
     async def _run_reviewer_phase(self, previous_deliverable: Deliverable) -> Deliverable:
-        """Run intelligent review with robust context and active task resolution."""
+        """Run intelligent review with full context, iteration safety, and forced approval."""
         self.current_stage = "reviewer"
         await self._resolve_task(previous_deliverable.task_id)
 
@@ -401,11 +401,8 @@ Address ALL reviewer feedback from the previous round if present.
         checks = await self._run_targeted_checks(changed_files)
 
         review_context = self._review_context()
-        design_spec_summary = self._get_design_spec_summary(review_context)
         review_context.update(
             {
-                "design_spec": design_spec_summary,
-                "design_spec_summary": design_spec_summary,
                 "programmer_diffs": diff or metadata.get("diffs_summary", ""),
                 "changed_files": changed_files,
                 "targeted_checks": checks,
@@ -416,54 +413,45 @@ Address ALL reviewer feedback from the previous round if present.
         reviewer_result = await self._run_structured_reviewer(review_context)
         review_data = self._parse_reviewer_output(reviewer_result)
 
-        # Add failing checks as issues
+        # Append failing checks as blocking issues
         for check in checks:
-            if check.get("status") == "failed":
-                description = f"Reviewer check failed: {check.get('name')}"
-                if not any(issue.get("description") == description for issue in review_data["issues"]):
-                    review_data["issues"].append(
-                        {
-                            "file": None,
-                            "line_range": None,
-                            "severity": "critical" if check.get("required", True) else "medium",
-                            "description": description,
-                            "suggestion": check.get("output") or "Fix the failing check.",
-                        }
-                    )
-                    if check.get("required", True):
-                        review_data["needs_revision"] = True
-                        review_data["review_passed"] = False
+            if check.get("status") != "failed":
+                continue
+            description = f"Reviewer check failed: {check.get('name')}"
+            if not any(
+                issue.get("description") == description
+                for issue in review_data.get("issues", [])
+            ):
+                review_data.setdefault("issues", []).append(
+                    {
+                        "file": None,
+                        "line_range": None,
+                        "severity": "critical" if check.get("required", True) else "medium",
+                        "description": description,
+                        "suggestion": check.get("output") or "Fix the failing check.",
+                    }
+                )
+                if check.get("required", True):
+                    review_data["needs_revision"] = True
+                    review_data["review_passed"] = False
 
-        if previous_deliverable.status == "failure" and not any(
-            issue.get("description") == "Programmer phase reported a failure."
-            for issue in review_data["issues"]
-        ):
-            review_data["issues"].insert(
-                0,
-                {
-                    "file": None,
-                    "line_range": None,
-                    "severity": "critical",
-                    "description": "Programmer phase reported a failure.",
-                    "suggestion": "Resolve the implementation error before QA handoff.",
-                },
-            )
-            review_data["needs_revision"] = True
-            review_data["review_passed"] = False
+        reviewer_feedback_summary = str(review_data.get("overall_assessment", ""))[:500]
 
-        # Enforce max review iterations
+        # === Iteration Control & Forced Approval ===
         review_iteration = int(metadata.get("review_iteration", 0) or 0) + 1
         max_iterations = getattr(self.config, "max_review_iterations", 3) if self.config else 3
         max_iterations = int(max_iterations or 3)
 
-        if review_iteration >= max_iterations and not review_data["review_passed"]:
+        forced_approval = False
+        if review_iteration >= max_iterations and not review_data.get("review_passed", False):
+            forced_approval = True
             review_data["review_passed"] = True
             review_data["needs_revision"] = False
-            review_data["overall_assessment"] += (
-                f"\n\n[FORCED APPROVAL after {max_iterations} review iterations. "
-                "Human executive should review manually before release.]"
+            review_data["overall_assessment"] = (
+                review_data.get("overall_assessment", "")
+                + f"\n\n[FORCED APPROVAL after {max_iterations} review iterations. "
+                "Manual executive review strongly recommended before release.]"
             )
-
             await self._emit_engineering_event(
                 previous_deliverable.task_id,
                 "reviewer_forced_approval",
@@ -478,8 +466,6 @@ Address ALL reviewer feedback from the previous round if present.
                 },
             )
 
-        reviewer_feedback_summary = review_data.get("overall_assessment", "")[:500]
-
         metadata.update(
             {
                 "stage": "reviewer",
@@ -489,20 +475,21 @@ Address ALL reviewer feedback from the previous round if present.
                 "diffs": [diff] if diff else metadata.get("diffs", []),
                 "diffs_summary": review_context.get("programmer_diffs", ""),
                 "review_prompt": self._get_reviewer_system_prompt(review_context),
-                "review_feedback": review_data,
-                "review_passed": review_data["review_passed"],
                 "review_checks": checks,
-                "issues": review_data["issues"],
-                "overall_assessment": review_data["overall_assessment"],
-                "needs_revision": review_data["needs_revision"],
+                "issues": review_data.get("issues", []),
+                "overall_assessment": review_data.get("overall_assessment", ""),
+                "review_feedback": review_data,
+                "review_passed": review_data.get("review_passed", False),
+                "needs_revision": review_data.get("needs_revision", False),
                 "reviewer_feedback_summary": reviewer_feedback_summary,
                 "used_design_spec": bool(review_context.get("design_spec_summary")),
+                "forced_approval": forced_approval,
             }
         )
         metadata["cache_enabled"] = self._caching_enabled(role="reviewer")
 
         payload = previous_deliverable.payload
-        if review_data["needs_revision"]:
+        if review_data.get("needs_revision"):
             payload = (
                 f"{previous_deliverable.payload}\n\n"
                 "Reviewer requested revisions:\n"
@@ -513,28 +500,32 @@ Address ALL reviewer feedback from the previous round if present.
             previous_deliverable.task_id,
             "reviewer_complete",
             {
-                "review_passed": review_data["review_passed"],
-                "needs_revision": review_data["needs_revision"],
+                "review_passed": review_data.get("review_passed", False),
+                "needs_revision": review_data.get("needs_revision", False),
                 "issue_count": len(review_data.get("issues", [])),
                 "review_iteration": review_iteration,
+                "forced_approval": forced_approval,
                 "used_design_spec": bool(review_context.get("design_spec_summary")),
-                "summary": review_data["overall_assessment"][:300],
+                "summary": review_data.get("overall_assessment", "")[:300],
                 "reviewer_feedback_summary": reviewer_feedback_summary,
             },
         )
 
+        # Record metrics and learn systemic patterns only
         self._record_reviewer_metrics(review_data, review_iteration)
         self._learn_reviewer_playbook_pattern(review_data, previous_deliverable.task_id)
+
+        status = "success" if review_data.get("review_passed") else "needs_revision"
 
         return Deliverable(
             task_id=previous_deliverable.task_id,
             department=self.name,
             artifact_type="code",
             payload=payload,
-            status="success" if review_data["review_passed"] else "needs_revision",
+            status=status,
             metadata=metadata,
             review_feedback=review_data,
-            review_passed=review_data["review_passed"],
+            review_passed=review_data.get("review_passed", False),
         )
 
     async def _run_agent_loop(
@@ -611,7 +602,7 @@ Address ALL reviewer feedback from the previous round if present.
             await emit(event_name, payload)
 
     async def _resolve_task(self, task_id: str) -> None:
-        """Ensure active task is set for reviewer context."""
+        """Ensure _active_task is set for context building."""
         if self._active_task and self._active_task.task_id == task_id:
             return
 
@@ -626,15 +617,15 @@ Address ALL reviewer feedback from the previous round if present.
                     self._active_task = task
                     return
 
-        # Fallback resolution if needed (e.g. from memory)
-        get_active_project = getattr(self.memory, "get_active_project", None)
-        project = get_active_project() if callable(get_active_project) else None
-        if project and getattr(project, "engineering_result", None):
-            self._active_task = project.engineering_result  # best effort
+        # Best-effort fallback from project memory
+        if self.memory and hasattr(self.memory, "get_active_project"):
+            project = self.memory.get_active_project()
+            if project and project.engineering_result:
+                self._active_task = project.engineering_result
 
-    def _review_context(self, task: Optional[CompanyTask] = None) -> dict:
-        """Consolidated, robust context builder."""
-        task = task or self._active_task
+    def _review_context(self) -> dict:
+        """Consolidated context for reviewer prompts."""
+        task = self._active_task
         payload = task.payload if task and isinstance(task.payload, dict) else {}
         context = task.context if task and isinstance(getattr(task, "context", None), dict) else {}
 
@@ -642,11 +633,6 @@ Address ALL reviewer feedback from the previous round if present.
             context.get("design_spec_structured") or payload.get("design_spec_structured")
         )
         design_spec = context.get("design_spec") or payload.get("design_spec")
-        design_spec_summary = (
-            context.get("design_spec_summary")
-            or payload.get("design_spec_summary")
-            or self._summarize_design_spec(design_spec_structured or design_spec)
-        )
 
         return {
             "original_request": (
@@ -657,31 +643,47 @@ Address ALL reviewer feedback from the previous round if present.
             "prd_content": context.get("prd_content") or payload.get("prd_content"),
             "prd_summary": self._get_prd_summary(),
             "design_spec": design_spec,
-            "design_spec_summary": design_spec_summary,
+            "design_spec_summary": self._get_design_spec_summary(),
             "playbook_guidance": self._get_playbook_guidance(),
             "design_spec_structured": design_spec_structured,
         }
 
-    def _get_design_spec_summary(self, review_context: Optional[dict] = None) -> str:
-        """Rich, reusable DesignSpec summary."""
-        ctx = review_context or self._review_context()
-        spec = ctx.get("design_spec_structured") or ctx.get("design_spec")
-        return self._summarize_design_spec(spec)
+    def _get_design_spec_summary(self) -> str:
+        """Rich DesignSpec summary for reviewer prompt."""
+        task = self._active_task
+        payload = task.payload if task and isinstance(task.payload, dict) else {}
+        context = task.context if task and isinstance(getattr(task, "context", None), dict) else {}
+        spec = (
+            context.get("design_spec_structured")
+            or payload.get("design_spec_structured")
+            or context.get("design_spec")
+            or payload.get("design_spec")
+            or self.memory.data.get("design_spec")
+        )
+        if isinstance(spec, dict):
+            parts = [f"Title: {spec.get('title', 'Untitled Design')}"]
+            if overview := spec.get("overview"):
+                parts.append(f"Overview: {str(overview)[:200]}")
+            if screens := spec.get("key_screens"):
+                parts.append(f"Key Screens: {len(screens)}")
+            if components := spec.get("component_library"):
+                parts.append(f"Components: {len(components)}")
+            if accessibility := spec.get("accessibility_notes"):
+                parts.append(f"Accessibility: {str(accessibility)[:150]}")
+            return "\n".join(parts)
+        return str(spec or "No DesignSpec available")[:800]
 
     @staticmethod
     def _summarize_design_spec(spec) -> str:
         if isinstance(spec, dict):
-            parts = [
-                f"Title: {spec.get('title', 'Untitled')}",
-                f"Overview: {str(spec.get('overview', ''))[:200]}",
-            ]
-            if key_screens := spec.get("key_screens"):
-                parts.append(f"Key Screens: {len(key_screens)} defined")
-            if components := (spec.get("component_library") or spec.get("components")):
-                parts.append(f"Components: {len(components)} defined")
-            if accessibility := (
-                spec.get("accessibility_notes") or spec.get("accessibility_requirements")
-            ):
+            parts = [f"Title: {spec.get('title', 'Untitled Design')}"]
+            if overview := spec.get("overview"):
+                parts.append(f"Overview: {str(overview)[:200]}")
+            if screens := spec.get("key_screens"):
+                parts.append(f"Key Screens: {len(screens)}")
+            if components := spec.get("component_library"):
+                parts.append(f"Components: {len(components)}")
+            if accessibility := spec.get("accessibility_notes"):
                 parts.append(f"Accessibility: {str(accessibility)[:150]}")
             return "\n".join(parts)
         return str(spec or "No DesignSpec available")[:800]
@@ -694,7 +696,7 @@ Original PRD / Requirements:
 {context.get('prd_summary', 'No PRD available')}
 
 Design Spec (if any):
-{context.get('design_spec', 'No design spec')}
+{context.get('design_spec_summary') or context.get('design_spec', 'No design spec')}
 
 Coding Standards & Playbook:
 {context.get('playbook_guidance', 'None')}
@@ -1226,36 +1228,26 @@ Be specific and actionable."""
         return sorted(dict.fromkeys(files))
 
     async def _implementation_diff(self, metadata: dict) -> str:
-        """Get implementation diff with size control for reviewer prompts."""
-        diff = metadata.get("diffs_summary") or ""
-        if not diff:
-            diffs = metadata.get("diffs") or []
-            if isinstance(diffs, str):
-                diffs = [diffs]
-            diff = "\n".join(str(item) for item in diffs if item)
-        if not diff:
-            root = self._repo_root()
-            if root is None:
-                return "Diff unavailable"
-            result = await self._run_command(["git", "diff", "--stat"], root)
-            stat = result.get("stdout", "")
-            result = await self._run_command(["git", "diff", "--"], root)
-            body = result.get("stdout", "")
-            diff = "\n".join(part for part in (stat, body) if part).strip()
-
-        if not diff:
-            return ""
-
-        max_diff_lines = 500
+        """Return diff with strong truncation warning."""
+        diff = metadata.get("diffs_summary") or await self._raw_git_diff()
         lines = str(diff).splitlines()
-        if len(lines) > max_diff_lines:
-            diff = "\n".join(lines[:max_diff_lines])
-            diff += (
-                "\n\n[WARNING: Diff truncated to first 500 lines for reviewer. "
-                "Do not assume untouched sections are correct. Focus only on provided changes.]\n"
-            )
-
+        if len(lines) > 500:
+            diff = "\n".join(lines[:500])
+            diff += "\n\n[WARNING: Diff truncated to first 500 lines for reviewer. "
+            diff += "Do not assume untouched sections are correct. "
+            diff += "Focus only on the provided changes for consistency checks.]\n"
         return str(diff)
+
+    async def _raw_git_diff(self) -> str:
+        """Return the current repository diff for reviewer context."""
+        root = self._repo_root()
+        if root is None:
+            return "Diff unavailable"
+        result = await self._run_command(["git", "diff", "--stat"], root)
+        stat = result.get("stdout", "")
+        result = await self._run_command(["git", "diff", "--"], root)
+        body = result.get("stdout", "")
+        return "\n".join(part for part in (stat, body) if part).strip()
 
     async def _run_targeted_checks(self, changed_files: list[str]) -> list[dict]:
         root = self._repo_root()

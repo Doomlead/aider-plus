@@ -98,9 +98,13 @@ def format_lifecycle_event_message(event: EventMessage) -> str:
     payload = event.payload or {}
     event_name = payload.get("name") or str(event.event)
     label = str(event_name).replace("_", " ").title()
+    icon = "⚠️" if payload.get("severity") == "warning" else "🔄"
     iteration = payload.get("iteration")
     suffix = f" (iteration {iteration})" if iteration is not None else ""
     details = []
+    warning = payload.get("warning")
+    if warning:
+        details.append("Warning: " + str(warning))
     files = payload.get("files") or []
     if files:
         details.append("Files: " + ", ".join(str(path) for path in files[:8]))
@@ -114,7 +118,7 @@ def format_lifecycle_event_message(event: EventMessage) -> str:
     body = "\n".join(details)
     if body:
         body = "\n" + body
-    return f"🔄 **{label}**{suffix}\nTask: `{event.task_id}`{body}"
+    return f"{icon} **{label}**{suffix}\nTask: `{event.task_id}`{body}"
 
 
 def format_audit_log_message(project_memory: ProjectMemory, limit: int = 10) -> str:

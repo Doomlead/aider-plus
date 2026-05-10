@@ -912,7 +912,10 @@ class GUI:
                 label = humanize_company_label(payload.get("name") or event.event)
                 iteration = payload.get("iteration")
                 suffix = f" (iteration {iteration})" if iteration is not None else ""
-                st.info(f"{label}{suffix}")
+                if payload.get("severity") == "warning":
+                    st.warning(f"{label}{suffix}")
+                else:
+                    st.info(f"{label}{suffix}")
                 st.json(payload)
             else:
                 st.json(event.__dict__)

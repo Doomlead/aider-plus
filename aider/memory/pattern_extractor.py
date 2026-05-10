@@ -162,6 +162,66 @@ class AuditPatternExtractor:
 
         return result
 
+    def count_occurrences(self, issue_type: str, min_unique_tasks: int = 1) -> int:
+        """Count audit records matching a reviewer issue type across distinct tasks.
+
+        Returns zero until the issue type has appeared in at least
+        ``min_unique_tasks`` different task IDs. This keeps one noisy task from
+        teaching broad playbook rules.
+        """
+        task_ids: set[str] = set()
+        occurrences = 0
+        for record in self._records:
+            if not self._record_matches_issue_type(record, issue_type):
+                continue
+            occurrences += 1
+            task_id = self._record_task_id(record)
+            if task_id:
+                task_ids.add(task_id)
+
+        if len(task_ids) < min_unique_tasks:
+            return 0
+        return occurrences
+
+    @staticmethod
+    def _record_task_id(record: dict) -> str:
+        metadata = record.get("metadata", {})
+        if isinstance(metadata, dict) and metadata.get("task_id"):
+            return str(metadata.get("task_id"))
+        payload = record.get("payload", {})
+        if isinstance(payload, dict) and payload.get("task_id"):
+            return str(payload.get("task_id"))
+        return str(record.get("task_id") or "")
+
+    @classmethod
+    def _record_matches_issue_type(cls, record: dict, issue_type: str) -> bool:
+        haystack = cls._record_text(record).lower()
+        if issue_type == "missing_tests":
+            return "test" in haystack or "assert" in haystack
+        if issue_type == "accessibility":
+            return "accessibility" in haystack or "wcag" in haystack or "aria" in haystack
+        if issue_type == "error_handling":
+            return "error" in haystack or "exception" in haystack or "try" in haystack
+        if issue_type == "security":
+            return (
+                "security" in haystack
+                or "injection" in haystack
+                or "auth" in haystack
+            )
+        if issue_type == "malformed_reviewer_output":
+            return "malformed" in haystack or "json" in haystack
+        return bool(issue_type and issue_type in haystack)
+
+    @staticmethod
+    def _record_text(value: Any) -> str:
+        if isinstance(value, dict):
+            return " ".join(
+                AuditPatternExtractor._record_text(item) for item in value.values()
+            )
+        if isinstance(value, list):
+            return " ".join(AuditPatternExtractor._record_text(item) for item in value)
+        return str(value or "")
+
     # ------------------------------------------------------------------
     # Text extractors per event type
     # ------------------------------------------------------------------

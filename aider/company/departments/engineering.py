@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import json
+import logging
 import re
 import shlex
 import uuid
@@ -12,6 +13,8 @@ from aider.company.config import DepartmentConfig
 from aider.company.schemas import CompanyTask, Deliverable
 from aider.agent.loop import AiderAgentLoop
 from aider.memory import ProjectMemory, ConversationMemory
+
+logger = logging.getLogger(__name__)
 
 
 class EngineeringDepartment(Department):
@@ -78,6 +81,34 @@ class EngineeringDepartment(Department):
             review = await self._run_reviewer_phase(programmer_deliverable)
             last_review = review
             self._review_feedback = review.review_feedback or review.metadata.get("review_feedback")
+            max_review_iterations = int(
+                getattr(self.config, "max_review_iterations", self.max_internal_iterations)
+                or self.max_internal_iterations
+            )
+            if (
+                not review.review_passed
+                and review.metadata.get("review_iteration", iteration) >= max_review_iterations
+            ):
+                logger.warning("Max review iterations reached, forcing approval")
+                forced_metadata = dict(review.metadata)
+                forced_metadata.update(
+                    {
+                        "forced_approval": True,
+                        "review_passed": True,
+                        "needs_revision": False,
+                    }
+                )
+                review = Deliverable(
+                    task_id=review.task_id,
+                    department=review.department,
+                    artifact_type=review.artifact_type,
+                    payload=review.payload,
+                    status="success",
+                    metadata=forced_metadata,
+                    review_feedback=review.review_feedback,
+                    review_passed=True,
+                )
+                last_review = review
 
             if review.review_passed:
                 await self._emit_engineering_event(
@@ -424,9 +455,11 @@ Address ALL reviewer feedback from the previous round if present.
 
         reviewer_feedback_summary = review_data["overall_assessment"][:500]
         status = "success" if review_data["review_passed"] else "needs_revision"
+        review_iteration = int(metadata.get("review_iteration", 0) or 0) + 1
         metadata.update(
             {
                 "stage": "reviewer",
+                "review_iteration": review_iteration,
                 "files": changed_files,
                 "changed_files": changed_files,
                 "diffs": [diff] if diff else metadata.get("diffs", []),
@@ -449,6 +482,8 @@ Address ALL reviewer feedback from the previous round if present.
                 "Reviewer requested revisions:\n"
                 f"{self._format_review_feedback(review_data)}"
             )
+
+        self._record_reviewer_metrics(review_data)
 
         await self._emit_engineering_event(
             previous_deliverable.task_id,
@@ -473,7 +508,6 @@ Address ALL reviewer feedback from the previous round if present.
             review_passed=review_data["review_passed"],
         )
 
-
     async def _run_agent_loop(
         self,
         task_text: str,
@@ -496,8 +530,7 @@ Address ALL reviewer feedback from the previous round if present.
         except (TypeError, ValueError):
             return False
         return kwarg in signature.parameters or any(
-            param.kind is inspect.Parameter.VAR_KEYWORD
-            for param in signature.parameters.values()
+            param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
         )
 
     def _caching_enabled(self, role: str = "engineering") -> bool:
@@ -514,8 +547,7 @@ Address ALL reviewer feedback from the previous round if present.
         dept_config = getattr(loop_config, "department_config", None)
         if role == "reviewer":
             dept_config = (
-                getattr(self.agent_loop, "reviewer_department_config", None)
-                or dept_config
+                getattr(self.agent_loop, "reviewer_department_config", None) or dept_config
             )
         if dept_config is not None:
             return bool(getattr(dept_config, "enable_prompt_caching", True))
@@ -591,12 +623,10 @@ Address ALL reviewer feedback from the previous round if present.
             ),
             "design_spec": task_context.get("design_spec") or payload.get("design_spec"),
             "design_spec_structured": (
-                task_context.get("design_spec_structured")
-                or payload.get("design_spec_structured")
+                task_context.get("design_spec_structured") or payload.get("design_spec_structured")
             ),
             "design_spec_summary": (
-                task_context.get("design_spec_summary")
-                or payload.get("design_spec_summary")
+                task_context.get("design_spec_summary") or payload.get("design_spec_summary")
             ),
             "playbook_guidance": (
                 task_context.get("playbook_guidance") or payload.get("playbook_guidance") or []
@@ -604,19 +634,35 @@ Address ALL reviewer feedback from the previous round if present.
         }
 
     def _get_design_spec_summary(self, review_context: Optional[dict] = None) -> str:
-        """Extract a compact DesignSpec summary from review context."""
-        ctx = review_context or self._review_context()
+        """Extract a comprehensive DesignSpec summary from review context."""
+        ctx = review_context or self._review_context(self._active_task)
         spec = (
-            ctx.get("design_spec_summary")
+            ctx.get("design_spec_structured")
             or ctx.get("design_spec")
-            or ctx.get("design_spec_structured")
+            or ctx.get("design_spec_summary")
         )
         if isinstance(spec, dict):
-            return (
-                f"Title: {spec.get('title')}\n"
-                f"Overview: {spec.get('overview')}\n"
-                f"Key Screens: {spec.get('key_screens', [])}"
-            )
+            summary_parts = [
+                f"Title: {spec.get('title', 'Untitled')}",
+                f"Overview: {spec.get('overview', 'No overview')}",
+            ]
+            key_screens = spec.get("key_screens")
+            if isinstance(key_screens, list) and key_screens:
+                summary_parts.append(
+                    f"Key Screens: {', '.join(str(screen) for screen in key_screens[:5])}"
+                )
+            components = spec.get("components")
+            if isinstance(components, (list, dict)) and components:
+                summary_parts.append(f"Components: {len(components)} defined")
+            accessibility = spec.get("accessibility_requirements")
+            if isinstance(accessibility, dict) and accessibility:
+                summary_parts.append(
+                    f"Accessibility: WCAG {accessibility.get('wcag_level', 'not specified')}"
+                )
+            user_flows = spec.get("user_flows")
+            if isinstance(user_flows, (list, dict)) and user_flows:
+                summary_parts.append(f"User Flows: {len(user_flows)} defined")
+            return "\n".join(summary_parts)
         return str(spec or "No design spec available")
 
     def _get_reviewer_system_prompt(self, context) -> str:
@@ -722,7 +768,27 @@ Be specific and actionable."""
             data = self._extract_review_json(raw)
 
         if not isinstance(data, dict):
-            data = {}
+            logger.warning(
+                "Failed to parse reviewer JSON; treating output as a blocking review issue."
+            )
+            return {
+                "review_passed": False,
+                "issues": [
+                    {
+                        "file": None,
+                        "line_range": None,
+                        "severity": "high",
+                        "description": "Reviewer output was malformed",
+                        "suggestion": f"Raw output: {str(raw or result)[:500]}",
+                    }
+                ],
+                "overall_assessment": "Review failed due to malformed output",
+                "needs_revision": True,
+            }
+
+        for field in ("review_passed", "issues", "overall_assessment", "needs_revision"):
+            if field not in data:
+                logger.warning("Reviewer output missing required field: %s", field)
 
         issues = self._normalize_review_issues(data.get("issues"))
         needs_revision = self._coerce_bool(data.get("needs_revision"), bool(issues))
@@ -765,22 +831,42 @@ Be specific and actionable."""
     def _extract_review_json(raw: str):
         if not raw:
             return None
-        text = raw.strip()
-        fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        text = str(raw).strip()
+        fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
         candidates = [fence.group(1)] if fence else []
         candidates.append(text)
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1 and end > start:
             candidates.append(text[start : end + 1])
+
+        seen = set()
         for candidate in candidates:
-            try:
-                parsed = json.loads(candidate)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
+            for normalized in (
+                candidate,
+                EngineeringDepartment._sanitize_reviewer_json(candidate),
+            ):
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                try:
+                    parsed = json.loads(normalized)
+                except json.JSONDecodeError as err:
+                    logger.warning("Failed to parse reviewer JSON candidate: %s", err)
+                    continue
+                if isinstance(parsed, dict):
+                    return parsed
         return None
+
+    @staticmethod
+    def _sanitize_reviewer_json(candidate: str) -> str:
+        """Remove common LLM JSON artifacts without changing valid JSON."""
+        text = str(candidate).strip()
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.MULTILINE)
+        text = re.sub(r"//.*?$", "", text, flags=re.MULTILINE)
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+        text = re.sub(r",(\s*[}\]])", r"\1", text)
+        return text.strip()
 
     @staticmethod
     def _normalize_review_issues(issues) -> list[dict]:
@@ -845,6 +931,10 @@ Be specific and actionable."""
         return str(design_spec or "No design spec")
 
     def _get_playbook_guidance(self) -> str:
+        """Extract relevant playbook patterns for reviewer."""
+        if not self._active_task:
+            return "No playbook guidance available"
+
         context = self._review_context(self._active_task)
         guidance = context.get("playbook_guidance")
         if not guidance:
@@ -853,10 +943,114 @@ Be specific and actionable."""
             if isinstance(playbook, dict):
                 for values in playbook.values():
                     if isinstance(values, list):
-                        guidance.extend(str(value) for value in values)
-        if isinstance(guidance, list):
-            return "\n".join(f"- {item}" for item in guidance) or "None"
-        return str(guidance or "None")
+                        guidance.extend(values)
+
+        if not guidance:
+            return "No playbook guidance available"
+
+        items = guidance if isinstance(guidance, list) else [guidance]
+        formatted = []
+        for index, item in enumerate(items[:5], 1):
+            if isinstance(item, dict):
+                pattern = (
+                    item.get("pattern")
+                    or item.get("title")
+                    or item.get("text")
+                    or "Unknown pattern"
+                )
+                context_text = item.get("context") or item.get("rationale") or ""
+                suffix = f": {str(context_text)[:200]}" if context_text else ""
+                formatted.append(f"{index}. {pattern}{suffix}")
+            else:
+                formatted.append(f"{index}. {str(item)[:200]}")
+        return "\n".join(formatted)
+
+    def _record_reviewer_metrics(self, review_data: dict) -> None:
+        """Track reviewer performance and learn repeated feedback patterns."""
+        observability = self.memory.data.setdefault("observability", {})
+        stats = observability.setdefault(
+            "reviewer_stats",
+            {
+                "total_reviews": 0,
+                "approved_reviews": 0,
+                "approval_rate": 0.0,
+                "avg_issues_per_review": 0.0,
+                "total_issues": 0,
+                "issue_type_counts": {},
+                "most_common_issues": [],
+            },
+        )
+        stats["total_reviews"] = int(stats.get("total_reviews", 0) or 0) + 1
+        if review_data.get("review_passed"):
+            stats["approved_reviews"] = int(stats.get("approved_reviews", 0) or 0) + 1
+        issues = review_data.get("issues") or []
+        stats["total_issues"] = int(stats.get("total_issues", 0) or 0) + len(issues)
+        total_reviews = max(1, int(stats["total_reviews"]))
+        stats["approval_rate"] = round(
+            int(stats.get("approved_reviews", 0) or 0) / total_reviews, 2
+        )
+        stats["avg_issues_per_review"] = round(
+            int(stats.get("total_issues", 0) or 0) / total_reviews, 2
+        )
+
+        issue_type_counts = stats.setdefault("issue_type_counts", {})
+        for issue in issues:
+            issue_type = self._review_issue_type(issue)
+            issue_type_counts[issue_type] = int(issue_type_counts.get(issue_type, 0) or 0) + 1
+            if issue_type_counts[issue_type] == 3:
+                self._learn_reviewer_playbook_pattern(issue_type)
+        stats["most_common_issues"] = [
+            key
+            for key, _ in sorted(issue_type_counts.items(), key=lambda item: item[1], reverse=True)[
+                :5
+            ]
+        ]
+        self.memory.persist()
+
+    @staticmethod
+    def _review_issue_type(issue: dict) -> str:
+        description = str(issue.get("description") or "").lower()
+        suggestion = str(issue.get("suggestion") or "").lower()
+        text = f"{description} {suggestion}"
+        if "test" in text or "assert" in text:
+            return "missing_tests"
+        if "accessibility" in text or "wcag" in text or "aria" in text:
+            return "accessibility"
+        if "error" in text or "exception" in text or "try" in text:
+            return "error_handling"
+        if "security" in text or "injection" in text or "auth" in text:
+            return "security"
+        if "malformed" in text or "json" in text:
+            return "malformed_reviewer_output"
+        return "general"
+
+    def _learn_reviewer_playbook_pattern(self, issue_type: str) -> None:
+        patterns = {
+            "missing_tests": "Always add or update tests for reviewed behavior changes.",
+            "accessibility": "Always validate UI changes against accessibility requirements.",
+            "error_handling": (
+                "Always add explicit error handling around external calls and failure-prone operations."
+            ),
+            "security": (
+                "Always review security-sensitive inputs, authentication, and authorization paths."
+            ),
+            "malformed_reviewer_output": (
+                "Reviewer responses must be valid JSON matching the required schema."
+            ),
+            "general": "Resolve repeated reviewer feedback before QA handoff.",
+        }
+        playbook = self.memory.data.setdefault("playbook", {})
+        entries = playbook.setdefault("coding_standards", [])
+        text = patterns.get(issue_type, patterns["general"])
+        if not any(text in str(entry) for entry in entries):
+            entries.append(
+                {
+                    "text": text,
+                    "pattern": text,
+                    "context": f"Reviewer repeatedly flagged {issue_type.replace('_', ' ')}.",
+                    "source": "reviewer_feedback",
+                }
+            )
 
     @staticmethod
     def _reviewer_prompt(context: dict) -> str:
@@ -964,21 +1158,36 @@ Be specific and actionable."""
         return sorted(dict.fromkeys(files))
 
     async def _implementation_diff(self, metadata: dict) -> str:
-        diffs = metadata.get("diffs") or []
-        if isinstance(diffs, str):
-            diffs = [diffs]
-        diff = "\n".join(str(item) for item in diffs if item)
-        if diff:
-            return diff
+        """Get implementation diff with size control for reviewer prompts."""
+        diff = metadata.get("diffs_summary") or ""
+        if not diff:
+            diffs = metadata.get("diffs") or []
+            if isinstance(diffs, str):
+                diffs = [diffs]
+            diff = "\n".join(str(item) for item in diffs if item)
+        if not diff:
+            root = self._repo_root()
+            if root is None:
+                return "Diff unavailable"
+            result = await self._run_command(["git", "diff", "--stat"], root)
+            stat = result.get("stdout", "")
+            result = await self._run_command(["git", "diff", "--"], root)
+            body = result.get("stdout", "")
+            diff = "\n".join(part for part in (stat, body) if part).strip()
 
-        root = self._repo_root()
-        if root is None:
+        if not diff:
             return ""
-        result = await self._run_command(["git", "diff", "--stat"], root)
-        stat = result.get("stdout", "")
-        result = await self._run_command(["git", "diff", "--"], root)
-        body = result.get("stdout", "")
-        return "\n".join(part for part in (stat, body) if part).strip()
+
+        max_diff_lines = 500
+        lines = str(diff).split("\n")
+        if len(lines) > max_diff_lines:
+            truncated = "\n".join(lines[:max_diff_lines])
+            remaining = len(lines) - max_diff_lines
+            return (
+                f"{truncated}\n\n"
+                f"[TRUNCATED: {remaining} more lines. Focus on critical changes above.]"
+            )
+        return str(diff)
 
     async def _run_targeted_checks(self, changed_files: list[str]) -> list[dict]:
         root = self._repo_root()

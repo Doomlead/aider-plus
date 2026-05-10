@@ -215,7 +215,11 @@ class DesktopCompanySession:
             agent_loop=agent_loop,
             conversation_memory=conversation_memory,
         )
-        self.ux = UXDepartment(project_memory=project_memory)
+        self.ux = UXDepartment(
+            project_memory=project_memory,
+            agent_loop=agent_loop,
+            conversation_memory=conversation_memory,
+        )
         self.qa = QADepartment(project_memory=project_memory)
         self.devops = DevOpsDepartment(project_memory=project_memory)
         self.orchestrator = CompanyOrchestrator(project_memory=project_memory)

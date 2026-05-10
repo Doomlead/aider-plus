@@ -1,3 +1,5 @@
+import json as _json
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Optional, Union
@@ -187,6 +189,83 @@ class ClarificationRequest:
 
 
 @dataclass
+class DesignSpec:
+    """
+    Structured design deliverable from UX to Engineering.
+
+    to_markdown() is injected into Engineering context as prd_content companion.
+    to_dict() / from_dict() round-trip through project memory and handoff payloads.
+    """
+
+    title: str
+    overview: str
+    key_screens: list[str] = field(default_factory=list)
+    component_library: list[dict] = field(default_factory=list)
+    user_flows: list[str] = field(default_factory=list)
+    accessibility_notes: list[str] = field(default_factory=list)
+    technical_requirements: list[str] = field(default_factory=list)
+    visual_style: dict = field(default_factory=dict)
+    version: str = "1.0"
+
+    def to_markdown(self) -> str:
+        def _bullet(items: list) -> str:
+            return "\n".join(f"- {item}" for item in items) if items else "- None"
+
+        components = (
+            "\n".join(
+                f"**{c['name']}**: {c.get('description', '')}"
+                for c in self.component_library
+                if isinstance(c, dict) and c.get("name")
+            )
+            if self.component_library
+            else "None defined"
+        )
+        style_text = (
+            _json.dumps(self.visual_style, indent=2)
+            if self.visual_style
+            else "Default theme"
+        )
+        combined_notes = self.accessibility_notes + self.technical_requirements
+        return (
+            f"# Design Spec: {self.title}\n"
+            f"**Version:** {self.version}\n\n"
+            f"## Overview\n{self.overview}\n\n"
+            f"## Key Screens / Pages\n{_bullet(self.key_screens)}\n\n"
+            f"## Component Library\n{components}\n\n"
+            f"## User Flows\n{_bullet(self.user_flows)}\n\n"
+            f"## Accessibility & Technical Notes\n{_bullet(combined_notes)}\n\n"
+            f"## Visual Style Guidelines\n{style_text}\n"
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "overview": self.overview,
+            "key_screens": self.key_screens,
+            "component_library": self.component_library,
+            "user_flows": self.user_flows,
+            "accessibility_notes": self.accessibility_notes,
+            "technical_requirements": self.technical_requirements,
+            "visual_style": self.visual_style,
+            "version": self.version,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DesignSpec":
+        return cls(
+            title=str(d.get("title", "Untitled Design")),
+            overview=str(d.get("overview", "")),
+            key_screens=list(d.get("key_screens", [])),
+            component_library=list(d.get("component_library", [])),
+            user_flows=list(d.get("user_flows", [])),
+            accessibility_notes=list(d.get("accessibility_notes", [])),
+            technical_requirements=list(d.get("technical_requirements", [])),
+            visual_style=dict(d.get("visual_style", {})),
+            version=str(d.get("version", "1.0")),
+        )
+
+
+@dataclass
 class CompanyTask:
     task_id: str
     origin: str  # e.g. "ceo", "product"
@@ -213,6 +292,7 @@ __all__ = [
     "CompanyEvent",
     "ClarificationRequest",
     "CompanyTask",
+    "DesignSpec",
     "Deliverable",
     "DepartmentOutput",
     "EventMessage",

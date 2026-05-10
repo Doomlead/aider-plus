@@ -40,9 +40,7 @@ class ReviewingEngineeringDepartment(EngineeringDepartment):
     async def _run_reviewer_phase(self, previous_deliverable):
         passed = self.review_passes.pop(0)
         feedback = {
-            "overall_assessment": (
-                "Approved for QA." if passed else "Needs revision before QA."
-            ),
+            "overall_assessment": "Approved for QA." if passed else "Needs revision before QA.",
             "issues": (
                 []
                 if passed
@@ -170,9 +168,7 @@ class StructuredReviewAgentLoop(FakeAgentLoop):
         self.structured_calls = []
 
     async def run_structured(self, *, task, system_prompt, model):
-        self.structured_calls.append(
-            {"task": task, "system_prompt": system_prompt, "model": model}
-        )
+        self.structured_calls.append({"task": task, "system_prompt": system_prompt, "model": model})
         return self.structured_result
 
 
@@ -193,9 +189,7 @@ def test_reviewer_phase_uses_structured_agent_feedback(tmp_path):
                                 "suggestion": "Validate empty input before indexing.",
                             }
                         ],
-                        "overall_assessment": (
-                            "Implementation needs a bounds check before QA."
-                        ),
+                        "overall_assessment": "Implementation needs a bounds check before QA.",
                         "needs_revision": True,
                     }
                 )
@@ -239,9 +233,7 @@ def test_reviewer_phase_uses_structured_agent_feedback(tmp_path):
             "Implementation needs a bounds check before QA."
         )
         assert loop.structured_calls[0]["model"] == "claude-3-7-sonnet-20250219"
-        assert (
-            "Original PRD / Requirements" in loop.structured_calls[0]["system_prompt"]
-        )
+        assert "Original PRD / Requirements" in loop.structured_calls[0]["system_prompt"]
         assert "Handle empty inputs safely" in loop.structured_calls[0]["system_prompt"]
         assert emitted[0].payload["name"] == "reviewer_complete"
         assert emitted[0].payload["reviewer_feedback_summary"] == (
@@ -249,7 +241,6 @@ def test_reviewer_phase_uses_structured_agent_feedback(tmp_path):
         )
 
     asyncio.run(run_test())
-
 
 
 def test_reviewer_phase_resolves_active_task_for_design_context(tmp_path):
@@ -317,9 +308,77 @@ def test_reviewer_phase_resolves_active_task_for_design_context(tmp_path):
         system_prompt = loop.structured_calls[0]["system_prompt"]
         assert "Build safe empty-state handling" in system_prompt
         assert "Title: Empty State" in system_prompt
-        assert "Key Screens: ['Results']" in system_prompt
+        assert "Key Screens: Results" in system_prompt
 
     asyncio.run(run_test())
+
+
+def test_parse_reviewer_output_handles_malformed_json_as_blocking_issue(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    loop = FakeAgentLoop([])
+    department = EngineeringDepartment(
+        project_memory=memory,
+        agent_loop=loop,
+        conversation_memory=loop.coder.conversation_memory,
+    )
+
+    parsed = department._parse_reviewer_output("```json\n{bad json,}\n```")
+
+    assert parsed["review_passed"] is False
+    assert parsed["needs_revision"] is True
+    assert parsed["issues"][0]["description"] == "Reviewer output was malformed"
+
+
+def test_implementation_diff_prefers_summary_and_truncates(tmp_path):
+    async def run_test():
+        memory = ProjectMemory(str(tmp_path))
+        loop = FakeAgentLoop([])
+        department = EngineeringDepartment(
+            project_memory=memory,
+            agent_loop=loop,
+            conversation_memory=loop.coder.conversation_memory,
+        )
+        diff = "\n".join(f"line {i}" for i in range(501))
+
+        result = await department._implementation_diff({"diffs_summary": diff})
+
+        assert "line 499" in result
+        assert "line 500" not in result
+        assert "[TRUNCATED: 1 more lines" in result
+
+    asyncio.run(run_test())
+
+
+def test_reviewer_metrics_and_playbook_learning(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    loop = FakeAgentLoop([])
+    department = EngineeringDepartment(
+        project_memory=memory,
+        agent_loop=loop,
+        conversation_memory=loop.coder.conversation_memory,
+    )
+    review_data = {
+        "review_passed": False,
+        "issues": [
+            {
+                "description": "Missing tests for the new behavior",
+                "suggestion": "Add assertions",
+            }
+        ],
+    }
+
+    for _ in range(3):
+        department._record_reviewer_metrics(review_data)
+
+    stats = memory.data["observability"]["reviewer_stats"]
+    assert stats["total_reviews"] == 3
+    assert stats["approval_rate"] == 0.0
+    assert stats["avg_issues_per_review"] == 1.0
+    assert stats["most_common_issues"] == ["missing_tests"]
+    assert any(
+        "Always add or update tests" in str(entry)
+        for entry in memory.data["playbook"]["coding_standards"]
+    )
 
 
 def test_handoff_task_propagates_prd_and_design_context(tmp_path):

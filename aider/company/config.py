@@ -5,6 +5,7 @@ These are entirely separate from Aider's core config (aider/config.py).
 They configure orchestration behaviour — department settings, caching,
 model preferences — without touching any Aider internal.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -22,11 +23,14 @@ class DepartmentConfig:
             calls made by this department. Default True.
         preferred_model: Optional model override for this department's agent
             loop calls. None means use the agent loop default.
+        max_review_iterations: Optional cap for reviewer/programmer revision
+            cycles before forced approval. None means use the department default.
     """
 
     name: str
     enable_prompt_caching: bool = True
     preferred_model: Optional[str] = None
+    max_review_iterations: Optional[int] = None
 
 
 @dataclass

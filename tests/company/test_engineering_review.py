@@ -530,5 +530,84 @@ def test_handoff_task_propagates_prd_and_design_context(tmp_path):
     assert engineering_task.context["prd_summary"] == "# PRD\nSearch by name"
     assert engineering_task.context["design_spec_structured"] == design_spec
     assert engineering_task.context["design_spec"] == "Search UX summary"
-    assert engineering_task.context["design_spec_summary"] == "Search UX summary"
+    assert engineering_task.artifact_type == "design_spec"
+    assert engineering_task.context["design_spec_summary"] == (
+        "Title: Search UX\nOverview: Search box with results list.\nScreens: 1"
+    )
     assert engineering_task.context["ux_self_review"] == {"approved": True}
+
+
+def test_handoff_task_propagates_schema_gate_design_context(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    orchestrator = CompanyOrchestrator(memory)
+    context = {
+        "original_request": "Add invites",
+        "prd_content": "# PRD\nInvite teammates",
+        "prd_structured": {
+            "title": "Invite teammates",
+            "problem_statement": "Admins need to invite teammates.",
+            "acceptance_criteria": ["Can send an invite"],
+        },
+    }
+    design_spec = {
+        "title": "Invite teammates UX",
+        "overview": "Focused invite flow with recovery states.",
+        "screens": [
+            {
+                "name": "InviteScreen",
+                "route": "/settings/team/invites",
+                "description": "Invite entry point.",
+                "components_used": ["InviteForm"],
+                "data_fetching": "Load pending invites.",
+            }
+        ],
+        "components": [
+            {
+                "name": "InviteForm",
+                "description": "Collects invite details.",
+                "props": [],
+                "interaction_states": [],
+                "accessibility_notes": "Keyboard-accessible form.",
+            }
+        ],
+        "global_state_management": "Server state owns invites; local state owns draft form.",
+        "accessibility_checklist": {
+            "keyboard_navigation": True,
+            "screen_reader_labels": True,
+            "color_contrast_aa": True,
+            "aria_attributes": True,
+            "focus_management": True,
+            "notes": "Meets WCAG 2.2 AA focus and label expectations.",
+        },
+        "error_boundaries": "Inline API errors plus page-level fallback.",
+    }
+    ux_deliverable = Deliverable(
+        task_id="task-5",
+        department="ux",
+        artifact_type="design_spec",
+        payload="# Design Spec: Invite teammates UX",
+        status="success",
+        metadata={
+            "context": context,
+            "design_spec_structured": design_spec,
+            "schema_gate_approved": True,
+            "ux_self_review_passed": True,
+        },
+    )
+
+    engineering_task = orchestrator._handoff_task(ux_deliverable, "engineering")
+
+    assert engineering_task.artifact_type == "design_spec"
+    assert engineering_task.payload["design_spec_structured"] == design_spec
+    assert engineering_task.context["schema_gate_approved"] is True
+    assert engineering_task.context["design_spec_validation_errors"] is None
+    assert engineering_task.context["design_spec_summary"] == (
+        "Title: Invite teammates UX\n"
+        "Overview: Focused invite flow with recovery states.\n"
+        "Screens: 1\n"
+        "Components: 1\n"
+        "Accessibility: {'keyboard_navigation': True, 'screen_reader_labels': True, "
+        "'color_contrast_aa': True, 'aria_attributes': True, 'focus_management': "
+        "True, 'notes': 'Me"
+    )
+    assert engineering_task.context["ux_self_review"] is True

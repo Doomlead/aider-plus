@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Optional, Union
 
+from aider.company.schemas.design_spec import DesignSpecV2
 from aider.company.interfaces import (
     ApprovalRequest,
     Deliverable,
@@ -291,6 +292,7 @@ __all__ = [
     "ClarificationRequest",
     "CompanyTask",
     "DesignSpec",
+    "DesignSpecV2",
     "Deliverable",
     "DepartmentOutput",
     "EventMessage",

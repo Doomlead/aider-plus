@@ -398,6 +398,16 @@ class CompanyOrchestrator:
         elif d.department == "ux" and next_target == "engineering":
             prd_content = context.get("prd_content") or ""
             design_spec_md = d.payload if isinstance(d.payload, str) else str(d.payload)
+            design_spec_structured = (
+                d.metadata.get("design_spec_structured")
+                or context.get("design_spec_structured")
+                or context.get("design_spec")
+            )
+            design_spec_summary = (
+                d.metadata.get("design_spec_summary")
+                or context.get("design_spec_summary")
+                or self._synthesize_design_spec_summary(design_spec_structured)
+            )
 
             payload = {
                 "original_request": context.get("original_request"),
@@ -405,17 +415,25 @@ class CompanyOrchestrator:
                 "prd_structured": context.get("prd_structured"),
                 "prd_summary": context.get("prd_summary") or self._synthesize_prd_summary(context),
                 "design_spec": design_spec_md,
-                "design_spec_structured": d.metadata.get("design_spec_structured"),
-                "design_spec_summary": d.metadata.get("design_spec_summary"),
+                "design_spec_structured": design_spec_structured,
+                "design_spec_summary": design_spec_summary,
                 "ux_self_review": d.metadata.get("ux_self_review_passed"),
+                "schema_gate_approved": d.metadata.get("schema_gate_approved"),
+                "design_spec_validation_errors": (
+                    d.metadata.get("validation_errors")
+                    or context.get("design_spec_validation_errors")
+                ),
                 "design_metadata": dict(d.metadata),
             }
             if payload["ux_self_review"] is None:
                 payload["ux_self_review"] = d.metadata.get("self_review_notes")
             if payload["ux_self_review"] is None:
                 payload["ux_self_review"] = d.metadata.get("self_review")
+            if payload["schema_gate_approved"] is None:
+                payload["schema_gate_approved"] = context.get("schema_gate_approved")
             if payload["design_spec_summary"] is None and isinstance(d.payload, str):
                 payload["design_spec_summary"] = design_spec_md
+            metadata.setdefault("next_artifact_type", "design_spec")
             context.update(payload)
         elif (
             d.department == "product" and next_target == "engineering" and d.artifact_type == "memo"
@@ -439,15 +457,37 @@ class CompanyOrchestrator:
             task_id=d.task_id,
             origin=d.department,
             target=next_target,
-            artifact_type=d.metadata.get("next_artifact_type", "general"),
+            artifact_type=metadata.get("next_artifact_type", "general"),
             payload=payload,
-            blocking=d.metadata.get("blocking", False),
+            blocking=metadata.get("blocking", False),
             context=context,
         )
         task.context.setdefault("prd_summary", context.get("prd_summary"))
         task.context.setdefault("design_spec_structured", context.get("design_spec_structured"))
         task.context["playbook_guidance"] = self._get_relevant_playbooks(task)
         return task
+
+    def _synthesize_design_spec_summary(self, spec) -> str | None:
+        """Build a compact UX handoff summary for DesignSpecV2 and legacy specs."""
+        if not isinstance(spec, dict):
+            return None
+
+        parts = [f"Title: {spec.get('title', 'Untitled Design')}"]
+        if overview := spec.get("overview"):
+            parts.append(f"Overview: {str(overview)[:200]}")
+
+        screens = spec.get("screens") or spec.get("key_screens")
+        if screens:
+            parts.append(f"Screens: {len(screens)}")
+
+        components = spec.get("components") or spec.get("component_library")
+        if components:
+            parts.append(f"Components: {len(components)}")
+
+        if a11y := spec.get("accessibility_checklist") or spec.get("accessibility_notes"):
+            parts.append(f"Accessibility: {str(a11y)[:150]}")
+
+        return "\n".join(parts)
 
     def _synthesize_prd_summary(self, context: dict) -> str:
         """Build a concise PRD summary from structured context when none was provided."""

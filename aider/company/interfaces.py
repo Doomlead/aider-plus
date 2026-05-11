@@ -4,7 +4,13 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 
-DeliverableStatus = Literal["success", "failure", "needs_review", "needs_revision"]
+DeliverableStatus = Literal[
+    "success",
+    "failure",
+    "needs_review",
+    "needs_revision",
+    "failed_validation",
+]
 
 
 @dataclass

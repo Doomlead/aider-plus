@@ -10,6 +10,14 @@ from aider.company.interfaces import (
     DepartmentOutput,
     ProcessResult,
 )
+from aider.company.schemas.design_spec import (
+    A11yChecklist,
+    ComponentSpec,
+    DataContract,
+    DesignSpecV2,
+    InteractionState,
+    ScreenSpec,
+)
 
 
 class CompanyEvent(str, Enum):
@@ -288,11 +296,17 @@ class CompanyTask:
 
 __all__ = [
     "ApprovalDecision",
+    "A11yChecklist",
     "ApprovalRequest",
     "CompanyEvent",
     "ClarificationRequest",
     "CompanyTask",
     "DesignSpec",
+    "DesignSpecV2",
+    "ComponentSpec",
+    "DataContract",
+    "InteractionState",
+    "ScreenSpec",
     "Deliverable",
     "DepartmentOutput",
     "EventMessage",

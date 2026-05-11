@@ -16,6 +16,7 @@ from aider.company.lifecycle import LifecycleEngine
 from aider.company.playbook import PlaybookManager
 from aider.company.project import Project
 from aider.company.state import CompanyStateManager
+from aider.company.validators.schema_gate import SchemaGateValidator
 from aider.company.schemas import (
     ApprovalDecision,
     CompanyEvent,
@@ -514,8 +515,102 @@ class CompanyOrchestrator:
             self._advance_after_approval(task)
             task.blocking = False
 
+        if await self._enforce_engineering_schema_gate(task):
+            return None
+
         await self._dispatch(task)
         return None
+
+    async def _enforce_engineering_schema_gate(self, task: CompanyTask) -> bool:
+        """Reject invalid UX DesignSpecV2 handoffs before Engineering receives them."""
+        if task.target != "engineering" or not self._is_ux_design_handoff(task):
+            return False
+
+        spec_data = None
+        if isinstance(task.payload, dict):
+            spec_data = task.payload.get("design_spec_structured") or task.payload.get(
+                "design_spec"
+            )
+        if spec_data is None and isinstance(task.context, dict):
+            spec_data = task.context.get("design_spec_structured") or task.context.get(
+                "design_spec"
+            )
+        if spec_data is None:
+            spec_data = task.payload
+
+        gate_result = SchemaGateValidator().validate(spec_data)
+        if gate_result.approved:
+            structured = gate_result.parsed_spec.model_dump()
+            task.context["design_spec_structured"] = structured
+            if isinstance(task.payload, dict):
+                task.payload["design_spec_structured"] = structured
+            return False
+
+        logger.warning(
+            "Engineering rejected UX handoff for task %s. Bouncing back to UX.",
+            task.task_id,
+        )
+        bounce_context = dict(task.context)
+        bounce_context["ux_gate_failure_count"] = (
+            int(bounce_context.get("ux_gate_failure_count", 0)) + 1
+        )
+        bounce_context["validation_errors"] = gate_result.rejection_reasons
+
+        if bounce_context["ux_gate_failure_count"] > 2:
+            await self._emit(
+                EventMessage(
+                    event=CompanyEvent.PROJECT_BLOCKED,
+                    task_id=task.task_id,
+                    payload={
+                        "reason": "UX/Engineering Handoff Deadlock",
+                        "validation_errors": gate_result.rejection_reasons,
+                    },
+                )
+            )
+            return True
+
+        bounce_payload = gate_result.to_engineering_rejection_payload()
+        if "ux" in self.departments:
+            await self.submit(
+                CompanyTask(
+                    task_id=task.task_id,
+                    origin="orchestrator",
+                    target="ux",
+                    artifact_type="design_spec",
+                    payload={
+                        "gate_rejection": bounce_payload,
+                        "validation_errors": gate_result.rejection_reasons,
+                        "previous_design_spec": spec_data,
+                    },
+                    blocking=False,
+                    context=bounce_context,
+                )
+            )
+        else:
+            await self._emit(
+                EventMessage(
+                    event=CompanyEvent.PROJECT_BLOCKED,
+                    task_id=task.task_id,
+                    payload={
+                        "reason": "UX handoff failed schema gate and UX department is unavailable.",
+                        "validation_errors": gate_result.rejection_reasons,
+                    },
+                )
+            )
+        return True
+
+    @staticmethod
+    def _is_ux_design_handoff(task: CompanyTask) -> bool:
+        if task.origin == "ux" or task.artifact_type == "design_spec":
+            return True
+        if isinstance(task.payload, dict) and (
+            "design_spec" in task.payload or "design_spec_structured" in task.payload
+        ):
+            return True
+        return bool(
+            isinstance(task.context, dict)
+            and ("design_spec" in task.context or "design_spec_structured" in task.context)
+        )
 
     async def recover_pending_approvals(self) -> None:
         await self.approvals.recover_pending_approvals(self._complete_recovered_approval)

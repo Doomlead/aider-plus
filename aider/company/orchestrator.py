@@ -407,9 +407,11 @@ class CompanyOrchestrator:
                 "design_spec": design_spec_md,
                 "design_spec_structured": d.metadata.get("design_spec_structured"),
                 "design_spec_summary": d.metadata.get("design_spec_summary"),
-                "ux_self_review": d.metadata.get("self_review_notes"),
+                "ux_self_review": d.metadata.get("ux_self_review_passed"),
                 "design_metadata": dict(d.metadata),
             }
+            if payload["ux_self_review"] is None:
+                payload["ux_self_review"] = d.metadata.get("self_review_notes")
             if payload["ux_self_review"] is None:
                 payload["ux_self_review"] = d.metadata.get("self_review")
             if payload["design_spec_summary"] is None and isinstance(d.payload, str):

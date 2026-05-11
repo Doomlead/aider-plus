@@ -221,9 +221,7 @@ class DesignSpec:
             else "None defined"
         )
         style_text = (
-            _json.dumps(self.visual_style, indent=2)
-            if self.visual_style
-            else "Default theme"
+            _json.dumps(self.visual_style, indent=2) if self.visual_style else "Default theme"
         )
         combined_notes = self.accessibility_notes + self.technical_requirements
         return (

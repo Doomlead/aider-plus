@@ -194,7 +194,9 @@ class UXDepartment(Department):
     @staticmethod
     def _result_content(result):
         if isinstance(result, dict):
-            return result.get("content") or result.get("summary") or ""
+            if "content" in result or "summary" in result:
+                return result.get("content") or result.get("summary") or ""
+            return result
         return getattr(result, "content", None) or getattr(result, "summary", "") or ""
 
     @staticmethod

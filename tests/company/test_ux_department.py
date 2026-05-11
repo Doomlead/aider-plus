@@ -138,3 +138,19 @@ def test_ux_retry_can_recover_to_successful_design_spec(tmp_path):
     assert len(events) == 1
     assert events[0].payload["name"] == "ux_design_complete"
     assert events[0].payload["screens_count"] == 1
+
+
+def test_ux_accepts_raw_structured_dict_from_agent_loop(tmp_path):
+    valid_spec = valid_design_spec()
+    agent_loop = FakeAgentLoop([valid_spec])
+    department = UXDepartment(ProjectMemory(str(tmp_path)), agent_loop)
+
+    deliverable = asyncio.run(department.process(make_task()))
+
+    assert deliverable.status == "success"
+    assert deliverable.metadata["ux_retry_count"] == 0
+    assert deliverable.metadata["schema_gate_approved"] is True
+    assert (
+        deliverable.metadata["design_spec_structured"]["title"] == valid_spec["title"]
+    )
+    assert len(agent_loop.calls) == 1

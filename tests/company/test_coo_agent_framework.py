@@ -5,7 +5,10 @@ from types import SimpleNamespace
 import asyncio
 
 from aider.agent.loop import AgentLoopConfig, AiderAgentLoop
-from aider.company.agent_factory import build_agent_loop_for_role, build_company_agent_loops
+from aider.company.agent_factory import (
+    build_agent_loop_for_role,
+    build_company_agent_loops,
+)
 from aider.company.config import (
     AgentConfig,
     CompanyConfig,
@@ -204,5 +207,132 @@ def test_nanobot_coo_session_status_includes_formatted_events(tmp_path):
         assert status["metrics"]["message_count"] == 2
         assert status["session"]["route_history"][-1]["target"] == "engineering"
         assert status["session"]["last_deliverable_summary"]
+
+    asyncio.run(run())
+
+
+def test_nanobot_coo_falls_back_after_llm_retry_exhaustion(tmp_path):
+    class FailingRoutingLoop:
+        def __init__(self):
+            self.calls = 0
+
+        async def run_structured(self, **kwargs):
+            self.calls += 1
+            raise RuntimeError("rate limit")
+
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        orchestrator.register(EchoDepartment(memory, name="engineering"))
+        loop = FailingRoutingLoop()
+        coo = NanobotCOO(
+            orchestrator=orchestrator,
+            coo_agent_loop=loop,
+            enable_llm_routing=True,
+            default_target="engineering",
+        )
+
+        result = await coo.receive_user_message(
+            "implement retry fallback",
+            "cli:llm-fallback",
+            surface="cli",
+            task_id="task-llm-fallback",
+        )
+        status = await coo.get_session_status("cli:llm-fallback")
+        error_events = [
+            event for event in result["events"] if event["event_type"] == "coo_error"
+        ]
+
+        assert loop.calls == 4
+        assert result["route"]["strategy"] == "deterministic"
+        assert result["target"] == "engineering"
+        assert error_events
+        assert (
+            error_events[-1]["metadata"]["message_metadata"]["error_type"]
+            == "llm_route_failed"
+        )
+        assert error_events[-1]["metadata"]["message_metadata"]["retries"] == 3
+        assert status["error_count"] == 1
+        assert status["last_error"]["error_type"] == "llm_route_failed"
+
+    asyncio.run(run())
+
+
+def test_nanobot_coo_successful_llm_retry(tmp_path):
+    class FlakyRoutingLoop:
+        def __init__(self):
+            self.calls = 0
+
+        async def run_structured(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary orchestrator hiccup")
+            return {
+                "content": (
+                    '{"reasoning": "Needs tests", "chosen_department": "qa", '
+                    '"confidence": 0.82, "should_escalate_to_human": false}'
+                )
+            }
+
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        orchestrator.register(EchoDepartment(memory, name="engineering"))
+        orchestrator.register(EchoDepartment(memory, name="qa"))
+        loop = FlakyRoutingLoop()
+        coo = NanobotCOO(
+            orchestrator=orchestrator,
+            coo_agent_loop=loop,
+            enable_llm_routing=True,
+            default_target="engineering",
+        )
+
+        result = await coo.receive_user_message(
+            "write regression tests",
+            "cli:llm-retry",
+            surface="cli",
+            task_id="task-llm-retry",
+        )
+        status = await coo.get_session_status("cli:llm-retry")
+
+        assert loop.calls == 2
+        assert result["target"] == "qa"
+        assert result["route"]["strategy"] == "llm"
+        assert result["route"]["confidence"] == 0.82
+        assert not [
+            event for event in result["events"] if event["event_type"] == "coo_error"
+        ]
+        assert status["error_count"] == 0
+
+    asyncio.run(run())
+
+
+def test_nanobot_coo_routing_prompt_contains_structured_context(tmp_path):
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        orchestrator.register(EchoDepartment(memory, name="product"))
+        orchestrator.register(EchoDepartment(memory, name="engineering"))
+        coo = NanobotCOO(orchestrator=orchestrator, default_target="engineering")
+        session = coo.session_manager.get_or_create("cli:prompt")
+        session.metadata["last_target"] = "engineering"
+        session.metadata["last_route"] = {
+            "target": "engineering",
+            "strategy": "deterministic",
+            "reasoning": "Existing work",
+        }
+
+        prompt = coo._get_coo_routing_prompt(session)
+
+        assert "Current project phase:" in prompt
+        assert "Recent route history (last 3 decisions):" in prompt
+        assert "Active department: engineering" in prompt
+        assert "Available departments list:" in prompt
+        assert "product" in prompt and "engineering" in prompt
+        assert "COORouteDecision schema" in prompt
+        assert '"reasoning"' in prompt
+        assert '"chosen_department"' in prompt
+        assert '"confidence"' in prompt
+        assert '"should_escalate_to_human"' in prompt
 
     asyncio.run(run())

@@ -156,9 +156,22 @@ def format_coo_status_message(status: dict) -> str:
             f"`{current_route.get('strategy', '—')} → "
             f"{current_route.get('target', '—')}`"
         ),
-        "",
-        "**Recent activity**",
     ]
+    error_count = int(status.get("error_count", 0) or 0)
+    if error_count > 0:
+        last_error = status.get("last_error") or {}
+        lines.extend([
+            "",
+            "🚨 **Recent COO errors**",
+            f"• Count: `{error_count}`",
+            (
+                "• Last: "
+                f"`{last_error.get('error_type', 'unknown_error')}` "
+                f"after `{last_error.get('retries', 0)}` retries — "
+                f"{last_error.get('message', '')}"
+            ),
+        ])
+    lines.extend(["", "**Recent activity**"])
     events = status.get("recent_events") or []
     if events:
         lines.extend(f"• {event}" for event in events[-10:])
@@ -334,17 +347,27 @@ class DiscordAiderBot:
             self.orchestrator.on_deliverable(company_event_callback)
 
             async def forward_coo_bus_event(event):
+                message_metadata = event.metadata.get("message_metadata", {})
+                formatted = self.coo.bus.get_formatted_events(limit=1)[-1]
+                if event.event_type == "coo_error":
+                    formatted = (
+                        "🚨 COO warning "
+                        f"`{message_metadata.get('error_type', 'unknown_error')}` "
+                        f"after `{message_metadata.get('retries', 0)}` retries: "
+                        f"{message_metadata.get('message', '')}"
+                    )
                 await company_event_callback(
                     EventMessage(
                         event=CompanyEvent.LIFECYCLE,
-                        task_id=(
-                            event.metadata.get("message_metadata", {}).get("task_id")
-                            or event.session_key
-                        ),
+                        task_id=(message_metadata.get("task_id") or event.session_key),
                         payload={
-                            "name": "coo_bus_event",
+                            "name": (
+                                "coo_error"
+                                if event.event_type == "coo_error"
+                                else "coo_bus_event"
+                            ),
                             "details": event.as_dict(),
-                            "formatted": self.coo.bus.get_formatted_events(limit=1)[-1],
+                            "formatted": formatted,
                         },
                     )
                 )

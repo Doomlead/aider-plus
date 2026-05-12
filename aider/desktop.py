@@ -641,7 +641,12 @@ class AiderPlusDesktop:
         panes.add(deliverables_frame, weight=2)
 
         coo_frame = ttk.LabelFrame(panes, text="COO Activity", padding=4)
-        self.coo_status_text = scrolledtext.ScrolledText(coo_frame, wrap=tk.WORD, height=8)
+        self.coo_status_text = scrolledtext.ScrolledText(
+            coo_frame, wrap=tk.WORD, height=8
+        )
+        self.coo_status_text.tag_configure(
+            "coo_error", foreground="#B42318", font=("TkDefaultFont", 10, "bold")
+        )
         self.coo_status_text.pack(fill="both", expand=True)
         panes.add(coo_frame, weight=2)
 
@@ -746,7 +751,12 @@ class AiderPlusDesktop:
         status = self.company.company_status()
         self._write_text(self.dashboard_text, status)
         self._write_text(self.deliverables_text, self._format_deliverables())
-        self._write_text(self.coo_status_text, self._format_coo_status())
+        coo_status = self._format_coo_status()
+        self._write_text(self.coo_status_text, coo_status)
+        if "Recent COO errors:" in coo_status:
+            start = self.coo_status_text.search("Recent COO errors:", "1.0", tk.END)
+            if start:
+                self.coo_status_text.tag_add("coo_error", start, tk.END)
 
     def _format_coo_status(self) -> str:
         if not self.company:
@@ -768,9 +778,22 @@ class AiderPlusDesktop:
                 f"{current_route.get('target', '—')}"
             ),
             f"Prompt caching: {self.company.caching_status()}",
-            "",
-            "Recent COO events:",
         ]
+        error_count = int(status.get("error_count", 0) or 0)
+        if error_count > 0:
+            last_error = status.get("last_error") or {}
+            lines.extend([
+                "",
+                "Recent COO errors:",
+                f"- Count: {error_count}",
+                (
+                    "- Last: "
+                    f"{last_error.get('error_type', 'unknown_error')} "
+                    f"after {last_error.get('retries', 0)} retries — "
+                    f"{last_error.get('message', '')}"
+                ),
+            ])
+        lines.extend(["", "Recent COO events:"])
         events = status.get("recent_events") or []
         if events:
             lines.extend(f"- {event}" for event in events[-20:])

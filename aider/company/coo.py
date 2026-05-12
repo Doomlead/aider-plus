@@ -100,6 +100,23 @@ class COOMessageBus:
         await self._record("message_consumed", message, "outbound", self.outbound_size)
         return message
 
+    async def emit_error(
+        self,
+        *,
+        session_key: str,
+        channel: str,
+        metadata: dict[str, Any],
+    ) -> COOMessageBusEvent:
+        """Emit a warning-severity COO error event without queueing a message."""
+        message = COOMessage(
+            channel=channel,
+            session_key=session_key,
+            role="system",
+            content=str(metadata.get("error_type") or "coo_error"),
+            metadata={"severity": "warning", **metadata},
+        )
+        return await self._record("coo_error", message, "error", 0)
+
     async def _record(
         self,
         event_type: str,
@@ -107,6 +124,9 @@ class COOMessageBus:
         queue: str,
         queue_size: int,
     ) -> COOMessageBusEvent:
+        metadata = {"message_metadata": dict(message.metadata)}
+        if event_type == "coo_error":
+            metadata.update(message.metadata)
         event = COOMessageBusEvent(
             event_type=event_type,
             channel=message.channel,
@@ -114,7 +134,7 @@ class COOMessageBus:
             role=message.role,
             queue=queue,
             queue_size=queue_size,
-            metadata={"message_metadata": dict(message.metadata)},
+            metadata=metadata,
         )
         self.events.append(event)
         if len(self.events) > self.history_limit:
@@ -131,13 +151,19 @@ class COOMessageBus:
         for event in self.events[-max(1, limit) :]:
             message_metadata = event.metadata.get("message_metadata", {})
             route = message_metadata.get("route") or {}
-            target = message_metadata.get("department") or message_metadata.get("target")
+            target = message_metadata.get("department") or message_metadata.get(
+                "target"
+            )
             task_id = message_metadata.get("task_id")
             details = [
                 f"{event.event_type.replace('_', ' ')}",
                 f"{event.queue} queue={event.queue_size}",
                 f"{event.role} via {event.channel}",
             ]
+            if event.event_type == "coo_error":
+                error_type = message_metadata.get("error_type", "unknown_error")
+                retries = message_metadata.get("retries", 0)
+                details.append(f"warning {error_type} after {retries} retries")
             if route:
                 details.append(
                     "route "
@@ -206,7 +232,11 @@ class COOSession:
         if last_route and (not route_history or route_history[-1] != last_route):
             route_history.append(last_route)
         last_assistant = next(
-            (message for message in reversed(self.messages) if message.get("role") == "assistant"),
+            (
+                message
+                for message in reversed(self.messages)
+                if message.get("role") == "assistant"
+            ),
             None,
         )
         return {
@@ -221,6 +251,8 @@ class COOSession:
             "last_deliverable_summary": (
                 last_assistant.get("content") if last_assistant else None
             ),
+            "error_count": int(self.metadata.get("error_count", 0) or 0),
+            "last_error": self.metadata.get("last_error"),
         }
 
 
@@ -314,15 +346,41 @@ class COORouteDecision:
     """Explicit COO routing result for a user message."""
 
     target: str
-    strategy: str
-    reason: str = ""
+    strategy: str = "deterministic"
+    reason: str = "Route selected by COO"
+    confidence: float = 0.5
+    should_escalate_to_human: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.target = str(self.target or "").strip().lower()
+        self.strategy = str(self.strategy or "deterministic").strip().lower()
+        self.reason = str(self.reason or "Route selected by COO").strip()
+        try:
+            self.confidence = float(self.confidence)
+        except (TypeError, ValueError):
+            self.confidence = 0.5
+        self.confidence = max(0.0, min(1.0, self.confidence))
+        self.should_escalate_to_human = bool(self.should_escalate_to_human)
+        self.metadata = dict(self.metadata or {})
+
+    @property
+    def chosen_department(self) -> str:
+        return self.target
+
+    @property
+    def reasoning(self) -> str:
+        return self.reason
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "target": self.target,
+            "chosen_department": self.chosen_department,
             "strategy": self.strategy,
             "reason": self.reason,
+            "reasoning": self.reasoning,
+            "confidence": self.confidence,
+            "should_escalate_to_human": self.should_escalate_to_human,
             "metadata": self.metadata,
         }
 
@@ -365,6 +423,60 @@ class NanobotCOO:
     def agent_loop(self):
         """Backward-compatible alias for the COO routing agent loop."""
         return self.coo_agent_loop
+
+    async def _call_with_retry(
+        self,
+        coro: Callable[[], Awaitable[Any]] | Awaitable[Any],
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+    ) -> Any:
+        """Call an async operation with bounded exponential backoff."""
+        attempts = max(0, int(max_retries)) + 1
+        last_error: BaseException | None = None
+        for attempt in range(attempts):
+            try:
+                operation = coro() if callable(coro) else coro
+                return await operation
+            except Exception as err:
+                last_error = err
+                if attempt >= attempts - 1:
+                    break
+                delay = max(0.0, base_delay) * (2**attempt)
+                if delay:
+                    await asyncio.sleep(delay)
+        assert last_error is not None
+        raise last_error
+
+    async def _emit_coo_error(
+        self,
+        *,
+        session: COOSession | None,
+        session_id: str,
+        surface: str,
+        error: BaseException,
+        error_type: str,
+        retries: int,
+        user_message: str,
+    ) -> None:
+        preview = user_message.replace("\n", " ")[:160]
+        error_payload = {
+            "error_type": error_type,
+            "retries": retries,
+            "user_message_preview": preview,
+            "message": str(error),
+            "error_class": error.__class__.__name__,
+        }
+        if session is not None:
+            session.metadata["error_count"] = (
+                int(session.metadata.get("error_count", 0) or 0) + 1
+            )
+            session.metadata["last_error"] = error_payload
+            self.session_manager.save(session)
+        await self.bus.emit_error(
+            session_key=session_id,
+            channel=surface,
+            metadata=error_payload,
+        )
 
     async def receive_user_message(
         self,
@@ -439,11 +551,32 @@ class NanobotCOO:
             "origin": origin or surface,
             "route": route.as_dict(),
         }
-        result = await self.route_to_department(session, route.target, payload)
+        try:
+            result = await self._call_with_retry(
+                lambda: self.route_to_department(session, route.target, payload)
+            )
+        except Exception as err:
+            await self._emit_coo_error(
+                session=session,
+                session_id=session_id,
+                surface=surface,
+                error=err,
+                error_type="department_handoff_failed",
+                retries=3,
+                user_message=inbound.content,
+            )
+            fallback_route = self._deterministic_route(inbound.content)
+            fallback_route.strategy = "deterministic_fallback"
+            fallback_route.metadata["fallback_from"] = route.as_dict()
+            session.messages[-1]["route"] = fallback_route.as_dict()
+            self.session_manager.save(session)
+            payload["route"] = fallback_route.as_dict()
+            result = await self.route_to_department(
+                session, fallback_route.target, payload
+            )
         result["events"] = [event.as_dict() for event in self.bus.events]
         result["bus"] = self.bus.snapshot()
         return result
-
 
     async def get_session_status(self, session_id: str) -> dict[str, Any]:
         """Return a clean dashboard payload for COO observability surfaces."""
@@ -461,10 +594,13 @@ class NanobotCOO:
             "recent_events": bus_snapshot.get("formatted_events", []),
             "session": session_snapshot,
             "route_history": session_snapshot.get("route_history", []),
+            "error_count": session_snapshot.get("error_count", 0),
+            "last_error": session_snapshot.get("last_error"),
             "metrics": {
                 "message_count": session_snapshot.get("message_count", 0),
                 "inbound_queue_size": bus_snapshot.get("inbound_size", 0),
                 "outbound_queue_size": bus_snapshot.get("outbound_size", 0),
+                "error_count": session_snapshot.get("error_count", 0),
                 **bus_snapshot.get("stats", {}),
             },
             "bus": bus_snapshot,
@@ -595,31 +731,98 @@ class NanobotCOO:
     async def _llm_route(
         self, prompt: str, session: COOSession
     ) -> COORouteDecision | None:
-        result = await self.coo_agent_loop.run_structured(
-            task=json.dumps(
-                {
-                    "prompt": prompt,
-                    "history": session.get_history(12),
-                    "departments": sorted(self.orchestrator.departments),
-                },
-                ensure_ascii=False,
-            ),
-            system_prompt=(
-                "You are the COO routing user work to one department. "
-                'Return only JSON like {"target": "product", "reason": "..."}.'
-            ),
-            enable_caching=self.agent_config.enable_caching,
-        )
+        task_payload = {
+            "prompt": prompt,
+            "history": session.get_history(12),
+            "project_phase": self._current_project_phase(),
+            "recent_route_history": self._recent_route_history(session, limit=3),
+            "active_department": session.metadata.get("last_target"),
+            "departments": sorted(self.orchestrator.departments),
+        }
+        try:
+            result = await self._call_with_retry(
+                lambda: self.coo_agent_loop.run_structured(
+                    task=json.dumps(task_payload, ensure_ascii=False),
+                    system_prompt=self._get_coo_routing_prompt(session),
+                    enable_caching=self.agent_config.enable_caching,
+                ),
+                base_delay=0.01,
+            )
+        except Exception as err:
+            await self._emit_coo_error(
+                session=session,
+                session_id=session.key,
+                surface=(
+                    session.messages[-1].get("surface") if session.messages else "coo"
+                )
+                or "coo",
+                error=err,
+                error_type="llm_route_failed",
+                retries=3,
+                user_message=prompt,
+            )
+            return None
+
         parsed = self._parse_json(result.get("content", ""))
-        candidate = str(parsed.get("target", "")).lower()
+        candidate = str(
+            parsed.get("chosen_department") or parsed.get("target") or ""
+        ).lower()
         if candidate in self.orchestrator.departments:
             return COORouteDecision(
                 target=candidate,
                 strategy="llm",
-                reason=str(parsed.get("reason", "")),
+                reason=str(parsed.get("reasoning") or parsed.get("reason") or ""),
+                confidence=parsed.get("confidence", 0.5),
+                should_escalate_to_human=bool(
+                    parsed.get("should_escalate_to_human", False)
+                ),
                 metadata={"raw": parsed},
             )
         return None
+
+    def _current_project_phase(self) -> str:
+        project = self.orchestrator.active_project
+        return getattr(project, "phase", None) or "unassigned"
+
+    def _recent_route_history(
+        self, session: COOSession, *, limit: int = 3
+    ) -> list[dict[str, Any]]:
+        routes = []
+        for message in session.messages:
+            route = message.get("route") or message.get("metadata", {}).get("route")
+            if route:
+                routes.append(route)
+        last_route = session.metadata.get("last_route")
+        if last_route and (not routes or routes[-1] != last_route):
+            routes.append(last_route)
+        return routes[-max(1, limit) :]
+
+    def _get_coo_routing_prompt(self, session: COOSession) -> str:
+        departments = sorted(self.orchestrator.departments)
+        route_history = self._recent_route_history(session, limit=3)
+        return (
+            "You are the NanobotCOO routing agent. Choose exactly one department "
+            "for the user's next work item while preserving production reliability.\n\n"
+            f"Current project phase: {self._current_project_phase()}\n"
+            f"Recent route history (last 3 decisions): "
+            f"{json.dumps(route_history, ensure_ascii=False)}\n"
+            f"Active department: {session.metadata.get('last_target') or 'none'}\n"
+            f"Available departments list: {', '.join(departments)}\n\n"
+            "Decision rules:\n"
+            "- Pick only a department from the available departments list.\n"
+            "- Prefer continuity with the active department unless the prompt clearly "
+            "belongs elsewhere.\n"
+            "- Consider the current project phase and avoid skipping required product, "
+            "design, QA, or deployment gates.\n"
+            "- Escalate to a human only when routing is ambiguous, unsafe, or blocked.\n\n"
+            "Return only JSON matching this COORouteDecision schema:\n"
+            "{\n"
+            '  "reasoning": "short explanation for the routing decision",\n'
+            '  "chosen_department": "one of the available departments",\n'
+            '  "confidence": 0.0,\n'
+            '  "should_escalate_to_human": false\n'
+            "}"
+        )
 
     def _deterministic_route(self, prompt: str) -> COORouteDecision:
         if self.orchestrator.active_project is not None:

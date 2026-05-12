@@ -383,15 +383,16 @@ class DesktopCompanySession:
             blocking=False,
             context={"project_name": Path(self.repo_path).name},
         )
-        deliverable = await self.coo.receive_user_message(
-            prompt=prompt,
-            channel="desktop",
-            session_key=f"desktop:{self.repo_path}",
+        coo_result = await self.coo.receive_user_message(
+            message=prompt,
+            session_id=f"desktop:{self.repo_path}",
+            surface="desktop",
             target="product",
             context={"project_name": Path(self.repo_path).name},
             task_id=task.task_id,
             origin=task.origin,
         )
+        deliverable = coo_result["deliverable"]
         return {
             "summary": deliverable.payload,
             "content": deliverable.payload,
@@ -409,14 +410,15 @@ class DesktopCompanySession:
             payload=prompt,
             blocking=False,
         )
-        deliverable = await self.coo.receive_user_message(
-            prompt=prompt,
-            channel="desktop",
-            session_key=f"desktop:{self.repo_path}",
+        coo_result = await self.coo.receive_user_message(
+            message=prompt,
+            session_id=f"desktop:{self.repo_path}",
+            surface="desktop",
             target="engineering",
             task_id=task.task_id,
             origin=task.origin,
         )
+        deliverable = coo_result["deliverable"]
         result = {
             "summary": deliverable.payload,
             "content": deliverable.payload,

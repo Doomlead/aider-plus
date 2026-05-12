@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.schemas import CompanyTask, Deliverable
@@ -26,24 +26,112 @@ class COOMessage:
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
 
+@dataclass
+class COOMessageBusEvent:
+    """Observable event emitted when messages move through the COO bus."""
+
+    event_type: str
+    channel: str
+    session_key: str
+    role: str
+    queue: str
+    queue_size: int
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "event_type": self.event_type,
+            "channel": self.channel,
+            "session_key": self.session_key,
+            "role": self.role,
+            "queue": self.queue,
+            "queue_size": self.queue_size,
+            "metadata": self.metadata,
+            "created_at": self.created_at,
+        }
+
+
+BusEventHandler = Callable[[COOMessageBusEvent], Awaitable[None] | None]
+
+
 class COOMessageBus:
     """Small async bus that decouples user channels from company orchestration."""
 
-    def __init__(self):
+    def __init__(self, *, history_limit: int = 200):
         self.inbound: asyncio.Queue[COOMessage] = asyncio.Queue()
         self.outbound: asyncio.Queue[COOMessage] = asyncio.Queue()
+        self.history_limit = history_limit
+        self.events: list[COOMessageBusEvent] = []
+        self._handlers: list[BusEventHandler] = []
+        self.stats = {
+            "inbound_published": 0,
+            "inbound_consumed": 0,
+            "outbound_published": 0,
+            "outbound_consumed": 0,
+        }
 
-    async def publish_inbound(self, message: COOMessage) -> None:
+    def on_event(self, handler: BusEventHandler) -> None:
+        self._handlers.append(handler)
+
+    async def publish_inbound(self, message: COOMessage) -> COOMessageBusEvent:
         await self.inbound.put(message)
+        self.stats["inbound_published"] += 1
+        return await self._record(
+            "message_published", message, "inbound", self.inbound_size
+        )
 
     async def consume_inbound(self) -> COOMessage:
-        return await self.inbound.get()
+        message = await self.inbound.get()
+        self.stats["inbound_consumed"] += 1
+        await self._record("message_consumed", message, "inbound", self.inbound_size)
+        return message
 
-    async def publish_outbound(self, message: COOMessage) -> None:
+    async def publish_outbound(self, message: COOMessage) -> COOMessageBusEvent:
         await self.outbound.put(message)
+        self.stats["outbound_published"] += 1
+        return await self._record(
+            "message_published", message, "outbound", self.outbound_size
+        )
 
     async def consume_outbound(self) -> COOMessage:
-        return await self.outbound.get()
+        message = await self.outbound.get()
+        self.stats["outbound_consumed"] += 1
+        await self._record("message_consumed", message, "outbound", self.outbound_size)
+        return message
+
+    async def _record(
+        self,
+        event_type: str,
+        message: COOMessage,
+        queue: str,
+        queue_size: int,
+    ) -> COOMessageBusEvent:
+        event = COOMessageBusEvent(
+            event_type=event_type,
+            channel=message.channel,
+            session_key=message.session_key,
+            role=message.role,
+            queue=queue,
+            queue_size=queue_size,
+            metadata={"message_metadata": dict(message.metadata)},
+        )
+        self.events.append(event)
+        if len(self.events) > self.history_limit:
+            self.events = self.events[-self.history_limit :]
+        for handler in list(self._handlers):
+            result = handler(event)
+            if asyncio.iscoroutine(result):
+                await result
+        return event
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "inbound_size": self.inbound_size,
+            "outbound_size": self.outbound_size,
+            "stats": dict(self.stats),
+            "recent_events": [event.as_dict() for event in self.events[-20:]],
+        }
 
     @property
     def inbound_size(self) -> int:
@@ -90,7 +178,9 @@ class COOSessionManager:
 
     @staticmethod
     def safe_key(key: str) -> str:
-        safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in key)
+        safe = "".join(
+            ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in key
+        )
         return safe[:160] or "default"
 
     def _path(self, key: str) -> Path:
@@ -162,18 +252,32 @@ class COOSessionManager:
         return len(self._cache)
 
 
-class NanobotCOO:
-    """Persistent COO agent that mediates users, sessions, and departments.
+@dataclass
+class COORouteDecision:
+    """Explicit COO routing result for a user message."""
 
-    This intentionally clones Nanobot's useful primitives locally: an async message
-    bus, durable session manager, and a small persistent agent-loop facade. It does
-    not import or bridge to Nanobot at runtime.
-    """
+    target: str
+    strategy: str
+    reason: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "target": self.target,
+            "strategy": self.strategy,
+            "reason": self.reason,
+            "metadata": self.metadata,
+        }
+
+
+class NanobotCOO:
+    """Thin coordinator for COO sessions, routing, and orchestration handoff."""
 
     def __init__(
         self,
         *,
         orchestrator: CompanyOrchestrator,
+        coo_agent_loop=None,
         agent_loop=None,
         session_manager: COOSessionManager | None = None,
         bus: COOMessageBus | None = None,
@@ -181,7 +285,9 @@ class NanobotCOO:
         enable_llm_routing: bool | None = None,
     ):
         self.orchestrator = orchestrator
-        self.agent_loop = agent_loop
+        self.coo_agent_loop = (
+            coo_agent_loop if coo_agent_loop is not None else agent_loop
+        )
         self.session_manager = session_manager or COOSessionManager(orchestrator.memory)
         self.bus = bus or COOMessageBus()
         self.default_target = default_target
@@ -191,105 +297,169 @@ class NanobotCOO:
             else enable_llm_routing
         )
 
+    @property
+    def agent_loop(self):
+        """Backward-compatible alias for the COO routing agent loop."""
+        return self.coo_agent_loop
+
     async def receive_user_message(
         self,
-        *,
-        prompt: str,
-        channel: str,
-        session_key: str,
-        target: str | None = None,
-        artifact_type: str = "raw_prompt",
-        context: dict[str, Any] | None = None,
-        blocking: bool = False,
-        wait: bool = True,
-        task_id: str | None = None,
-        origin: str | None = None,
-    ) -> Optional[Deliverable]:
-        """Persist a user turn, choose a department, and hand off the task."""
-        message = COOMessage(
-            channel=channel,
-            session_key=session_key,
-            content=prompt,
+        message: str | None = None,
+        session_id: str | None = None,
+        surface: str = "cli",
+        **options: Any,
+    ) -> dict[str, Any]:
+        """Persist a user message, route it, hand it off, and return result/events."""
+        message = message if message is not None else options.pop("prompt", None)
+        session_id = (
+            session_id if session_id is not None else options.pop("session_key", None)
+        )
+        surface = options.pop("channel", surface)
+        if message is None:
+            raise TypeError(
+                "receive_user_message() missing required argument: 'message'"
+            )
+        if session_id is None:
+            raise TypeError(
+                "receive_user_message() missing required argument: 'session_id'"
+            )
+
+        target = options.pop("target", None)
+        artifact_type = options.pop("artifact_type", "raw_prompt")
+        context = options.pop("context", None)
+        blocking = options.pop("blocking", False)
+        wait = options.pop("wait", True)
+        task_id = options.pop("task_id", None)
+        origin = options.pop("origin", None)
+        if options:
+            unknown = ", ".join(sorted(options))
+            raise TypeError(f"Unsupported COO message option(s): {unknown}")
+
+        inbound = COOMessage(
+            channel=surface,
+            session_key=session_id,
+            content=message,
             metadata={"target": target, "artifact_type": artifact_type},
         )
-        await self.bus.publish_inbound(message)
-        return await self._handle_inbound(
-            await self.bus.consume_inbound(),
-            target=target,
-            artifact_type=artifact_type,
-            context=context,
-            blocking=blocking,
-            wait=wait,
-            task_id=task_id,
-            origin=origin,
-        )
+        await self.bus.publish_inbound(inbound)
+        inbound = await self.bus.consume_inbound()
 
-    async def _handle_inbound(
-        self,
-        message: COOMessage,
-        *,
-        target: str | None,
-        artifact_type: str,
-        context: dict[str, Any] | None,
-        blocking: bool,
-        wait: bool,
-        task_id: str | None,
-        origin: str | None,
-    ) -> Optional[Deliverable]:
-        session = self.session_manager.get_or_create(message.session_key)
+        session = self.session_manager.get_or_create(session_id)
         session.add_message(
             "user",
-            message.content,
-            channel=message.channel,
-            metadata=message.metadata,
+            inbound.content,
+            surface=surface,
+            metadata=inbound.metadata,
         )
-        resolved_target = target or await self.resolve_target(message.content, session)
+        self.session_manager.save(session)
+
+        route = (
+            COORouteDecision(
+                target=target, strategy="explicit", reason="Caller provided target"
+            )
+            if target
+            else await self.decide_route(inbound.content, session)
+        )
+
+        payload = {
+            "message": inbound.content,
+            "surface": surface,
+            "artifact_type": artifact_type,
+            "context": context or {},
+            "blocking": blocking,
+            "wait": wait,
+            "task_id": task_id,
+            "origin": origin or surface,
+            "route": route.as_dict(),
+        }
+        result = await self.route_to_department(session, route.target, payload)
+        result["events"] = [event.as_dict() for event in self.bus.events]
+        result["bus"] = self.bus.snapshot()
+        return result
+
+    async def route_to_department(
+        self,
+        session: COOSession,
+        department_name: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create and submit/run a department task for an already-routed session."""
+        target = department_name.lower()
+        if target not in self.orchestrator.departments:
+            raise ValueError(f"No department: {target}")
+
         task = CompanyTask(
-            task_id=task_id or str(uuid.uuid4()),
-            origin=origin or message.channel,
-            target=resolved_target,
-            artifact_type=artifact_type,
-            payload=message.content,
-            blocking=blocking,
-            context=context or {},
+            task_id=payload.get("task_id") or str(uuid.uuid4()),
+            origin=payload.get("origin") or payload.get("surface") or "coo",
+            target=target,
+            artifact_type=payload.get("artifact_type", "raw_prompt"),
+            payload=payload.get("message"),
+            blocking=payload.get("blocking", False),
+            context=payload.get("context") or {},
         )
         session.metadata.update(
             {
                 "last_task_id": task.task_id,
-                "last_target": resolved_target,
-                "last_channel": message.channel,
+                "last_target": target,
+                "last_surface": payload.get("surface"),
+                "last_route": payload.get("route", {}),
             }
         )
         self.session_manager.save(session)
 
-        if wait:
-            deliverable = await self.run_department_task(task)
-            session.add_message(
-                "assistant",
-                self._summarize_deliverable(deliverable),
-                department=deliverable.department,
-                status=deliverable.status,
-                task_id=deliverable.task_id,
-            )
+        if not payload.get("wait", True):
+            await self.orchestrator.submit(task)
             self.session_manager.save(session)
-            await self.bus.publish_outbound(
-                COOMessage(
-                    channel=message.channel,
-                    session_key=message.session_key,
-                    role="assistant",
-                    content=self._summarize_deliverable(deliverable),
-                    metadata={"task_id": task.task_id, "department": deliverable.department},
-                )
+            return {
+                "session_id": session.key,
+                "task_id": task.task_id,
+                "target": target,
+                "status": "submitted",
+                "route": payload.get("route", {}),
+                "deliverable": None,
+                "result": None,
+            }
+
+        deliverable = await self._run_department_task(task)
+        content = self._summarize_deliverable(deliverable)
+        session.add_message(
+            "assistant",
+            content,
+            department=deliverable.department,
+            status=deliverable.status,
+            task_id=deliverable.task_id,
+        )
+        self.session_manager.save(session)
+        await self.bus.publish_outbound(
+            COOMessage(
+                channel=payload.get("surface") or "coo",
+                session_key=session.key,
+                role="assistant",
+                content=content,
+                metadata={
+                    "task_id": task.task_id,
+                    "department": deliverable.department,
+                },
             )
-            return deliverable
+        )
+        return {
+            "session_id": session.key,
+            "task_id": task.task_id,
+            "target": target,
+            "status": deliverable.status,
+            "route": payload.get("route", {}),
+            "deliverable": deliverable,
+            "result": {
+                "summary": deliverable.payload,
+                "content": deliverable.payload,
+                "artifact_type": deliverable.artifact_type,
+                "metadata": deliverable.metadata,
+                "department": deliverable.department,
+            },
+        }
 
-        await self.orchestrator.submit(task)
-        return None
-
-    async def run_department_task(self, task: CompanyTask) -> Deliverable:
+    async def _run_department_task(self, task: CompanyTask) -> Deliverable:
         """Run one department synchronously and route the produced deliverable."""
-        if task.target not in self.orchestrator.departments:
-            raise ValueError(f"No department: {task.target}")
         department = self.orchestrator.departments[task.target]
         task.context = self.orchestrator.context_builder.build(
             task,
@@ -300,34 +470,108 @@ class NanobotCOO:
         await self.orchestrator._route(deliverable)
         return deliverable
 
-    async def resolve_target(self, prompt: str, session: COOSession) -> str:
-        """Choose the target department, optionally using the COO's own agent loop."""
-        if self.enable_llm_routing and self.agent_loop is not None:
-            result = await self.agent_loop.run_structured(
-                task=json.dumps(
-                    {
-                        "prompt": prompt,
-                        "history": session.get_history(12),
-                        "departments": sorted(self.orchestrator.departments),
-                    },
-                    ensure_ascii=False,
-                ),
-                system_prompt=(
-                    "You are the COO routing user work to one department. "
-                    "Return only JSON like {\"target\": \"product\"}. "
-                    "Valid targets: product, ux, engineering, qa, devops."
-                ),
-            )
-            parsed = self._parse_json(result.get("content", ""))
-            candidate = str(parsed.get("target", "")).lower()
-            if candidate in self.orchestrator.departments:
-                return candidate
+    async def run_department_task(self, task: CompanyTask) -> Deliverable:
+        """Backward-compatible wrapper around route_to_department for direct tasks."""
+        session = self.session_manager.get_or_create(f"task:{task.task_id}")
+        result = await self.route_to_department(
+            session,
+            task.target,
+            {
+                "message": task.payload,
+                "surface": task.origin,
+                "artifact_type": task.artifact_type,
+                "context": task.context,
+                "blocking": task.blocking,
+                "wait": True,
+                "task_id": task.task_id,
+                "origin": task.origin,
+                "route": {"target": task.target, "strategy": "direct"},
+            },
+        )
+        return result["deliverable"]
 
+    async def decide_route(self, prompt: str, session: COOSession) -> COORouteDecision:
+        """Choose the target department using explicit LLM or deterministic strategies."""
+        if self.enable_llm_routing and self.coo_agent_loop is not None:
+            decision = await self._llm_route(prompt, session)
+            if decision is not None:
+                return decision
+        return self._deterministic_route(prompt)
+
+    async def _llm_route(
+        self, prompt: str, session: COOSession
+    ) -> COORouteDecision | None:
+        result = await self.coo_agent_loop.run_structured(
+            task=json.dumps(
+                {
+                    "prompt": prompt,
+                    "history": session.get_history(12),
+                    "departments": sorted(self.orchestrator.departments),
+                },
+                ensure_ascii=False,
+            ),
+            system_prompt=(
+                "You are the COO routing user work to one department. "
+                'Return only JSON like {"target": "product", "reason": "..."}.'
+            ),
+        )
+        parsed = self._parse_json(result.get("content", ""))
+        candidate = str(parsed.get("target", "")).lower()
+        if candidate in self.orchestrator.departments:
+            return COORouteDecision(
+                target=candidate,
+                strategy="llm",
+                reason=str(parsed.get("reason", "")),
+                metadata={"raw": parsed},
+            )
+        return None
+
+    def _deterministic_route(self, prompt: str) -> COORouteDecision:
         if self.orchestrator.active_project is not None:
             project = self.orchestrator.active_project
-            if project.phase == "prototyping" and not project.prd:
-                return "product"
-        return "engineering" if "engineering" in self.orchestrator.departments else self.default_target
+            if (
+                project.phase == "prototyping"
+                and not project.prd
+                and "product" in self.orchestrator.departments
+            ):
+                return COORouteDecision(
+                    target="product",
+                    strategy="deterministic",
+                    reason="Prototype project needs a PRD before implementation",
+                )
+        prompt_lower = prompt.lower()
+        keyword_routes = (
+            ("qa", ("test", "tests", "qa", "quality", "bug reproduction")),
+            ("devops", ("deploy", "deployment", "ci", "release", "docker")),
+            ("ux", ("design", "ux", "ui", "wireframe", "accessibility")),
+            ("product", ("prd", "requirements", "product", "spec")),
+            ("engineering", ("code", "implement", "refactor", "fix", "engineering")),
+        )
+        for target, keywords in keyword_routes:
+            if target in self.orchestrator.departments and any(
+                word in prompt_lower for word in keywords
+            ):
+                return COORouteDecision(
+                    target=target,
+                    strategy="deterministic",
+                    reason=f"Matched {target} routing keywords",
+                )
+        target = (
+            "engineering"
+            if "engineering" in self.orchestrator.departments
+            else self.default_target
+        )
+        if target not in self.orchestrator.departments:
+            target = next(iter(self.orchestrator.departments))
+        return COORouteDecision(
+            target=target,
+            strategy="deterministic",
+            reason="Default route",
+        )
+
+    async def resolve_target(self, prompt: str, session: COOSession) -> str:
+        """Backward-compatible target-only route resolver."""
+        return (await self.decide_route(prompt, session)).target
 
     @staticmethod
     def _parse_json(content: str) -> dict[str, Any]:

@@ -36,6 +36,10 @@ class DummyCoder:
 class EchoDepartment(Department):
     name = "product"
 
+    def __init__(self, memory, name="product"):
+        super().__init__(memory)
+        self.name = name
+
     async def process(self, task: CompanyTask) -> Deliverable:
         return Deliverable(
             task_id=task.task_id,
@@ -77,23 +81,31 @@ def test_nanobot_coo_persists_session_and_routes_to_department(tmp_path):
         orchestrator.register(department)
         coo = NanobotCOO(orchestrator=orchestrator)
 
-        deliverable = await coo.receive_user_message(
-            prompt="build the thing",
-            channel="cli",
-            session_key="cli:test-user",
+        result = await coo.receive_user_message(
+            message="build the thing",
+            session_id="cli:test-user",
+            surface="cli",
             target="product",
             context={"project_name": "demo"},
             task_id="task-1",
         )
+        deliverable = result["deliverable"]
 
+        assert result["task_id"] == "task-1"
+        assert result["target"] == "product"
+        assert result["events"]
         assert deliverable.task_id == "task-1"
         assert deliverable.department == "product"
         session = coo.session_manager.get_or_create("cli:test-user")
         assert session.metadata["last_target"] == "product"
-        assert [message["role"] for message in session.messages] == ["user", "assistant"]
+        assert [message["role"] for message in session.messages] == [
+            "user",
+            "assistant",
+        ]
         assert coo.session_manager._path("cli:test-user").exists()
 
     asyncio.run(run())
+
 
 def test_apply_agent_model_overrides_from_env(monkeypatch):
     monkeypatch.setenv("AIDER_COMPANY_AGENT_MODELS", "product=gpt-4o,ux=claude-3")
@@ -104,3 +116,43 @@ def test_apply_agent_model_overrides_from_env(monkeypatch):
     assert config.get_department_config("product").preferred_model == "gpt-4o"
     assert config.get_department_config("ux").preferred_model == "claude-3"
     assert config.get_department_config("qa").preferred_model == "o3-mini"
+
+
+def test_nanobot_coo_uses_llm_route_when_enabled(tmp_path):
+    class RoutingLoop:
+        def __init__(self):
+            self.calls = []
+
+        async def run_structured(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"content": '{"target": "ux", "reason": "Needs design"}'}
+
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        product = EchoDepartment(memory, name="product")
+        ux = EchoDepartment(memory, name="ux")
+        orchestrator.register(product)
+        orchestrator.register(ux)
+        loop = RoutingLoop()
+        coo = NanobotCOO(
+            orchestrator=orchestrator,
+            coo_agent_loop=loop,
+            enable_llm_routing=True,
+        )
+
+        result = await coo.receive_user_message(
+            "Create a wireframe for onboarding",
+            "cli:llm-route",
+            surface="cli",
+            task_id="task-llm",
+        )
+
+        assert loop.calls
+        assert result["route"]["strategy"] == "llm"
+        assert result["target"] == "ux"
+        assert result["deliverable"].department == "ux"
+        session = coo.session_manager.get_or_create("cli:llm-route")
+        assert session.metadata["last_route"]["strategy"] == "llm"
+
+    asyncio.run(run())

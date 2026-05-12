@@ -12,6 +12,7 @@ AgentCallback = Optional[Callable[[str, dict], Awaitable[None]]]
 
 
 DEPARTMENT_AGENT_NAMES = ("coo", "product", "ux", "engineering", "qa", "devops")
+COMPANY_AGENT_ROLE_NAMES = DEPARTMENT_AGENT_NAMES
 
 
 def clone_coder_for_agent(coder, *, model_name: str | None = None):
@@ -52,7 +53,9 @@ def build_agent_loop_for_department(
     """Build a dedicated AiderAgentLoop for one COO or department agent."""
     resolved_company_config = company_config or default_company_config()
     dept_config = resolved_company_config.get_department_config(department_name)
-    department_coder = clone_coder_for_agent(coder, model_name=dept_config.preferred_model)
+    department_coder = clone_coder_for_agent(
+        coder, model_name=dept_config.preferred_model
+    )
     loop_config = agent_loop_config_for_department(
         base_config,
         model_name=dept_config.preferred_model,
@@ -62,6 +65,24 @@ def build_agent_loop_for_department(
         callback=callback,
         config=loop_config,
         enable_prompt_caching=dept_config.enable_prompt_caching,
+    )
+
+
+def build_agent_loop_for_role(
+    *,
+    coder,
+    role_name: str,
+    company_config: CompanyConfig | None = None,
+    callback: AgentCallback = None,
+    base_config: AgentLoopConfig | None = None,
+) -> AiderAgentLoop:
+    """Build a dedicated AiderAgentLoop for any company role, including COO."""
+    return build_agent_loop_for_department(
+        coder=coder,
+        department_name=role_name,
+        company_config=company_config,
+        callback=callback,
+        base_config=base_config,
     )
 
 

@@ -5,7 +5,7 @@
 <h1 align="center">Aider Plus</h1>
 
 <p align="center">
-<strong>Aider Plus</strong> is an agent-first fork of <a href="https://github.com/Aider-AI/aider">aider-chat</a>. It keeps Aider's git-aware coding engine and layers on headless automation, an autonomous tool-calling runtime, a Product → UX → Engineering → QA → DevOps delivery workflow, human approval gates, Discord/browser/desktop surfaces, persistent project memory, audit logs, observability, retrieval-aware context, prompt-caching controls, and post-mortem learning.
+<strong>Aider Plus</strong> is an agent-first fork of <a href="https://github.com/Aider-AI/aider">aider-chat</a>. It keeps Aider's git-aware coding engine and layers on headless automation, an autonomous tool-calling runtime, a Product → UX → Engineering → QA → DevOps delivery workflow, structured PRD and DesignSpec handoffs, UX schema gates, engineering reviewer loops, human approval gates, Discord/browser/desktop surfaces, persistent project memory, audit logs, observability, retrieval-aware context, prompt-caching controls, and post-mortem learning.
 </p>
 
 ---
@@ -77,8 +77,9 @@ Aider Plus now combines upstream Aider with a multi-surface autonomous delivery 
 
 - `CompanyOrchestrator` routes work through a software-company workflow with project lifecycle state, department registration, handoffs, approval gates, background task management, audit events, status/dashboard data, and post-mortem learning.
 - Product performs LLM ambiguity detection, creates CEO clarification gates with targeted questions, resumes PRD drafting from human answers, generates typed PRDs, self-reviews requirements quality, and preserves both Markdown and structured PRD data.
-- UX consumes Product context and emits structured `DesignSpec` artifacts with screens/pages, components, user flows, accessibility notes, technical requirements, and visual style guidance.
-- Engineering receives PRD and design-spec context, runs programmer/reviewer sub-phases, extracts structured review feedback, injects revision feedback into follow-up programmer prompts, and records changed files, diffs, commits, review state, and cache usage.
+- UX consumes Product context and emits strict `DesignSpecV2` artifacts with screens, routes, components, data contracts, interaction states, accessibility checklists, global state guidance, and error-boundary notes.
+- UX output passes through an Engineering-owned schema gate that validates JSON structure, forbids unknown fields, checks component/screen references, requires loading and error states, retries once with rejection feedback, and blocks invalid design handoffs.
+- Engineering receives PRD, structured design-spec, schema-gate, QA, and playbook context, runs programmer/reviewer sub-phases, extracts structured review feedback, injects revision feedback into follow-up programmer prompts, and records changed files, diffs, commits, review state, and cache usage.
 - QA runs targeted checks, records pass/fail/no-test outcomes, produces structured QA feedback, and can reroute failures back to Engineering for bounded fixes.
 - Release approval can block deployment, and DevOps records deployment/release completion once release gates pass.
 - Departments remain isolated behind task/deliverable interfaces and tool allowlists instead of directly mutating each other's state.
@@ -119,8 +120,9 @@ The Company runtime models a small software organization:
 
 - **Product** checks ambiguity, asks targeted clarification questions when needed, resumes with CEO answers, turns clear requests into typed/self-reviewed PRDs, and preserves Markdown plus structured PRD dictionaries.
 - **Clarification approval** blocks PRD drafting until a human supplies answers; **PRD approval** can block downstream UX/Engineering work until a human approves, rejects, or requests changes.
-- **UX** produces structured design specs from Product context.
-- **Engineering** implements from PRD/design context using programmer/reviewer sub-phases and bounded revision prompts.
+- **UX** produces schema-validated `DesignSpecV2` handoffs from Product context, including screens, components, data contracts, interaction states, accessibility, state management, and error handling.
+- **Schema gate** validates UX deliverables before Engineering receives them, retries once with actionable rejection feedback, and returns a `validation_failed` deliverable if the design remains incomplete or inconsistent.
+- **Engineering** implements from PRD/design/schema-gate context using programmer/reviewer sub-phases, bounded revision prompts, structured reviewer feedback, and reviewer safeguard metrics.
 - **QA** runs checks, records pass/fail/no-test outcomes, and can route structured feedback back to Engineering.
 - **Release approval** can block deployment.
 - **DevOps** records deployment or release completion.
@@ -140,11 +142,11 @@ Important runtime areas:
 
 - **Aider core**: `aider/` contains the upstream coding engine, coders, model metadata, CLI, commands, repo map, IO, git integration, browser GUI, desktop launcher, and supporting utilities.
 - **Agent loop**: `aider/agent/` contains tool definitions, the department-aware `ToolRegistry`, prompt-cache-aware agent calls, structured reviewer calls, and the Aider-backed agent loop.
-- **Company workflow**: `aider/company/` contains the orchestrator, state manager, lifecycle transitions, departments, approval gates, department configuration, context builder, audit helpers, schemas, and playbook manager.
+- **Company workflow**: `aider/company/` contains the orchestrator, state manager, lifecycle transitions, departments, approval gates, department configuration, context builder, audit helpers, schemas, UX schema validators, and playbook manager.
 - **Memory**: `aider/memory/` contains conversation memory, project memory, dream consolidation, repository memory, the TF-IDF retriever, and audit pattern extraction.
 - **Integrations**: `aider/integrations/` contains the Discord adapter.
 - **GUI and desktop**: `aider/gui.py` and `aider/desktop.py` expose direct chat and Company Mode through browser and native desktop paths.
-- **Tests**: `tests/company/` contains the focused company workflow, permissions, prompt-caching, playbook/pattern, and engineering-review tests.
+- **Tests**: `tests/company/` contains the focused company workflow, permissions, prompt-caching, playbook/pattern, UX schema-gate, Discord lifecycle, and engineering-review tests.
 - **Docs/site/benchmarks**: `aider/website/`, `benchmark/`, root docs, histories, and requirement files retain upstream assets plus Aider Plus updates.
 
 High-level flow:
@@ -166,8 +168,8 @@ User / Script / Discord / GUI
                 |
                 +--> CompanyConfig / DepartmentConfig
                 +--> Product -> optional clarification approval -> PRD approval
-                +--> UX -> structured DesignSpec handoff
-                +--> Engineering programmer/reviewer loop
+                +--> UX -> DesignSpecV2 -> schema gate -> optional retry
+                +--> Engineering programmer/reviewer loop with PRD/design/gate context
                 +--> QA -> pass/fail/no-test metrics or Engineering reroute
                 +--> Release approval -> DevOps
                 +--> Audit log -> post-mortem -> pattern extraction
@@ -319,12 +321,13 @@ Start `aider --desktop`, enable Company Mode, choose Auto/Prototype/Engineering 
 
 ## Company workflow
 
-The Company system is centered on typed interfaces and persisted state:
+The Company system is centered on typed interfaces, validation gates, and persisted state:
 
 - `CompanyTask`: normalized work request with task id, origin/target departments, artifact type, payload, blocking flag, and context.
 - `Deliverable`: department output with status, payload/content alias, metadata, task id, artifact type, and department name.
 - `PRD` and `ClarificationRequest`: typed Product artifacts for structured requirements, Markdown previews, clarification questions, and approval recovery.
-- `DesignSpec`: typed UX artifact for key screens, components, user flows, accessibility notes, technical requirements, visual style, and Markdown/JSON handoffs.
+- `DesignSpec` / `DesignSpecV2`: typed UX artifacts for screens, routes, components, data contracts, interaction states, accessibility checklists, global state management, error boundaries, and Markdown/JSON handoffs.
+- `SchemaGateValidator` and `GateResult`: Engineering-owned UX validation gate that parses strict `DesignSpecV2` JSON, reports field and semantic errors, and produces rejection payloads for retry or blocked handoff.
 - `QAFeedback`: structured QA-to-Engineering failure context with failing tests, output excerpts, covered files, recommendations, revision number, and PRD excerpts.
 - `CompanyEvent`: lifecycle/audit event emitted by departments and the orchestrator.
 - `Department`: base interface for context requirements, tool allowlists, and task handling.
@@ -344,13 +347,14 @@ The Company system is centered on typed interfaces and persisted state:
 3. If the request is ambiguous, Product opens a clarification approval gate so a human can answer targeted questions before PRD drafting resumes.
 4. Product generates a typed PRD, converts it to Markdown for review, self-reviews quality, and stores structured PRD metadata for downstream handoffs.
 5. PRD approval can block work until a human approves, rejects, or requests changes.
-6. UX produces a structured `DesignSpec` handoff when the project requires design.
-7. Engineering receives relevant PRD/design/playbook context and runs a programmer/reviewer implementation loop.
-8. QA runs checks and records pass, fail, or no-test outcomes.
-9. Failed QA can send structured feedback back to Engineering for bounded revision cycles.
-10. Release approval can block deployment.
-11. DevOps records deployment/release completion.
-12. Post-mortem handling records outcomes, extracts audit patterns, updates the deduplicated playbook, and advances final lifecycle state.
+6. UX produces a structured `DesignSpecV2` handoff when the project requires design.
+7. The schema gate validates UX JSON structure, required fields, component state coverage, and screen-to-component references; UX gets one automatic retry with gate feedback before the handoff is marked `validation_failed`.
+8. Engineering receives relevant PRD/design/schema-gate/playbook context and runs a programmer/reviewer implementation loop.
+9. QA runs checks and records pass, fail, or no-test outcomes.
+10. Failed QA can send structured feedback back to Engineering for bounded revision cycles.
+11. Release approval can block deployment.
+12. DevOps records deployment/release completion.
+13. Post-mortem handling records outcomes, extracts audit patterns, updates the deduplicated playbook, and advances final lifecycle state.
 
 ### Department isolation
 
@@ -509,10 +513,12 @@ Aider Plus follows a practical safety posture for code agents:
 
 - Agent iterations are bounded.
 - Engineering reviewer/programmer revisions are bounded.
+- UX schema-gate retries are bounded.
 - QA-to-Engineering revision cycles are bounded.
 - Headless mode is explicit and intended for controlled environments.
 - Department tool permissions block unauthorized tool use before execution.
-- Human approvals can block PRD and release handoffs.
+- Human approvals can block clarification, PRD, and release handoffs.
+- Strict UX schema validation blocks incomplete or inconsistent designs before Engineering implementation.
 - CLI, Discord, and GUI approval paths all persist through project memory.
 - Repository policies can restrict Discord-triggered work to approved roots.
 - Prompt size and runtime limits protect bot integrations.
@@ -550,52 +556,19 @@ Because Aider Plus is a fork, upstream Aider documentation remains useful for th
 
 ### Aider Plus commit additions summary
 
-The following table summarizes every non-merge commit visible in this branch's current grafted history, in chronological order. It includes upstream sync/model/docs/test/maintenance work carried by this repo plus the Aider Plus agent, Company Mode, memory, GUI, Discord, approval, prompt-caching, Product, UX, Engineering, QA, and DevOps feature work. Merge commits are omitted because they primarily integrate the feature commits listed here.
+
+The following table summarizes every visible commit in this branch's current grafted history that materially added or changed behavior, in chronological order. It includes the grafted upstream baseline plus the upstream sync/model/docs/test/maintenance work carried by this fork and the Aider Plus agent, Company Mode, memory, GUI, Discord, approval, prompt-caching, Product, UX, Engineering, QA, DevOps, schema-gate, and learning work. Ordinary pull-request merge commits are omitted because they primarily integrate the feature commits listed here.
 
 | Commit | What it added or changed |
 | --- | --- |
-| `b8b521f` | Bumped the package version to `0.86.1`. |
-| `59250e0` | Set the package version to `0.86.2.dev`. |
-| `32faf82` | Updated the Docker base image to `python:3.10-slim-bookworm`. |
-| `ad19c7b` | Bumped dependency and constraint files. |
-| `54b266f` | Added medium- and low-reasoning Polyglot leaderboard entries. |
-| `f6ad53e` | Added Julia tree-sitter query tags for repo maps. |
-| `c4b06c0` | Updated model settings and leaderboard data. |
-| `b3d339a` | Adjusted Polyglot leaderboard data. |
-| `60c578e` | Added source/license notes to Julia tree-sitter query tags. |
-| `5777ab9` | Added Fortran tree-sitter query tags for repo maps. |
-| `39b0c25` | Documented Fortran tree-sitter query tag support. |
-| `a121410` | Removed EthicalAds scripts and divs from website includes. |
-| `249e389` | Refreshed README, website docs, language docs, other-LLM docs, infinite-output docs, homepage copy, FAQ, and sample analytics. |
-| `82a31cc` | Added Bedrock Claude 4.5 model settings. |
-| `a3bbb5e` | Added GPT-5 Codex model settings. |
-| `cbb5376` | Updated DeepSeek model metadata and added `deepseek-reasoner`. |
-| `484e47d` | Added DeepSeek model test results to the Polyglot leaderboard. |
-| `cb6a152` | Updated DeepSeek model names, metadata, and leaderboard entries. |
-| `bfed819` | Removed duplicate language-response instructions from coder prompts. |
-| `93f20a6` | Added initial Haskell tree-sitter query tags and repo-map test fixture coverage. |
-| `be8da40` | Added initial Zig tree-sitter query tags and repo-map test fixture coverage. |
-| `749dee8` | Added GPT-5 Pro support. |
-| `a719c28` | Added GPT-5.1 model support. |
-| `ab29b99` | Added Gemini 3 model support. |
+| `5b0f6ce` | Imported the upstream Aider baseline into this fork, including the CLI, coders, repo-map engine, git integration, browser UI, docs/site, benchmark scaffolding, packaging, and tests. |
 | `90ac33c` | Refreshed website docs, FAQ, model-alias docs, advanced model settings, sample analytics, and homepage copy. |
 | `f626e44` | Updated leaderboard website content. |
 | `f730853` | Allowed read-only files to be promoted into editable context when `git: false` disables git integration. |
 | `4e77720` | Prevented staging files when auto-commits are disabled. |
-| `87c552b` | Added OpenRouter entries for newer models. |
-| `fa3d7b1` | Repointed the Flash alias to `gemini/gemini-flash-latest`. |
-| `463bf80` | Refreshed website docs, advanced model settings, model aliases, FAQ, sample analytics, and homepage copy. |
-| `0811a18` | Updated history files, FAQ content, and sample analytics. |
-| `750c61c` | Bumped dependency versions. |
-| `b771807` | Updated FAQ statistics and sample analytics data. |
-| `1e001bd` | Updated model-name expectations in model tests. |
-| `27254aa` | Refreshed FAQ statistics and sample analytics data. |
-| `11120e5` | Updated history files, FAQ content, and sample analytics. |
-| `275c9cb` | Adjusted website history content. |
-| `253f036` | Bumped the package version to `0.86.2`. |
 | `7a1bd15` | Set the package version to `0.86.3.dev`. |
 | `172df73` | Allowed files outside the repository to be added when git commits are off. |
-| `4625ebb` | Added `verify_ssl=False` to scraper setup for tests. |
+| `4625ebb` | Added `verify_ssl=False` scraper setup for tests. |
 | `b2bec25` | Fixed symlink-loop handling in `safe_abs_path()`. |
 | `4b48d82` | Added `/ok` as an alias for `/code Ok`. |
 | `d19a9b0` | Updated docs, FAQ, infinite-output guidance, usage command docs, and sample analytics around command behavior. |
@@ -603,39 +576,39 @@ The following table summarizes every non-merge commit visible in this branch's c
 | `f761d72` | Added the `overeager` model setting to GPT-4 Turbo. |
 | `ec3470c` | Enabled `overeager` for GPT-5.2 Codex variants. |
 | `37d6ebd` | Added overeager prompting to ask-mode prompts. |
-| `265d8a4` | Refreshed README, docs, FAQ, advanced model settings, infinite-output guidance, and sample analytics. |
-| `975e5a8` | Added experimental Python 3.14 support. |
-| `c0ab753` | Removed a deprecated GPT-4 32k model from tests. |
-| `c0839cf` | Removed a deprecated timestamped model from tests. |
-| `5516493` | Removed a deprecated vision model from tests. |
-| `38716cc` | Added extended exception information for `PermissionDeniedError`. |
-| `0ec5f35` | Added a test for `PermissionDeniedError` extended exception information. |
-| `07c526f` | Updated the `PermissionDeniedError` test to include a response argument. |
+| `265d8a4` | Refreshed README, website FAQ, advanced model settings, infinite-output docs, command docs, homepage copy, and sample analytics. |
+| `975e5a8` | Marked Python 3.14 support as experimental. |
+| `c0ab753` | Removed deprecated GPT-4 32k model expectations from tests. |
+| `c0839cf` | Removed deprecated timestamped model expectations from tests. |
+| `5516493` | Removed deprecated vision model expectations from tests. |
+| `38716cc` | Added `ExInfo` details for `PermissionDeniedError`. |
+| `0ec5f35` | Added test coverage for `PermissionDeniedError` exception info. |
+| `07c526f` | Adjusted the `PermissionDeniedError` test to include a response argument. |
 | `8955c4e` | Added the missing `PermissionDeniedError` import. |
-| `c335682` | Fixed the `PermissionDeniedError` test to use httpx response/request objects. |
-| `413149e` | Removed an unused import from exception tests. |
-| `5b038fd` | Refreshed docs, FAQ, infinite-output guidance, sample analytics, and requirement/constraint files. |
+| `c335682` | Fixed the `PermissionDeniedError` test to use `httpx` objects. |
+| `413149e` | Removed an unused import from `test_exceptions.py`. |
+| `5b038fd` | Bumped dependencies and refreshed README, FAQ, infinite-output docs, homepage copy, and sample analytics. |
 | `fabdce1` | Added GPT-5.3 Codex model variants. |
 | `c41ef3b` | Added GPT-5.3 and GPT-5.4 model variants. |
-| `3c2a8bd` | Expanded advanced model settings docs and refreshed FAQ/sample analytics. |
-| `bdb4d9f` | Updated history files, FAQ content, sample analytics, and the history update script. |
+| `3c2a8bd` | Expanded advanced model settings docs and refreshed FAQ and sample analytics. |
+| `bdb4d9f` | Updated history files, FAQ content, sample analytics, and history-update tooling. |
 | `f09d706` | Enabled overeager mode for Claude Sonnet 4.5 models. |
 | `928bb49` | Refreshed sample analytics data. |
 | `f939d0a` | Added Claude Sonnet 4.6 and Claude Opus 4.7 model support. |
-| `9ce34d1` | Simplified model-name conditionals in `models.py`. |
+| `9ce34d1` | Simplified model-name conditional logic in `models.py`. |
 | `b9d8774` | Mapped `opus` and `sonnet` aliases to the latest Claude models. |
 | `79c45c3` | Disabled deprecated temperature handling for Claude 4 models. |
 | `39023f9` | Disabled temperature for Opus 4 models and gated `thinking_tokens` behavior. |
-| `93dfacc` | Added Claude Opus 4.7 model settings for Bedrock, Vertex, and OpenRouter. |
-| `65cb4d3` | Formatted the `thinking_tokens` model check across multiple lines. |
-| `0189cf4` | Refreshed README, advanced model settings, aliases, FAQ, infinite-output docs, homepage copy, and sample analytics. |
+| `93dfacc` | Added Claude Opus 4.7 settings for Bedrock, Vertex, and OpenRouter. |
+| `65cb4d3` | Reformatted the `thinking_tokens` model check for readability. |
+| `0189cf4` | Refreshed README, advanced model settings, model aliases, FAQ, infinite-output docs, homepage copy, and sample analytics. |
 | `cd24a3a` | Updated model alias test expectations for Sonnet and Opus. |
-| `308b154` | Added GPT-5.5 model settings and aliases across providers with model-setting test coverage. |
-| `c723364` | Added advanced model settings documentation and refreshed FAQ/sample analytics website content. |
-| `3ec8ec5` | Updated FAQ token percentage references and switched the history update script model reference to GPT-5.5. |
-| `e56bd79` | Added initial headless-mode defaults and Discord integration scaffolding. |
+| `308b154` | Added GPT-5.5 model settings across supported providers. |
+| `c723364` | Expanded GPT-5.5-related advanced model settings and refreshed FAQ/sample analytics. |
+| `3ec8ec5` | Updated FAQ token percentages and switched history references to GPT-5.5. |
+| `e56bd79` | Added initial headless mode and Discord integration scaffolding. |
 | `531da4b` | Documented headless mode and Discord integration support. |
-| `b58b443` | Reframed the README around Aider Plus agent-first direction. |
+| `b58b443` | Refactored the README around the Aider Plus agent-first direction. |
 | `22f3b87` | Split agent-loop context construction into an explicit, testable build step. |
 | `79219d2` | Shifted agent context caching toward coder-native message formatting. |
 | `847d109` | Preserved Aider prompt caching behavior when generating agent context messages. |
@@ -687,7 +660,7 @@ The following table summarizes every non-merge commit visible in this branch's c
 | `6078c3d` | Hardened CLI approval handling and added focused tool-permission enforcement tests. |
 | `f45c349` | Added TF-IDF memory retrieval, retrieval-aware context injection, schema-v3 memory/observability metrics, and orchestrator dashboard/status wiring. |
 | `a95cc75` | Added retrieval-aware playbook pattern extraction, bounded deduplicated playbook querying, post-mortem learning integration, and pattern/playbook tests. |
-| `e517c98` | Refreshed this README to describe the completed short-, medium-, and long-term Aider Plus capability tiers and updated the Aider Plus commit summary. |
+| `e517c98` | Refreshed the README to describe completed short-, medium-, and long-term Aider Plus capability tiers and updated the commit summary. |
 | `c6ac28c` | Added Company prompt-caching controls, per-department cache configuration, preferred model hooks, and cached/uncached observability tracking. |
 | `f69d7db` | Refreshed the README for Company prompt-caching controls and current Aider Plus behavior. |
 | `1403bd0` | Added another pass of Company prompt-caching controls and per-department cache configuration. |
@@ -695,4 +668,15 @@ The following table summarizes every non-merge commit visible in this branch's c
 | `e451dc2` | Handled clarification approval responses so Product can resume PRD generation from human answers. |
 | `c0d1e8a` | Added structured UX design specs with Markdown/JSON handoffs for Engineering. |
 | `6f9a4e8` | Integrated structured PRD and design-spec context into Engineering prompts. |
-| `(this commit)` | Completely refreshed `README.md` to describe the current Aider Plus runtime and updated the commit-additions summary through the latest Product, UX, and Engineering changes. |
+| `1167f51` | Completely refreshed `README.md` to describe the current Aider Plus runtime and updated the commit-additions summary through the Product, UX, and Engineering changes available at that point. |
+| `b2a2fcc` | Hardened Engineering review context handoffs and added regression tests for reviewer context propagation. |
+| `5172ae9` | Strengthened Engineering reviewer handoff metadata, metrics, config controls, and orchestrator integration. |
+| `e51ce8f` | Improved Engineering review context handoff formatting and orchestration behavior. |
+| `4eeb86c` | Polished Engineering reviewer safeguards, Discord/GUI lifecycle display behavior, audit-pattern extraction, and related tests. |
+| `94fc2b1` | Refined Engineering reviewer phase controls and reduced fragile review-loop behavior. |
+| `bdc5922` | Added the UX design schema gate with strict `DesignSpecV2` models, schema validation, semantic checks, blocked handoff payloads, and tests. |
+| `3cdd37a` | Propagated UX schema-gate context through orchestrator handoffs so Engineering can see validation status and structured design data. |
+| `9640f2f` | Wired UX schema-gate retry flow so invalid design specs get one automatic regeneration attempt with rejection feedback. |
+| `cbbe387` | Added tests for UX schema-gate retry handling. |
+| `97b1cf7` | Hardened UX structured-output parsing and fallback behavior, with coverage for JSON-in-string responses. |
+| `(this commit)` | Updated this README to cover the current Aider Plus runtime end to end, including UX `DesignSpecV2` schema gates, schema-gate retry behavior, richer Engineering review handoffs, and the latest commit-additions summary. |

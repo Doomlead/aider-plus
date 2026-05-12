@@ -99,7 +99,11 @@ def format_approval_required_message(event: EventMessage) -> str:
 def format_lifecycle_event_message(event: EventMessage) -> str:
     payload = event.payload or {}
     event_name = payload.get("name") or str(event.event)
-    label = str(event_name).replace("_", " ").title()
+    lifecycle_labels = {
+        "product_revision_start": "Product is revising PRD based on feedback…",
+        "product_prd_revised": "Product revised PRD",
+    }
+    label = lifecycle_labels.get(event_name, str(event_name).replace("_", " ").title())
     icon = "⚠️" if payload.get("severity") == "warning" else "🔄"
     iteration = payload.get("iteration")
     suffix = f" (iteration {iteration})" if iteration is not None else ""

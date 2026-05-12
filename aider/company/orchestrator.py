@@ -955,9 +955,22 @@ class CompanyOrchestrator:
 
         revision_count = 1
         previous_metadata = {}
+        previous_prd_structured = None
+        previous_prd_summary = ""
         if isinstance(task.payload, dict):
             previous_metadata = dict(task.payload.get("prd_metadata", {}))
-            revision_count = previous_metadata.get("revision_count", 0) + 1
+            previous_prd_structured = (
+                task.payload.get("prd_structured")
+                or previous_metadata.get("prd_structured")
+                or previous_metadata.get("prd")
+            )
+            previous_prd_summary = str(
+                task.payload.get("prd_summary")
+                or previous_metadata.get("previous_prd_summary")
+                or task.payload.get("prd_content")
+                or ""
+            )
+            revision_count = int(previous_metadata.get("revision_count", 0) or 0) + 1
 
         if self.active_project and task.origin == "product":
             self.lifecycle.apply(
@@ -965,6 +978,9 @@ class CompanyOrchestrator:
             )
 
         feedback = decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
+        reviewer_notes = (
+            decision.metadata.get("reviewer_notes") or decision.metadata.get("notes") or ""
+        )
         revision_task = CompanyTask(
             task_id=task.task_id,
             origin="ceo",
@@ -972,7 +988,10 @@ class CompanyOrchestrator:
             artifact_type="prd",
             payload={
                 "previous_prd": self._prd_content(task),
+                "previous_prd_structured": previous_prd_structured,
+                "previous_prd_summary": previous_prd_summary,
                 "ceo_feedback": feedback,
+                "reviewer_notes": reviewer_notes,
                 "revision_count": revision_count,
                 "original_request": previous_metadata.get("original_request", ""),
             },
@@ -980,7 +999,9 @@ class CompanyOrchestrator:
             context={
                 **task.context,
                 "ceo_feedback": feedback,
+                "reviewer_notes": reviewer_notes,
                 "revision_count": revision_count,
+                "previous_prd_summary": previous_prd_summary,
                 "approval_action": decision.metadata.get("action", "reject"),
             },
         )

@@ -16,6 +16,7 @@ CEO feedback / revision (payload has "previous_prd") bypasses the
 ambiguity check and goes straight to PRD generation with the feedback
 appended as context.
 """
+
 from __future__ import annotations
 
 import json
@@ -28,7 +29,6 @@ from aider.company.department import Department
 from aider.company.interfaces import Deliverable
 from aider.company.schemas import ClarificationRequest, CompanyTask, PRD
 from aider.memory import ConversationMemory, ProjectMemory
-
 
 _AMBIGUITY_SYSTEM = """\
 You are a senior Product Manager evaluating whether a feature request is
@@ -228,17 +228,42 @@ class ProductDepartment(Department):
         return prd
 
     async def _process_prd_revision(self, task: CompanyTask) -> Deliverable:
-        """Re-generate PRD incorporating CEO feedback."""
-        previous_prd = task.payload.get("previous_prd", "")
-        ceo_feedback = task.payload.get("ceo_feedback", "Please revise.")
-        revision_count = self._revision_count(task.payload)
-        original_request = task.payload.get("original_request", "")
+        """Re-generate PRD incorporating prior PRD context and CEO feedback."""
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        previous_prd = payload.get("previous_prd")
+        previous_prd_structured = payload.get("previous_prd_structured")
+        ceo_feedback = str(payload.get("ceo_feedback") or "Please revise.")
+        reviewer_notes = str(
+            payload.get("reviewer_notes") or task.context.get("reviewer_notes") or ""
+        )
+        revision_count = max(1, self._revision_count(payload))
+        original_request = str(
+            payload.get("original_request")
+            or task.context.get("original_request")
+            or ""
+        )
+        previous_prd_summary = self._summarize_previous_prd(
+            previous_prd_structured or previous_prd
+        )
 
-        task_text = (
-            f"Previous PRD:\n{previous_prd}\n\n"
-            f"CEO Feedback (revision {revision_count}):\n{ceo_feedback}\n\n"
-            f"Original request:\n{original_request}\n\n"
-            "Rewrite the PRD addressing all CEO feedback. Keep what was good."
+        await self._emit_lifecycle_event(
+            task.task_id,
+            "product_revision_start",
+            {
+                "formatted": "Product is revising the PRD based on feedback…",
+                "revision_count": revision_count,
+                "feedback": ceo_feedback,
+            },
+        )
+
+        task_text = self._build_prd_revision_prompt(
+            original_request=original_request,
+            previous_prd=previous_prd,
+            previous_prd_structured=previous_prd_structured,
+            ceo_feedback=ceo_feedback,
+            reviewer_notes=reviewer_notes,
+            revision_count=revision_count,
+            context=task.context,
         )
         result = await self.agent_loop.run_structured(
             task=task_text,
@@ -249,14 +274,128 @@ class ProductDepartment(Department):
         parsed = self._parse_json(result.get("content", ""))
         if parsed and "title" in parsed:
             prd = PRD.from_dict(parsed)
-            prd.version = f"1.{revision_count}"
         else:
             prd = PRD(
                 title="PRD (revised)",
                 problem_statement=original_request,
-                version=f"1.{revision_count}",
             )
-        return self._make_prd_deliverable(task, prd, original_request)
+        prd.version = f"1.{revision_count}"
+        prd.revision_count = revision_count
+        prd.previous_prd_summary = previous_prd_summary
+        prd = await self._self_review_prd_on_revision(
+            prd,
+            previous_prd=previous_prd,
+            ceo_feedback=ceo_feedback,
+            reviewer_notes=reviewer_notes,
+            revision_count=revision_count,
+        )
+        prd.revision_count = revision_count
+        prd.previous_prd_summary = previous_prd_summary
+        deliverable = self._make_prd_deliverable(task, prd, original_request)
+        deliverable.metadata["ceo_feedback"] = ceo_feedback
+        deliverable.metadata["previous_prd_summary"] = previous_prd_summary
+        if reviewer_notes:
+            deliverable.metadata["reviewer_notes"] = reviewer_notes
+        await self._emit_lifecycle_event(
+            task.task_id,
+            "product_prd_revised",
+            {
+                "formatted": "Product revised the PRD and sent it back for approval.",
+                "revision_count": revision_count,
+                "prd_title": prd.title,
+            },
+        )
+        return deliverable
+
+    def _build_prd_revision_prompt(
+        self,
+        *,
+        original_request: str,
+        previous_prd,
+        previous_prd_structured,
+        ceo_feedback: str,
+        reviewer_notes: str,
+        revision_count: int,
+        context: dict,
+    ) -> str:
+        """Build a revision prompt that preserves prior PRD and feedback context."""
+        parts = [
+            f"Original request:\n{original_request or 'Not provided.'}",
+            f"Revision round: {revision_count}",
+        ]
+        playbook_text = self._format_playbook(context)
+        if playbook_text:
+            parts.append(f"Relevant playbook guidance:\n{playbook_text}")
+        structured = previous_prd_structured
+        if isinstance(previous_prd, PRD):
+            structured = previous_prd.to_dict()
+        elif structured is None and isinstance(previous_prd, dict):
+            structured = previous_prd
+        if structured:
+            parts.append(
+                "Previous PRD (structured JSON):\n"
+                + json.dumps(structured, indent=2, sort_keys=True)
+            )
+        previous_markdown = self._previous_prd_markdown(previous_prd, structured)
+        if previous_markdown:
+            parts.append(f"Previous PRD (markdown):\n{previous_markdown}")
+        parts.append(f"CEO / clarification feedback:\n{ceo_feedback}")
+        if reviewer_notes:
+            parts.append(f"Reviewer notes:\n{reviewer_notes}")
+        parts.append(
+            "Rewrite the PRD addressing all feedback. Preserve useful prior decisions, "
+            "make changed requirements explicit, and keep acceptance criteria testable."
+        )
+        return "\n\n".join(parts)
+
+    async def _self_review_prd_on_revision(
+        self,
+        prd: PRD,
+        *,
+        previous_prd,
+        ceo_feedback: str,
+        reviewer_notes: str,
+        revision_count: int,
+    ) -> PRD:
+        """Light revision-specific quality review before emitting a revised PRD."""
+        review_payload = {
+            "revision_count": revision_count,
+            "ceo_feedback": ceo_feedback,
+            "reviewer_notes": reviewer_notes,
+            "previous_prd_summary": self._summarize_previous_prd(previous_prd),
+            "revised_prd": prd.to_dict(),
+        }
+        result = await self.agent_loop.run_structured(
+            task=json.dumps(review_payload),
+            system_prompt=_REVIEW_SYSTEM,
+            enable_caching=self.config.enable_prompt_caching,
+        )
+        parsed = self._parse_json(result.get("content", ""))
+        if not parsed:
+            return prd
+        improved_raw = parsed.get("improved_prd")
+        if improved_raw and isinstance(improved_raw, dict) and "title" in improved_raw:
+            return PRD.from_dict(improved_raw)
+        return prd
+
+    def _previous_prd_markdown(self, previous_prd, structured=None) -> str:
+        if isinstance(previous_prd, PRD):
+            return previous_prd.to_markdown()
+        if isinstance(previous_prd, str):
+            return previous_prd
+        if isinstance(structured, dict):
+            return PRD.from_dict(structured).to_markdown()
+        return str(previous_prd or "")
+
+    def _summarize_previous_prd(self, previous_prd) -> str:
+        if isinstance(previous_prd, PRD):
+            return f"{previous_prd.title}: {previous_prd.problem_statement}"[:500]
+        if isinstance(previous_prd, dict):
+            return (
+                f"{previous_prd.get('title', '')}: "
+                f"{previous_prd.get('problem_statement') or previous_prd.get('overview', '')}"
+            )[:500]
+        return str(previous_prd or "")[:500]
 
     def _process_engineering_clarification(self, task: CompanyTask) -> Deliverable:
         question = self._clarification_question(task.payload)
@@ -385,7 +524,9 @@ class ProductDepartment(Department):
             "layout",
             "css",
         }
-        return bool(prompt_terms & design_terms) or "front-end" in original_request.lower()
+        return (
+            bool(prompt_terms & design_terms) or "front-end" in original_request.lower()
+        )
 
     @staticmethod
     def _format_playbook(context: dict) -> str:

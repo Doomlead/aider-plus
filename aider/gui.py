@@ -942,7 +942,14 @@ class GUI:
                 st.json(event.payload)
             elif event.event == CompanyEvent.LIFECYCLE:
                 payload = event.payload or {}
-                label = humanize_company_label(payload.get("name") or event.event)
+                lifecycle_labels = {
+                    "product_revision_start": "Product is revising PRD based on feedback…",
+                    "product_prd_revised": "Product revised PRD",
+                }
+                event_name = payload.get("name") or event.event
+                label = lifecycle_labels.get(
+                    event_name, humanize_company_label(event_name)
+                )
                 iteration = payload.get("iteration")
                 suffix = f" (iteration {iteration})" if iteration is not None else ""
                 if payload.get("severity") == "warning":

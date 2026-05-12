@@ -141,7 +141,7 @@ class UXDepartment(Department):
             system_prompt=system_prompt,
             model=getattr(self.config, "preferred_model", None)
             or "claude-3-7-sonnet-20250219",
-            enable_caching=True,
+            enable_caching=self.agent_config.enable_caching,
         )
 
         content = self._result_content(result)

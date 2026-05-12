@@ -4,7 +4,7 @@ import asyncio
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 from aider.memory import ConversationMemory, Message, ProjectMemory
 from aider.onboarding import onboarding_paths
@@ -22,6 +22,8 @@ class AgentLoopConfig:
     architect_model: str | None = None
     editor_model: str | None = None
     reviewer_model: str | None = None
+    enable_caching: bool = True
+    cache_type: Literal["auto", "prompt", "none"] = "auto"
 
 
 @dataclass
@@ -76,12 +78,18 @@ class AiderAgentLoop:
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
         config: Optional[AgentLoopConfig] = None,
         tool_registry: ToolRegistry | None = None,
-        enable_prompt_caching: bool = True,
+        enable_prompt_caching: bool | None = None,
+        cache_type: Literal["auto", "prompt", "none"] | None = None,
     ):
         self.coder = coder
         self.callback = callback
         self.config = config or AgentLoopConfig()
-        self.enable_prompt_caching = enable_prompt_caching
+        if enable_prompt_caching is not None:
+            self.config.enable_caching = bool(enable_prompt_caching)
+        if cache_type is not None:
+            self.config.cache_type = cache_type
+        if self.config.cache_type == "none":
+            self.config.enable_caching = False
         self._ensure_onboarded_state()
         self.editor_coder = self._build_editor_coder()
         self.architect_coder = self._build_architect_coder()
@@ -230,14 +238,39 @@ class AiderAgentLoop:
             project_memory=project_state,
         )
 
-    def _resolve_cache_enabled(self, enable_caching: bool | None = None) -> bool:
-        return (
-            enable_caching
-            if enable_caching is not None
-            else self.enable_prompt_caching
-        )
+    @property
+    def enable_prompt_caching(self) -> bool:
+        """Backward-compatible alias for agent-loop caching."""
+        return self.config.enable_caching
 
-    def _apply_cache_control(
+    @enable_prompt_caching.setter
+    def enable_prompt_caching(self, value: bool) -> None:
+        self.config.enable_caching = bool(value)
+        if not self.config.enable_caching:
+            self.config.cache_type = "none"
+        elif self.config.cache_type == "none":
+            self.config.cache_type = "auto"
+
+    def _resolve_cache_enabled(self, enable_caching: bool | None = None) -> bool:
+        if enable_caching is not None:
+            return bool(enable_caching)
+        if self.config.cache_type == "none":
+            return False
+        return bool(self.config.enable_caching)
+
+    def _apply_cache_control(self, messages):
+        """Return messages unchanged while respecting native cache-control markers.
+
+        Aider's core Coder owns message formatting and any provider-specific
+        cache-control content markers. The company loop only toggles request-level
+        cache options, so this method intentionally avoids mutating message
+        payloads and preserves existing cache prefixes/controls.
+        """
+        if not self.config.enable_caching or self.config.cache_type == "none":
+            return messages
+        return messages
+
+    def _apply_cache_request_options(
         self,
         kwargs: dict[str, Any],
         enable_caching: bool | None = None,
@@ -246,6 +279,10 @@ class AiderAgentLoop:
         cache_enabled = self._resolve_cache_enabled(enable_caching)
         kwargs["cache_prompts"] = cache_enabled
         if not cache_enabled:
+            extra_body = dict(kwargs.pop("extra_body", None) or {})
+            extra_body.pop("cache_control", None)
+            if extra_body:
+                kwargs["extra_body"] = extra_body
             return kwargs
 
         extra_body = dict(kwargs.pop("extra_body", None) or {})
@@ -274,6 +311,7 @@ class AiderAgentLoop:
             if enable_prompt_caching is not None
             else enable_caching
         )
+        messages = self._apply_cache_control(messages)
         extra_params = dict(getattr(self.coder.main_model, "extra_params", {}) or {})
         request_kwargs = {
             "model": model or self.coder.main_model.name,
@@ -284,7 +322,7 @@ class AiderAgentLoop:
             **extra_params,
             **kwargs,
         }
-        request_kwargs = self._apply_cache_control(request_kwargs, cache_override)
+        request_kwargs = self._apply_cache_request_options(request_kwargs, cache_override)
         return await asyncio.to_thread(litellm.completion, **request_kwargs)
 
     async def run_structured(

@@ -4,9 +4,10 @@ from types import SimpleNamespace
 
 import asyncio
 
-from aider.agent.loop import AgentLoopConfig
-from aider.company.agent_factory import build_company_agent_loops
+from aider.agent.loop import AgentLoopConfig, AiderAgentLoop
+from aider.company.agent_factory import build_agent_loop_for_role, build_company_agent_loops
 from aider.company.config import (
+    AgentConfig,
     CompanyConfig,
     DepartmentConfig,
     apply_agent_model_overrides_from_env,
@@ -71,6 +72,24 @@ def test_build_company_agent_loops_creates_dedicated_loop_per_agent(tmp_path):
     assert loops["product"].coder is not loops["engineering"].coder
     assert loops["product"].coder.main_model.name == "gpt-4o"
     assert loops["coo"].coder.main_model.name == "claude-sonnet-4-5"
+
+
+def test_build_agent_loop_for_role_respects_caching_flag():
+    coder = DummyCoder()
+    agent_config = AgentConfig(
+        name="ux",
+        enable_caching=False,
+        cache_type="none",
+        preferred_model="gpt-4o",
+    )
+
+    loop = build_agent_loop_for_role("ux", agent_config, coder=coder)
+
+    assert isinstance(loop, AiderAgentLoop)
+    assert loop.config.enable_caching is False
+    assert loop.config.cache_type == "none"
+    assert loop.enable_prompt_caching is False
+    assert loop.coder.main_model.name == "gpt-4o"
 
 
 def test_nanobot_coo_persists_session_and_routes_to_department(tmp_path):

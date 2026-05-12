@@ -382,6 +382,15 @@ class DesktopCompanySession:
     def company_status(self) -> str:
         return self.orchestrator.company_status()
 
+    def caching_status(self) -> str:
+        config = self.orchestrator.company_config
+        roles = sorted({"coo", *self.orchestrator.departments.keys()})
+        states = []
+        for role in roles:
+            agent_config = config.get_department_config(role)
+            states.append(f"{role}:{'on' if agent_config.enable_caching else 'off'}")
+        return ", ".join(states) or "none"
+
     def coo_status(self) -> dict[str, Any]:
         if self.coo is None:
             return {}
@@ -758,6 +767,7 @@ class AiderPlusDesktop:
                 f"{current_route.get('strategy', '—')} → "
                 f"{current_route.get('target', '—')}"
             ),
+            f"Prompt caching: {self.company.caching_status()}",
             "",
             "Recent COO events:",
         ]

@@ -560,7 +560,7 @@ Address ALL reviewer feedback from the previous round if present.
         Checks, in order:
         1. DepartmentConfig attached to the agent loop config by the orchestrator.
         2. DepartmentConfig attached directly to the agent loop for reviewer overrides.
-        3. The agent loop's enable_prompt_caching flag.
+        3. The agent loop's enable_caching flag.
         4. True, preserving the opt-out default for company orchestration.
         """
         loop_config = getattr(self.agent_loop, "config", None)
@@ -570,7 +570,7 @@ Address ALL reviewer feedback from the previous round if present.
                 getattr(self.agent_loop, "reviewer_department_config", None) or dept_config
             )
         if dept_config is not None:
-            return bool(getattr(dept_config, "enable_prompt_caching", True))
+            return bool(getattr(dept_config, "enable_caching", True))
 
         if self.config is not None:
             return self._get_caching_enabled()

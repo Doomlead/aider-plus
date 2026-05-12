@@ -483,6 +483,15 @@ class DesktopCompanySession:
     def company_status(self) -> str:
         return self.orchestrator.company_status()
 
+    def caching_status(self) -> str:
+        config = self.orchestrator.company_config
+        roles = sorted({"coo", *self.orchestrator.departments.keys()})
+        states = []
+        for role in roles:
+            agent_config = config.get_department_config(role)
+            states.append(f"{role}:{'on' if agent_config.enable_caching else 'off'}")
+        return ", ".join(states) or "none"
+
     def audit_records(self, limit: int = 10) -> list[dict]:
         records = self.coder.project_memory.data.get("audit_log", [])
         if not isinstance(records, list):
@@ -1058,6 +1067,7 @@ class GUI:
         m1.metric("Turns this session", metrics["turns_this_session"])
         m2.metric("Approvals pending", metrics["approvals_pending"])
         m3.metric("Last activity", metrics["last_activity"])
+        st.caption(f"Prompt caching: {company.caching_status()}")
 
         phase = str(metrics["current_phase"])
         st.subheader("Current Phase")

@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Awaitable, Callable, Dict, List, Optional, Union
 
+from aider import models
 from aider.memory import ProjectMemory
 from aider.memory.pattern_extractor import AuditPatternExtractor
 from aider.company.approval import ApprovalManager
@@ -119,10 +120,24 @@ class CompanyOrchestrator:
                 loop_config.reviewer_model = reviewer_config.preferred_model
 
         if dept_config.preferred_model:
-            if hasattr(agent_loop, "model"):
-                agent_loop.model = dept_config.preferred_model
-            elif loop_config is not None and hasattr(loop_config, "model"):
-                loop_config.model = dept_config.preferred_model
+            if loop_config is not None:
+                loop_config.architect_model = dept_config.preferred_model
+                if not getattr(loop_config, "editor_model", None):
+                    loop_config.editor_model = dept_config.preferred_model
+            current_model = getattr(getattr(agent_loop, "coder", None), "main_model", None)
+            current_name = getattr(current_model, "name", None)
+            if (
+                current_name != dept_config.preferred_model
+                and hasattr(agent_loop, "coder")
+                and hasattr(agent_loop.coder, "clone")
+            ):
+                agent_loop.coder = agent_loop.coder.clone(
+                    main_model=models.Model(dept_config.preferred_model)
+                )
+                if hasattr(agent_loop, "_build_editor_coder"):
+                    agent_loop.editor_coder = agent_loop._build_editor_coder()
+                if hasattr(agent_loop, "_build_architect_coder"):
+                    agent_loop.architect_coder = agent_loop._build_architect_coder()
 
     def create_task(self, coro, label: Optional[str] = None) -> asyncio.Task:
         """Create and track an orchestrator-owned background task."""

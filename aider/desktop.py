@@ -22,15 +22,17 @@ from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 from typing import Any
 
-from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
 from aider.coders import Coder
+from aider.company.agents import DepartmentAgentFactory
 from aider.company.audit import AuditLogViewer
+from aider.company.config import default_company_config
 from aider.company.departments.devops import DevOpsDepartment
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
 from aider.company.departments.qa import QADepartment
 from aider.company.departments.ux import UXDepartment
+from aider.company.nanobot import COODepartment, NanobotBridge
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
 from aider.company.schemas import CompanyTask
@@ -102,32 +104,44 @@ class DesktopCompanySession:
         project_memory.load()
 
     def _init_company_session(self):
-        agent_loop = AiderAgentLoop(
-            coder=self.coder,
-            config=AgentLoopConfig(use_architect_mode=True),
-        )
+        company_config = default_company_config()
         project_memory = self.coder.project_memory
         conversation_memory = self.coder.conversation_memory
+        agent_factory = DepartmentAgentFactory(
+            coder=self.coder,
+            company_config=company_config,
+            base_config=AgentLoopConfig(use_architect_mode=True),
+        )
+        nanobot_bridge = NanobotBridge(company_config.nanobot)
+        self.coo = COODepartment(
+            project_memory=project_memory,
+            conversation_memory=conversation_memory,
+            bridge=nanobot_bridge,
+        )
         self.engineering = EngineeringDepartment(
             project_memory=project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_factory.create("engineering"),
             conversation_memory=conversation_memory,
         )
         self.product = ProductDepartment(
             project_memory=project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_factory.create("product"),
             conversation_memory=conversation_memory,
         )
         self.ux = UXDepartment(
             project_memory=project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_factory.create("ux"),
             conversation_memory=conversation_memory,
         )
         self.qa = QADepartment(project_memory=project_memory)
         self.devops = DevOpsDepartment(project_memory=project_memory)
-        self.orchestrator = CompanyOrchestrator(project_memory=project_memory)
+        self.orchestrator = CompanyOrchestrator(
+            project_memory=project_memory,
+            company_config=company_config,
+        )
         self.orchestrator.active_project = self.active_project
         for department in (
+            self.coo,
             self.product,
             self.ux,
             self.engineering,
@@ -136,6 +150,7 @@ class DesktopCompanySession:
         ):
             self.orchestrator.register(department)
         for department in (
+            self.coo,
             self.product,
             self.ux,
             self.engineering,

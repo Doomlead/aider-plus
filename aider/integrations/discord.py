@@ -12,10 +12,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, Optional, Set
 
-from aider.agent import AiderAgentLoop
-from aider.company.audit import AuditLogViewer
 from aider.agent.loop import AgentLoopConfig
+from aider.company.agents import DepartmentAgentFactory
+from aider.company.audit import AuditLogViewer
 from aider.company.approval import ApprovalManager
+from aider.company.config import default_company_config
+from aider.company.nanobot import COODepartment, NanobotBridge
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
 from aider.company.departments.devops import DevOpsDepartment
@@ -184,6 +186,7 @@ class DiscordAiderBot:
         self.config = config or DiscordAiderConfig()
         self.sessions = DiscordSessionManager()
         self.orchestrator: Optional[CompanyOrchestrator] = None
+        self.coo: Optional[COODepartment] = None
         self.engineering: Optional[EngineeringDepartment] = None
         self.product: Optional[ProductDepartment] = None
         self.ux: Optional[UXDepartment] = None
@@ -242,28 +245,36 @@ class DiscordAiderBot:
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
         company_event_callback: Optional[Callable[[object], Awaitable[None]]] = None,
     ) -> EngineeringDepartment:
-        agent_loop = AiderAgentLoop(
+        company_config = default_company_config()
+        base_config = AgentLoopConfig(
+            use_architect_mode=self.config.use_architect_mode,
+            architect_model=self.config.architect_model,
+            editor_model=self.config.editor_model,
+        )
+        agent_factory = DepartmentAgentFactory(
             coder=coder,
             callback=callback,
-            config=AgentLoopConfig(
-                use_architect_mode=self.config.use_architect_mode,
-                architect_model=self.config.architect_model,
-                editor_model=self.config.editor_model,
-            ),
+            company_config=company_config,
+            base_config=base_config,
+        )
+        self.coo = COODepartment(
+            project_memory=coder.project_memory,
+            conversation_memory=coder.conversation_memory,
+            bridge=NanobotBridge(company_config.nanobot),
         )
         self.engineering = EngineeringDepartment(
             project_memory=coder.project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_factory.create("engineering"),
             conversation_memory=coder.conversation_memory,
         )
         self.product = ProductDepartment(
             project_memory=coder.project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_factory.create("product"),
             conversation_memory=coder.conversation_memory,
         )
         self.ux = UXDepartment(
             project_memory=coder.project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_factory.create("ux"),
             conversation_memory=coder.conversation_memory,
         )
         self.qa = QADepartment(
@@ -274,13 +285,20 @@ class DiscordAiderBot:
             project_memory=coder.project_memory,
             conversation_memory=None,
         )
-        self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
+        self.orchestrator = CompanyOrchestrator(
+            project_memory=coder.project_memory,
+            company_config=company_config,
+        )
         self.orchestrator.active_project = self.active_project
-        self.orchestrator.register(self.product)
-        self.orchestrator.register(self.ux)
-        self.orchestrator.register(self.engineering)
-        self.orchestrator.register(self.qa)
-        self.orchestrator.register(self.devops)
+        for department in (
+            self.coo,
+            self.product,
+            self.ux,
+            self.engineering,
+            self.qa,
+            self.devops,
+        ):
+            self.orchestrator.register(department)
         if company_event_callback:
             self.orchestrator.on_deliverable(company_event_callback)
         return self.engineering

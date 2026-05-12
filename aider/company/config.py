@@ -8,8 +8,13 @@ model preferences — without touching any Aider internal.
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from aider.company.nanobot import NanobotConfig
 
 
 @dataclass
@@ -50,6 +55,7 @@ class CompanyConfig:
     default_enable_caching: bool = True
     departments: Dict[str, DepartmentConfig] = field(default_factory=dict)
     record_caching_stats: bool = True
+    nanobot: Optional["NanobotConfig"] = None
 
     def get_department_config(self, name: str) -> DepartmentConfig:
         """
@@ -74,6 +80,35 @@ class CompanyConfig:
         return self.get_department_config(name)
 
 
+def apply_agent_model_overrides(config: CompanyConfig) -> CompanyConfig:
+    """Apply user-provided per-agent model overrides from environment variables.
+
+    Supported forms:
+    - AIDER_AGENT_MODELS="product=model-a,ux=model-b,engineering=model-c"
+    - AIDER_AGENT_MODEL_PRODUCT="model-a"
+    """
+    overrides: dict[str, str] = {}
+    for assignment in os.environ.get("AIDER_AGENT_MODELS", "").split(","):
+        if "=" not in assignment:
+            continue
+        name, model_name = assignment.split("=", 1)
+        name = name.strip().lower()
+        model_name = model_name.strip()
+        if name and model_name:
+            overrides[name] = model_name
+
+    for name in ("coo", "product", "ux", "engineering", "reviewer", "qa", "devops"):
+        model_name = os.environ.get(f"AIDER_AGENT_MODEL_{name.upper()}")
+        if model_name:
+            overrides[name] = model_name.strip()
+
+    for name, model_name in overrides.items():
+        dept_config = config.get_department_config(name)
+        dept_config.preferred_model = model_name
+        config.departments[name] = dept_config
+    return config
+
+
 def default_company_config() -> CompanyConfig:
     """
     Return the recommended CompanyConfig for production use.
@@ -82,7 +117,7 @@ def default_company_config() -> CompanyConfig:
     stable prompts and repo context. QA and DevOps prompts are typically smaller
     and short-lived, so caching overhead is not enabled by default there.
     """
-    return CompanyConfig(
+    config = CompanyConfig(
         departments={
             "engineering": DepartmentConfig(
                 name="engineering",
@@ -93,6 +128,10 @@ def default_company_config() -> CompanyConfig:
                 name="reviewer",
                 enable_prompt_caching=True,
                 preferred_model="claude-sonnet-4-5",
+            ),
+            "coo": DepartmentConfig(
+                name="coo",
+                enable_prompt_caching=True,
             ),
             "product": DepartmentConfig(
                 name="product",
@@ -114,3 +153,4 @@ def default_company_config() -> CompanyConfig:
         default_enable_caching=True,
         record_caching_stats=True,
     )
+    return apply_agent_model_overrides(config)

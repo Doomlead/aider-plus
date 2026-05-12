@@ -387,17 +387,22 @@ Aider Plus preserves upstream prompt-cache behavior for normal coder usage and a
 - `AiderAgentLoop.run(..., enable_caching=...)` and `run_structured(..., enable_caching=...)` can override caching per call without changing Aider `Coder` message formatting.
 - `CompanyConfig.default_enable_caching` controls departments without explicit overrides; `get_department_config()` resolves department names case-insensitively.
 - `DepartmentConfig.enable_prompt_caching` can toggle caching for Product, UX, Engineering, reviewer, QA, and DevOps independently.
-- `DepartmentConfig.preferred_model` can steer department/reviewer calls toward a preferred model.
-- The default company config enables caching for Product, UX, Engineering, and reviewer calls, while disabling it for smaller QA and DevOps calls.
+- `DepartmentConfig.preferred_model` can steer each department/reviewer agent toward a user-selected model.
+- `DepartmentAgentFactory` creates separate `AiderAgentLoop` instances for Product, UX, and Engineering so each department has its own tool registry, model config, callback envelope, and cache settings instead of sharing one mutable loop.
+- Users can assign models without code changes through `AIDER_AGENT_MODELS="product=model-a,ux=model-b,engineering=model-c"` or individual variables such as `AIDER_AGENT_MODEL_PRODUCT=model-a`.
+- `COODepartment` is the Company communication hub. It emits normalized `NanobotBridge` packets and can hand work to the rest of the departments, allowing nanobot chat channels/gateways to sit in front of the Product → UX → Engineering → QA → DevOps workflow.
+- The default company config enables caching for COO, Product, UX, Engineering, and reviewer calls, while disabling it for smaller QA and DevOps calls.
 - When `CompanyConfig.record_caching_stats` is enabled, project observability records cached and uncached runs per department.
 
 Example:
 
 ```python
 from aider.company.config import CompanyConfig, DepartmentConfig
+from aider.company.nanobot import NanobotConfig
 from aider.company.orchestrator import CompanyOrchestrator
 
 company_config = CompanyConfig(
+    nanobot=NanobotConfig(enabled=True, gateway_url="http://localhost:8000/company"),
     departments={
         "engineering": DepartmentConfig(
             name="engineering",

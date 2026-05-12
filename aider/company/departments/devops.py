@@ -1,12 +1,27 @@
 from __future__ import annotations
 
+from typing import Optional
+
+from aider.agent.loop import AiderAgentLoop
+from aider.company.config import DepartmentConfig
 from aider.company.department import Department
+from aider.memory import ConversationMemory, ProjectMemory
 from aider.company.schemas import CompanyTask, Deliverable
 
 
 class DevOpsDepartment(Department):
     name = "devops"
     allowed_tools = ["shell", "docker_build", "deploy", "git_tag"]
+
+    def __init__(
+        self,
+        project_memory: ProjectMemory,
+        agent_loop: Optional[AiderAgentLoop] = None,
+        conversation_memory: Optional[ConversationMemory] = None,
+        config: Optional[DepartmentConfig] = None,
+    ):
+        super().__init__(project_memory, conversation_memory, config=config)
+        self.agent_loop = agent_loop
 
     def get_context_requirements(self) -> list[str]:
         return ["playbook.deployment_gotchas", "project.name", "project.phase"]

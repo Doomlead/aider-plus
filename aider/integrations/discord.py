@@ -12,12 +12,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, Optional, Set
 
-from aider.agent import AiderAgentLoop
 from aider.company.audit import AuditLogViewer
 from aider.agent.loop import AgentLoopConfig
+from aider.company.agent_factory import build_company_agent_loops
 from aider.company.approval import ApprovalManager
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
+from aider.company.config import apply_agent_model_overrides_from_env
+from aider.company.coo import NanobotCOO
 from aider.company.departments.devops import DevOpsDepartment
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
@@ -184,6 +186,7 @@ class DiscordAiderBot:
         self.config = config or DiscordAiderConfig()
         self.sessions = DiscordSessionManager()
         self.orchestrator: Optional[CompanyOrchestrator] = None
+        self.coo: Optional[NanobotCOO] = None
         self.engineering: Optional[EngineeringDepartment] = None
         self.product: Optional[ProductDepartment] = None
         self.ux: Optional[UXDepartment] = None
@@ -242,10 +245,12 @@ class DiscordAiderBot:
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
         company_event_callback: Optional[Callable[[object], Awaitable[None]]] = None,
     ) -> EngineeringDepartment:
-        agent_loop = AiderAgentLoop(
+        company_config = apply_agent_model_overrides_from_env()
+        agent_loops = build_company_agent_loops(
             coder=coder,
+            company_config=company_config,
             callback=callback,
-            config=AgentLoopConfig(
+            base_config=AgentLoopConfig(
                 use_architect_mode=self.config.use_architect_mode,
                 architect_model=self.config.architect_model,
                 editor_model=self.config.editor_model,
@@ -253,34 +258,43 @@ class DiscordAiderBot:
         )
         self.engineering = EngineeringDepartment(
             project_memory=coder.project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_loops["engineering"],
             conversation_memory=coder.conversation_memory,
         )
         self.product = ProductDepartment(
             project_memory=coder.project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_loops["product"],
             conversation_memory=coder.conversation_memory,
         )
         self.ux = UXDepartment(
             project_memory=coder.project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_loops["ux"],
             conversation_memory=coder.conversation_memory,
         )
         self.qa = QADepartment(
             project_memory=coder.project_memory,
+            agent_loop=agent_loops["qa"],
             conversation_memory=None,
         )
         self.devops = DevOpsDepartment(
             project_memory=coder.project_memory,
+            agent_loop=agent_loops["devops"],
             conversation_memory=None,
         )
-        self.orchestrator = CompanyOrchestrator(project_memory=coder.project_memory)
+        self.orchestrator = CompanyOrchestrator(
+            project_memory=coder.project_memory,
+            company_config=company_config,
+        )
         self.orchestrator.active_project = self.active_project
         self.orchestrator.register(self.product)
         self.orchestrator.register(self.ux)
         self.orchestrator.register(self.engineering)
         self.orchestrator.register(self.qa)
         self.orchestrator.register(self.devops)
+        self.coo = NanobotCOO(
+            orchestrator=self.orchestrator,
+            agent_loop=agent_loops["coo"],
+        )
         if company_event_callback:
             self.orchestrator.on_deliverable(company_event_callback)
         return self.engineering
@@ -365,9 +379,15 @@ class DiscordAiderBot:
             context={"project_name": Path(repo_path).name},
         )
 
-        deliverable = await self.product.process(task)
-        if self.orchestrator:
-            asyncio.create_task(self.orchestrator._route(deliverable))
+        deliverable = await self.coo.receive_user_message(
+            prompt=prompt,
+            channel="discord",
+            session_key=f"discord:{key}",
+            target="product",
+            context={"project_name": Path(repo_path).name},
+            task_id=task.task_id,
+            origin=task.origin,
+        )
 
         return {
             "task_id": task.task_id,
@@ -445,6 +465,8 @@ class DiscordAiderBot:
         engineering: EngineeringDepartment,
         task: CompanyTask,
     ):
+        if self.coo is not None:
+            return await self.coo.run_department_task(task)
         deliverable = await engineering.process(task)
         if self.orchestrator:
             for handler in self.orchestrator._handlers:

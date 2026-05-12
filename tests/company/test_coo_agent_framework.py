@@ -69,6 +69,7 @@ def test_coo_route_decision_defaults_and_aliases():
     assert decision.confidence == 1.0
     assert decision.as_dict()["chosen_department"] == "qa"
     assert decision.as_dict()["reasoning"] == "Needs regression coverage"
+    assert decision.as_dict()["escalate_to_human"] is False
 
 
 def test_build_company_agent_loops_creates_dedicated_loop_per_agent(tmp_path):
@@ -323,6 +324,69 @@ def test_nanobot_coo_successful_llm_retry(tmp_path):
     asyncio.run(run())
 
 
+def test_coo_routing_fallback_and_escalation_after_retries(tmp_path):
+    class RoutingLoop:
+        async def run_structured(self, **kwargs):
+            return {
+                "content": (
+                    '{"reasoning": "Try product first", '
+                    '"chosen_department": "product", '
+                    '"confidence": 0.7, '
+                    '"escalate_to_human": false}'
+                )
+            }
+
+    class FailingDepartment(EchoDepartment):
+        async def process(self, task: CompanyTask) -> Deliverable:
+            raise RuntimeError(f"{self.name} unavailable")
+
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        orchestrator.register(FailingDepartment(memory, name="product"))
+        orchestrator.register(FailingDepartment(memory, name="engineering"))
+        coo = NanobotCOO(
+            orchestrator=orchestrator,
+            coo_agent_loop=RoutingLoop(),
+            enable_llm_routing=True,
+            default_target="engineering",
+        )
+
+        result = await coo.receive_user_message(
+            "implement the retry hardening",
+            "cli:fallback-escalation",
+            surface="cli",
+            task_id="task-fallback-escalation",
+        )
+        status = await coo.get_session_status("cli:fallback-escalation")
+        error_events = [
+            event for event in result["events"] if event["event_type"] == "coo_error"
+        ]
+
+        assert result["status"] == "pending_human_escalation"
+        assert result["route"]["strategy"] == "deterministic_fallback"
+        assert len(error_events) >= 2
+        assert error_events[-2]["metadata"]["recovery_suggestion"] == (
+            "falling back to deterministic routing"
+        )
+        assert error_events[-2]["metadata"]["escalate_to_human"] is False
+        assert error_events[-1]["metadata"]["recovery_suggestion"] == (
+            "escalating to human"
+        )
+        assert error_events[-1]["metadata"]["escalate_to_human"] is True
+        assert error_events[-1]["metadata"].get("approval_task_id")
+        assert status["attention"]["has_recent_errors"] is True
+        assert status["attention"]["has_pending_human_escalations"] is True
+        assert status["pending_human_escalations"] == [
+            error_events[-1]["metadata"]["approval_task_id"]
+        ]
+        assert orchestrator.approval_manager.gates[
+            error_events[-1]["metadata"]["approval_task_id"]
+        ]
+
+    asyncio.run(run())
+
+
 def test_nanobot_coo_routing_prompt_contains_structured_context(tmp_path):
     async def run():
         memory = ProjectMemory(str(tmp_path))
@@ -350,5 +414,7 @@ def test_nanobot_coo_routing_prompt_contains_structured_context(tmp_path):
         assert '"chosen_department"' in prompt
         assert '"confidence"' in prompt
         assert '"should_escalate_to_human"' in prompt
+        assert '"escalate_to_human"' in prompt
+        assert "Few-shot route decisions" in prompt
 
     asyncio.run(run())

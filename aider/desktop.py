@@ -792,7 +792,29 @@ class AiderPlusDesktop:
                     f"after {last_error.get('retries', 0)} retries — "
                     f"{last_error.get('message', '')}"
                 ),
+                f"- Recovery: {last_error.get('recovery_suggestion', 'review the COO event')}",
             ])
+            if last_error.get("escalate_to_human"):
+                lines.extend([
+                    "- Human escalation: pending",
+                    f"- Approval task: {last_error.get('approval_task_id', 'open Approvals tab')}",
+                ])
+            recent_errors = status.get("recent_errors") or []
+            if len(recent_errors) > 1:
+                lines.extend(["", "Recent error history:"])
+                for error in recent_errors[-3:]:
+                    lines.append(
+                        "- "
+                        f"{error.get('error_type', 'unknown_error')}: "
+                        f"{error.get('recovery_suggestion', 'review')}"
+                    )
+            pending_escalations = status.get("pending_human_escalations") or []
+            if pending_escalations:
+                lines.extend([
+                    "",
+                    "Pending human escalations:",
+                    *(f"- {task_id}" for task_id in pending_escalations[-5:]),
+                ])
         lines.extend(["", "Recent COO events:"])
         events = status.get("recent_events") or []
         if events:

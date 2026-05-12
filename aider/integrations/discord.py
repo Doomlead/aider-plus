@@ -81,6 +81,8 @@ def format_approval_required_message(event: EventMessage) -> str:
         title = "📋 **Product Department Deliverable Ready**"
     elif gate_name == "clarification_approval":
         title = "❓ **Product Clarification Required**"
+    elif gate_name == "coo_human_escalation":
+        title = "🚨 **COO Human Escalation Required**"
     else:
         title = "🧪 **QA Release Approval Required**"
     preview = str(payload.get("artifact_preview", "")).strip()
@@ -170,7 +172,13 @@ def format_coo_status_message(status: dict) -> str:
                 f"after `{last_error.get('retries', 0)}` retries — "
                 f"{last_error.get('message', '')}"
             ),
+            f"• Recovery: {last_error.get('recovery_suggestion', 'review COO activity')}",
         ])
+        if last_error.get("escalate_to_human"):
+            lines.append(
+                "• Human escalation pending"
+                f" — approval `{last_error.get('approval_task_id', 'pending')}`"
+            )
     lines.extend(["", "**Recent activity**"])
     events = status.get("recent_events") or []
     if events:
@@ -354,8 +362,14 @@ class DiscordAiderBot:
                         "🚨 COO warning "
                         f"`{message_metadata.get('error_type', 'unknown_error')}` "
                         f"after `{message_metadata.get('retries', 0)}` retries: "
-                        f"{message_metadata.get('message', '')}"
+                        f"{message_metadata.get('message', '')}\n"
+                        f"Recovery: {message_metadata.get('recovery_suggestion', 'review COO status')}"
                     )
+                    if message_metadata.get("escalate_to_human"):
+                        formatted += (
+                            "\nHuman escalation pending — use the approval "
+                            "buttons on the COO escalation request."
+                        )
                 await company_event_callback(
                     EventMessage(
                         event=CompanyEvent.LIFECYCLE,
@@ -611,6 +625,9 @@ def build_discord_client(*args, **kwargs):
             elif gate_name == "clarification_approval":
                 title = "Answer Clarification Questions"
                 label = "Your answers for Product"
+            elif gate_name == "coo_human_escalation":
+                title = "Resolve COO Escalation"
+                label = "Routing or recovery instructions"
             else:
                 title = "Request PRD Changes"
                 label = "Feedback for Product"
@@ -650,7 +667,11 @@ def build_discord_client(*args, **kwargs):
                     metadata={"action": "revise", "feedback": answer},
                 )
                 destination = (
-                    "Engineering" if self.gate_name == "release_approval" else "Product"
+                    "Engineering"
+                    if self.gate_name == "release_approval"
+                    else "COO"
+                    if self.gate_name == "coo_human_escalation"
+                    else "Product"
                 )
                 await interaction.response.send_message(
                     f"📝 Change request sent back to {destination}.",
@@ -684,6 +705,8 @@ def build_discord_client(*args, **kwargs):
                     "✅ Clarification skipped. Product will proceed with the "
                     "original request."
                 )
+            elif self.gate_name == "coo_human_escalation":
+                content = "✅ COO escalation acknowledged. Human recovery can proceed."
             else:
                 content = "✅ PRD approved. Engineering handoff has started."
             await interaction.response.edit_message(content=content, view=self)
@@ -704,6 +727,8 @@ def build_discord_client(*args, **kwargs):
                     "❌ Clarification cancelled. The project request will not "
                     "proceed."
                 )
+            elif self.gate_name == "coo_human_escalation":
+                content = "❌ COO escalation rejected. Review the session before retrying."
             else:
                 content = "❌ PRD rejected and routed back to Product."
             await interaction.response.edit_message(content=content, view=self)

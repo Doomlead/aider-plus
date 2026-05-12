@@ -8,6 +8,7 @@ model preferences — without touching any Aider internal.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
@@ -45,11 +46,14 @@ class CompanyConfig:
             an explicit DepartmentConfig entry.
         record_caching_stats: Whether to write cache run counts into the
             observability section of project memory.
+        enable_coo_llm_routing: Whether the COO may use its agent loop to
+            classify user requests before handing them to a department.
     """
 
     default_enable_caching: bool = True
     departments: Dict[str, DepartmentConfig] = field(default_factory=dict)
     record_caching_stats: bool = True
+    enable_coo_llm_routing: bool = False
 
     def get_department_config(self, name: str) -> DepartmentConfig:
         """
@@ -84,6 +88,10 @@ def default_company_config() -> CompanyConfig:
     """
     return CompanyConfig(
         departments={
+            "coo": DepartmentConfig(
+                name="coo",
+                enable_prompt_caching=True,
+            ),
             "engineering": DepartmentConfig(
                 name="engineering",
                 enable_prompt_caching=True,
@@ -113,4 +121,39 @@ def default_company_config() -> CompanyConfig:
         },
         default_enable_caching=True,
         record_caching_stats=True,
+        enable_coo_llm_routing=False,
     )
+
+
+def apply_agent_model_overrides_from_env(config: CompanyConfig | None = None) -> CompanyConfig:
+    """Apply user-provided per-agent model overrides from environment variables.
+
+    Supported forms:
+    - AIDER_COMPANY_AGENT_MODELS="product=gpt-4o,engineering=claude-sonnet-4-5"
+    - AIDER_COMPANY_MODEL_PRODUCT="gpt-4o"
+    - AIDER_COMPANY_MODEL_COO="claude-sonnet-4-5"
+    """
+    resolved = config or default_company_config()
+    overrides: dict[str, str] = {}
+
+    packed = os.environ.get("AIDER_COMPANY_AGENT_MODELS", "")
+    for chunk in packed.split(","):
+        if "=" not in chunk:
+            continue
+        name, model = chunk.split("=", 1)
+        name = name.strip().lower()
+        model = model.strip()
+        if name and model:
+            overrides[name] = model
+
+    for name in ("coo", "product", "ux", "engineering", "reviewer", "qa", "devops"):
+        model = os.environ.get(f"AIDER_COMPANY_MODEL_{name.upper()}")
+        if model:
+            overrides[name] = model.strip()
+
+    for name, model in overrides.items():
+        dept_config = resolved.get_department_config(name)
+        dept_config.preferred_model = model
+        resolved.departments[name] = dept_config
+
+    return resolved

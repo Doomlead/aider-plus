@@ -17,10 +17,12 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from aider import models, urls
-from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
 from aider.coders import Coder
+from aider.company.agent_factory import build_company_agent_loops
 from aider.company.audit import AuditLogViewer
+from aider.company.config import apply_agent_model_overrides_from_env
+from aider.company.coo import NanobotCOO
 from aider.company.departments.devops import DevOpsDepartment
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
@@ -162,6 +164,7 @@ class DesktopCompanySession:
 
         self._ensure_memories()
         self.orchestrator = None
+        self.coo = None
         self.product = None
         self.ux = None
         self.engineering = None
@@ -199,30 +202,41 @@ class DesktopCompanySession:
         project_memory.load()
 
     def _init_company_session(self):
-        agent_loop = AiderAgentLoop(
+        company_config = apply_agent_model_overrides_from_env()
+        agent_loops = build_company_agent_loops(
             coder=self.coder,
-            config=AgentLoopConfig(use_architect_mode=True),
+            company_config=company_config,
+            base_config=AgentLoopConfig(use_architect_mode=True),
         )
         project_memory = self.coder.project_memory
         conversation_memory = self.coder.conversation_memory
         self.engineering = EngineeringDepartment(
             project_memory=project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_loops["engineering"],
             conversation_memory=conversation_memory,
         )
         self.product = ProductDepartment(
             project_memory=project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_loops["product"],
             conversation_memory=conversation_memory,
         )
         self.ux = UXDepartment(
             project_memory=project_memory,
-            agent_loop=agent_loop,
+            agent_loop=agent_loops["ux"],
             conversation_memory=conversation_memory,
         )
-        self.qa = QADepartment(project_memory=project_memory)
-        self.devops = DevOpsDepartment(project_memory=project_memory)
-        self.orchestrator = CompanyOrchestrator(project_memory=project_memory)
+        self.qa = QADepartment(
+            project_memory=project_memory,
+            agent_loop=agent_loops["qa"],
+        )
+        self.devops = DevOpsDepartment(
+            project_memory=project_memory,
+            agent_loop=agent_loops["devops"],
+        )
+        self.orchestrator = CompanyOrchestrator(
+            project_memory=project_memory,
+            company_config=company_config,
+        )
         self.orchestrator.active_project = self.active_project
         for department in (
             self.product,
@@ -232,6 +246,10 @@ class DesktopCompanySession:
             self.devops,
         ):
             self.orchestrator.register(department)
+        self.coo = NanobotCOO(
+            orchestrator=self.orchestrator,
+            agent_loop=agent_loops["coo"],
+        )
         for department in (
             self.product,
             self.ux,
@@ -365,8 +383,15 @@ class DesktopCompanySession:
             blocking=False,
             context={"project_name": Path(self.repo_path).name},
         )
-        deliverable = await self.product.process(task)
-        await self.orchestrator._route(deliverable)
+        deliverable = await self.coo.receive_user_message(
+            prompt=prompt,
+            channel="desktop",
+            session_key=f"desktop:{self.repo_path}",
+            target="product",
+            context={"project_name": Path(self.repo_path).name},
+            task_id=task.task_id,
+            origin=task.origin,
+        )
         return {
             "summary": deliverable.payload,
             "content": deliverable.payload,
@@ -384,8 +409,14 @@ class DesktopCompanySession:
             payload=prompt,
             blocking=False,
         )
-        deliverable = await self.engineering.process(task)
-        await self.orchestrator._route(deliverable)
+        deliverable = await self.coo.receive_user_message(
+            prompt=prompt,
+            channel="desktop",
+            session_key=f"desktop:{self.repo_path}",
+            target="engineering",
+            task_id=task.task_id,
+            origin=task.origin,
+        )
         result = {
             "summary": deliverable.payload,
             "content": deliverable.payload,

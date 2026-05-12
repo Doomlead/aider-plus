@@ -4,7 +4,12 @@ import asyncio
 import shlex
 from pathlib import Path
 
+from typing import Optional
+
+from aider.agent.loop import AiderAgentLoop
+from aider.company.config import DepartmentConfig
 from aider.company.department import Department
+from aider.memory import ConversationMemory, ProjectMemory
 from aider.company.schemas import CompanyTask, Deliverable
 from aider.run_cmd import run_cmd
 
@@ -12,6 +17,16 @@ from aider.run_cmd import run_cmd
 class QADepartment(Department):
     name = "qa"
     allowed_tools = ["shell", "pytest", "linter"]
+
+    def __init__(
+        self,
+        project_memory: ProjectMemory,
+        agent_loop: Optional[AiderAgentLoop] = None,
+        conversation_memory: Optional[ConversationMemory] = None,
+        config: Optional[DepartmentConfig] = None,
+    ):
+        super().__init__(project_memory, conversation_memory, config=config)
+        self.agent_loop = agent_loop
 
     def get_context_requirements(self) -> list[str]:
         return ["playbook.*", "project.name", "project.phase", "project.prd"]

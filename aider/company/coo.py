@@ -164,6 +164,11 @@ class COOMessageBus:
                 error_type = message_metadata.get("error_type", "unknown_error")
                 retries = message_metadata.get("retries", 0)
                 details.append(f"warning {error_type} after {retries} retries")
+                recovery = message_metadata.get("recovery_suggestion")
+                if recovery:
+                    details.append(f"recovery: {recovery}")
+                if message_metadata.get("escalate_to_human"):
+                    details.append("human escalation pending")
             if route:
                 details.append(
                     "route "
@@ -239,6 +244,12 @@ class COOSession:
             ),
             None,
         )
+        pending_escalations = list(self.metadata.get("pending_human_escalations", []) or [])
+        recent_errors = list(self.metadata.get("recent_errors", []) or [])
+        if self.metadata.get("last_error") and (
+            not recent_errors or recent_errors[-1] != self.metadata.get("last_error")
+        ):
+            recent_errors.append(self.metadata["last_error"])
         return {
             "key": self.key,
             "created_at": self.created_at,
@@ -253,6 +264,9 @@ class COOSession:
             ),
             "error_count": int(self.metadata.get("error_count", 0) or 0),
             "last_error": self.metadata.get("last_error"),
+            "recent_errors": recent_errors[-recent_limit:],
+            "pending_human_escalations": pending_escalations,
+            "last_human_escalation": self.metadata.get("last_human_escalation"),
         }
 
 
@@ -350,6 +364,7 @@ class COORouteDecision:
     reason: str = "Route selected by COO"
     confidence: float = 0.5
     should_escalate_to_human: bool = False
+    escalate_to_human: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
     chosen_department: str | None = None
     reasoning: str | None = None
@@ -367,7 +382,11 @@ class COORouteDecision:
         except (TypeError, ValueError):
             self.confidence = 0.5
         self.confidence = max(0.0, min(1.0, self.confidence))
-        self.should_escalate_to_human = bool(self.should_escalate_to_human)
+        self.escalate_to_human = bool(self.escalate_to_human)
+        self.should_escalate_to_human = bool(
+            self.should_escalate_to_human or self.escalate_to_human
+        )
+        self.escalate_to_human = self.should_escalate_to_human
         self.metadata = dict(self.metadata or {})
 
     def as_dict(self) -> dict[str, Any]:
@@ -379,6 +398,7 @@ class COORouteDecision:
             "reasoning": self.reasoning,
             "confidence": self.confidence,
             "should_escalate_to_human": self.should_escalate_to_human,
+            "escalate_to_human": self.escalate_to_human,
             "metadata": self.metadata,
         }
 
@@ -427,6 +447,9 @@ class NanobotCOO:
         coro: Callable[[], Awaitable[Any]] | Awaitable[Any],
         max_retries: int = 3,
         base_delay: float = 1.0,
+        on_final_failure: (
+            Callable[[BaseException], Awaitable[None] | None] | None
+        ) = None,
     ) -> Any:
         """Call an async operation with bounded exponential backoff."""
         attempts = max(0, int(max_retries)) + 1 if callable(coro) else 1
@@ -443,6 +466,10 @@ class NanobotCOO:
                 if delay:
                     await asyncio.sleep(delay)
         assert last_error is not None
+        if on_final_failure is not None:
+            result = on_final_failure(last_error)
+            if asyncio.iscoroutine(result):
+                await result
         raise last_error
 
     async def _emit_coo_error(
@@ -455,6 +482,9 @@ class NanobotCOO:
         error_type: str,
         retries: int,
         user_message: str,
+        recovery_suggestion: str,
+        escalate_to_human: bool = False,
+        approval_task_id: str | None = None,
     ) -> None:
         preview = user_message.replace("\n", " ")[:160]
         error_payload = {
@@ -463,18 +493,90 @@ class NanobotCOO:
             "user_message_preview": preview,
             "message": str(error),
             "error_class": error.__class__.__name__,
+            "recovery_suggestion": recovery_suggestion,
+            "escalate_to_human": bool(escalate_to_human),
         }
+        if approval_task_id:
+            error_payload["approval_task_id"] = approval_task_id
         if session is not None:
             session.metadata["error_count"] = (
                 int(session.metadata.get("error_count", 0) or 0) + 1
             )
             session.metadata["last_error"] = error_payload
+            recent_errors = list(session.metadata.get("recent_errors", []) or [])
+            recent_errors.append(error_payload)
+            session.metadata["recent_errors"] = recent_errors[-10:]
             self.session_manager.save(session)
         await self.bus.emit_error(
             session_key=session_id,
             channel=surface,
             metadata=error_payload,
         )
+
+    async def _escalate_to_human(
+        self,
+        session: COOSession,
+        user_message: str,
+        error_details: dict[str, Any],
+    ) -> CompanyTask:
+        """Open a blocking human approval gate for unrecoverable COO failures."""
+        target = error_details.get("fallback_target") or session.metadata.get("last_target")
+        if target not in self.orchestrator.departments:
+            target = (
+                self.default_target
+                if self.default_target in self.orchestrator.departments
+                else None
+            )
+        if target is None and self.orchestrator.departments:
+            target = next(iter(self.orchestrator.departments))
+        target = target or "coo"
+        task = CompanyTask(
+            task_id=str(
+                error_details.get("approval_task_id") or f"coo-escalation-{uuid.uuid4()}"
+            ),
+            origin="coo",
+            target=target,
+            artifact_type="coo_escalation",
+            payload=user_message,
+            blocking=True,
+            context={
+                "gate_name": "coo_human_escalation",
+                "approver_role": "human",
+                "handoff_to": target,
+                "artifact_preview": (
+                    "COO needs human routing assistance after retry exhaustion.\n\n"
+                    f"User message: {user_message[:700]}\n\n"
+                    f"Error: {error_details.get('error_type', 'coo_error')} — "
+                    f"{error_details.get('message', '')}\n\n"
+                    "Suggested recovery: "
+                    f"{error_details.get('recovery_suggestion', 'review and choose the next action')}"
+                ),
+                "coo_error": error_details,
+                "session_key": session.key,
+            },
+        )
+        session.metadata.setdefault("pending_human_escalations", [])
+        pending = session.metadata["pending_human_escalations"]
+        if task.task_id not in pending:
+            pending.append(task.task_id)
+        session.metadata["last_human_escalation"] = {
+            "task_id": task.task_id,
+            "target": target,
+            "error_type": error_details.get("error_type"),
+            "recovery_suggestion": error_details.get("recovery_suggestion"),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        self.session_manager.save(session)
+
+        async def wait_for_decision() -> None:
+            try:
+                await self.orchestrator.approvals.create_request(task)
+            finally:
+                self.orchestrator.approvals.close_request(task.task_id)
+
+        asyncio.create_task(wait_for_decision())
+        await asyncio.sleep(0)
+        return task
 
     async def receive_user_message(
         self,
@@ -538,6 +640,31 @@ class NanobotCOO:
         session.messages[-1]["route"] = route.as_dict()
         self.session_manager.save(session)
 
+        if route.escalate_to_human:
+            error_details = {
+                "error_type": "coo_route_requires_human",
+                "retries": 0,
+                "message": route.reason,
+                "error_class": "COORouteDecision",
+                "recovery_suggestion": "escalating to human",
+                "fallback_target": route.target,
+            }
+            escalation = await self._escalate_to_human(
+                session, inbound.content, error_details
+            )
+            await self._emit_coo_error(
+                session=session,
+                session_id=session_id,
+                surface=surface,
+                error=RuntimeError(route.reason),
+                error_type="coo_route_requires_human",
+                retries=0,
+                user_message=inbound.content,
+                recovery_suggestion="escalating to human",
+                escalate_to_human=True,
+                approval_task_id=escalation.task_id,
+            )
+
         payload = {
             "message": inbound.content,
             "surface": surface,
@@ -549,11 +676,7 @@ class NanobotCOO:
             "origin": origin or surface,
             "route": route.as_dict(),
         }
-        try:
-            result = await self._call_with_retry(
-                lambda: self.route_to_department(session, route.target, payload)
-            )
-        except Exception as err:
+        async def emit_primary_handoff_failure(err: BaseException) -> None:
             await self._emit_coo_error(
                 session=session,
                 session_id=session_id,
@@ -562,16 +685,71 @@ class NanobotCOO:
                 error_type="department_handoff_failed",
                 retries=3,
                 user_message=inbound.content,
+                recovery_suggestion="falling back to deterministic routing",
+                escalate_to_human=False,
             )
+
+        try:
+            result = await self._call_with_retry(
+                lambda: self.route_to_department(session, route.target, payload),
+                on_final_failure=emit_primary_handoff_failure,
+            )
+        except Exception:
             fallback_route = self._deterministic_route(inbound.content)
             fallback_route.strategy = "deterministic_fallback"
             fallback_route.metadata["fallback_from"] = route.as_dict()
             session.messages[-1]["route"] = fallback_route.as_dict()
             self.session_manager.save(session)
             payload["route"] = fallback_route.as_dict()
-            result = await self.route_to_department(
-                session, fallback_route.target, payload
-            )
+
+            async def emit_fallback_handoff_failure(err: BaseException) -> None:
+                error_details = {
+                    "error_type": "deterministic_handoff_failed",
+                    "retries": 3,
+                    "message": str(err),
+                    "error_class": err.__class__.__name__,
+                    "recovery_suggestion": "escalating to human",
+                    "fallback_target": fallback_route.target,
+                }
+                escalation = await self._escalate_to_human(
+                    session, inbound.content, error_details
+                )
+                await self._emit_coo_error(
+                    session=session,
+                    session_id=session_id,
+                    surface=surface,
+                    error=err,
+                    error_type="deterministic_handoff_failed",
+                    retries=3,
+                    user_message=inbound.content,
+                    recovery_suggestion="escalating to human",
+                    escalate_to_human=True,
+                    approval_task_id=escalation.task_id,
+                )
+
+            try:
+                result = await self._call_with_retry(
+                    lambda: self.route_to_department(
+                        session, fallback_route.target, payload
+                    ),
+                    on_final_failure=emit_fallback_handoff_failure,
+                )
+            except Exception as err:
+                result = {
+                    "session_id": session.key,
+                    "task_id": payload.get("task_id"),
+                    "target": fallback_route.target,
+                    "status": "pending_human_escalation",
+                    "route": fallback_route.as_dict(),
+                    "deliverable": None,
+                    "result": {
+                        "summary": "COO escalated to a human after retry exhaustion.",
+                        "content": str(err),
+                        "artifact_type": "coo_escalation",
+                        "metadata": session.metadata.get("last_human_escalation", {}),
+                        "department": "coo",
+                    },
+                }
         result["events"] = [event.as_dict() for event in self.bus.events]
         result["bus"] = self.bus.snapshot()
         return result
@@ -594,6 +772,17 @@ class NanobotCOO:
             "route_history": session_snapshot.get("route_history", []),
             "error_count": session_snapshot.get("error_count", 0),
             "last_error": session_snapshot.get("last_error"),
+            "recent_errors": session_snapshot.get("recent_errors", []),
+            "pending_human_escalations": session_snapshot.get(
+                "pending_human_escalations", []
+            ),
+            "last_human_escalation": session_snapshot.get("last_human_escalation"),
+            "attention": {
+                "has_recent_errors": bool(session_snapshot.get("recent_errors")),
+                "has_pending_human_escalations": bool(
+                    session_snapshot.get("pending_human_escalations")
+                ),
+            },
             "metrics": {
                 "message_count": session_snapshot.get("message_count", 0),
                 "inbound_queue_size": bus_snapshot.get("inbound_size", 0),
@@ -737,6 +926,23 @@ class NanobotCOO:
             "active_department": session.metadata.get("last_target"),
             "departments": sorted(self.orchestrator.departments),
         }
+        surface = (
+            session.messages[-1].get("surface") if session.messages else "coo"
+        ) or "coo"
+
+        async def emit_llm_route_failure(err: BaseException) -> None:
+            await self._emit_coo_error(
+                session=session,
+                session_id=session.key,
+                surface=surface,
+                error=err,
+                error_type="llm_route_failed",
+                retries=3,
+                user_message=prompt,
+                recovery_suggestion="falling back to deterministic routing",
+                escalate_to_human=False,
+            )
+
         try:
             result = await self._call_with_retry(
                 lambda: self.coo_agent_loop.run_structured(
@@ -745,20 +951,9 @@ class NanobotCOO:
                     enable_caching=self.agent_config.enable_caching,
                 ),
                 base_delay=0.01,
+                on_final_failure=emit_llm_route_failure,
             )
-        except Exception as err:
-            await self._emit_coo_error(
-                session=session,
-                session_id=session.key,
-                surface=(
-                    session.messages[-1].get("surface") if session.messages else "coo"
-                )
-                or "coo",
-                error=err,
-                error_type="llm_route_failed",
-                retries=3,
-                user_message=prompt,
-            )
+        except Exception:
             return None
 
         parsed = self._parse_json(result.get("content", ""))
@@ -774,6 +969,7 @@ class NanobotCOO:
                 should_escalate_to_human=bool(
                     parsed.get("should_escalate_to_human", False)
                 ),
+                escalate_to_human=bool(parsed.get("escalate_to_human", False)),
                 metadata={"raw": parsed},
             )
         return None
@@ -798,6 +994,38 @@ class NanobotCOO:
     def _get_coo_routing_prompt(self, session: COOSession) -> str:
         departments = sorted(self.orchestrator.departments)
         route_history = self._recent_route_history(session, limit=3)
+        few_shots = [
+            {
+                "user": "Write regression tests for the retry logic and verify CI passes.",
+                "decision": {
+                    "reasoning": "The request is explicitly about tests and quality gates.",
+                    "chosen_department": "qa",
+                    "confidence": 0.91,
+                    "should_escalate_to_human": False,
+                    "escalate_to_human": False,
+                },
+            },
+            {
+                "user": "Design an accessible onboarding wireframe before implementation.",
+                "decision": {
+                    "reasoning": "The work asks for UX design artifacts before code.",
+                    "chosen_department": "ux",
+                    "confidence": 0.88,
+                    "should_escalate_to_human": False,
+                    "escalate_to_human": False,
+                },
+            },
+            {
+                "user": "Ship this unclear change directly to production; skip review if needed.",
+                "decision": {
+                    "reasoning": "The request is ambiguous and asks to bypass safety gates.",
+                    "chosen_department": "product",
+                    "confidence": 0.42,
+                    "should_escalate_to_human": True,
+                    "escalate_to_human": True,
+                },
+            },
+        ]
         return (
             "You are the NanobotCOO routing agent. Choose exactly one department "
             "for the user's next work item while preserving production reliability.\n\n"
@@ -812,13 +1040,20 @@ class NanobotCOO:
             "belongs elsewhere.\n"
             "- Consider the current project phase and avoid skipping required product, "
             "design, QA, or deployment gates.\n"
-            "- Escalate to a human only when routing is ambiguous, unsafe, or blocked.\n\n"
+            "- Route when the request has a clear owner and can proceed safely.\n"
+            "- Escalate to a human when the request is ambiguous, unsafe, asks to "
+            "bypass approvals, conflicts with recent routing history, or lacks enough "
+            "information to choose a safe department. Still choose the safest temporary "
+            "department for bookkeeping.\n\n"
+            "Few-shot route decisions (match this quality and JSON shape):\n"
+            f"{json.dumps(few_shots, ensure_ascii=False, indent=2)}\n\n"
             "Return only JSON matching this COORouteDecision schema:\n"
             "{\n"
             '  "reasoning": "short explanation for the routing decision",\n'
             '  "chosen_department": "one of the available departments",\n'
             '  "confidence": 0.0,\n'
-            '  "should_escalate_to_human": false\n'
+            '  "should_escalate_to_human": false,\n'
+            '  "escalate_to_human": false\n'
             "}"
         )
 

@@ -104,6 +104,9 @@ def format_lifecycle_event_message(event: EventMessage) -> str:
     iteration = payload.get("iteration")
     suffix = f" (iteration {iteration})" if iteration is not None else ""
     details = []
+    formatted = payload.get("formatted")
+    if formatted:
+        details.append(str(formatted))
     warning = payload.get("warning")
     if warning:
         details.append("Warning: " + str(warning))
@@ -133,6 +136,34 @@ def format_company_status_message(orchestrator: CompanyOrchestrator) -> str:
     rendered = orchestrator.company_status()
     return f"🏢 **Company Dashboard**\n```\n{rendered[:1800]}\n```"
 
+
+
+def format_coo_status_message(status: dict) -> str:
+    if not status:
+        return "🤖 **COO Status**\nNo COO session is active yet."
+    current_route = status.get("current_route") or {}
+    lines = [
+        "🤖 **COO Status**",
+        f"Session: `{status.get('session_id')}`",
+        f"Status: `{status.get('status')}`",
+        f"Active department: `{status.get('active_department') or '—'}`",
+        (
+            "Current route: "
+            f"`{current_route.get('strategy', '—')} → "
+            f"{current_route.get('target', '—')}`"
+        ),
+        "",
+        "**Recent activity**",
+    ]
+    events = status.get("recent_events") or []
+    if events:
+        lines.extend(f"• {event}" for event in events[-10:])
+    else:
+        lines.append("• No COO bus events yet.")
+    summary = status.get("last_deliverable_summary")
+    if summary:
+        lines.extend(["", "**Last deliverable**", str(summary)[:800]])
+    return "\n".join(lines)[:1900]
 
 class DiscordSessionManager:
     """In-memory session store keyed by channel/user/repo for easy future persistence."""
@@ -297,6 +328,24 @@ class DiscordAiderBot:
         )
         if company_event_callback:
             self.orchestrator.on_deliverable(company_event_callback)
+
+            async def forward_coo_bus_event(event):
+                await company_event_callback(
+                    EventMessage(
+                        event=CompanyEvent.LIFECYCLE,
+                        task_id=(
+                            event.metadata.get("message_metadata", {}).get("task_id")
+                            or event.session_key
+                        ),
+                        payload={
+                            "name": "coo_bus_event",
+                            "details": event.as_dict(),
+                            "formatted": self.coo.bus.get_formatted_events(limit=1)[-1],
+                        },
+                    )
+                )
+
+            self.coo.bus.on_event(forward_coo_bus_event)
         return self.engineering
 
     async def receive_human_input(
@@ -701,6 +750,54 @@ def build_discord_client(*args, **kwargs):
                 await ctx.send("No company session is active yet.")
                 return
             await ctx.send(format_company_status_message(aider_bot.orchestrator))
+
+        async def build_coo_status_for_context(ctx):
+            if aider_bot.coo is None:
+                return None
+            repo_path = (
+                repo_path_resolver(ctx)
+                if repo_path_resolver
+                else getattr(ctx, "repo_path", None)
+            )
+            channel = getattr(ctx, "channel", None)
+            author = getattr(ctx, "author", None) or getattr(ctx, "user", None)
+            key = DiscordSessionKey(
+                guild_id=getattr(getattr(ctx, "guild", None), "id", 0) or 0,
+                channel_id=(
+                    getattr(channel, "id", None)
+                    or getattr(ctx, "channel_id", 0)
+                    or 0
+                ),
+                user_id=getattr(author, "id", None),
+                repo_path=repo_path,
+            )
+            return await aider_bot.coo.get_session_status(f"discord:{key}")
+
+        @bot.command(name="coo_status")
+        async def coo_status(ctx):
+            status = await build_coo_status_for_context(ctx)
+            if status is None:
+                await ctx.send("No COO session is active yet.")
+                return
+            await ctx.send(format_coo_status_message(status))
+
+        @bot.command(name="session")
+        async def session(ctx):
+            await coo_status(ctx)
+
+        @bot.tree.command(name="coo_status", description="Show COO session activity")
+        async def coo_status_slash(interaction):
+            status = await build_coo_status_for_context(interaction)
+            if status is None:
+                await interaction.response.send_message(
+                    "No COO session is active yet.", ephemeral=True
+                )
+                return
+            await interaction.response.send_message(format_coo_status_message(status))
+
+        @bot.tree.command(name="session", description="Show COO session activity")
+        async def session_slash(interaction):
+            await coo_status_slash(interaction)
 
         @bot.command(name="prototype")
         async def prototype(ctx, *, prompt: str):

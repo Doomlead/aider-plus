@@ -125,12 +125,40 @@ class COOMessageBus:
                 await result
         return event
 
+    def get_formatted_events(self, limit: int = 20) -> list[str]:
+        """Return recent bus events as dashboard-friendly human strings."""
+        formatted: list[str] = []
+        for event in self.events[-max(1, limit) :]:
+            message_metadata = event.metadata.get("message_metadata", {})
+            route = message_metadata.get("route") or {}
+            target = message_metadata.get("department") or message_metadata.get("target")
+            task_id = message_metadata.get("task_id")
+            details = [
+                f"{event.event_type.replace('_', ' ')}",
+                f"{event.queue} queue={event.queue_size}",
+                f"{event.role} via {event.channel}",
+            ]
+            if route:
+                details.append(
+                    "route "
+                    f"{route.get('strategy', 'unknown')} → {route.get('target', 'unknown')}"
+                )
+            elif target:
+                details.append(f"handoff → {target}")
+            if task_id:
+                details.append(f"task {task_id}")
+            formatted.append(
+                f"[{event.created_at}] {event.session_key}: " + " | ".join(details)
+            )
+        return formatted
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "inbound_size": self.inbound_size,
             "outbound_size": self.outbound_size,
             "stats": dict(self.stats),
             "recent_events": [event.as_dict() for event in self.events[-20:]],
+            "formatted_events": self.get_formatted_events(limit=20),
         }
 
     @property
@@ -165,6 +193,35 @@ class COOSession:
 
     def get_history(self, max_messages: int = 40) -> list[dict[str, Any]]:
         return self.messages[-max(1, max_messages) :]
+
+    def snapshot(self, *, recent_limit: int = 10) -> dict[str, Any]:
+        """Return a compact, UI-safe view of persisted COO session state."""
+        recent_events = self.get_history(recent_limit)
+        route_history = []
+        for message in self.messages:
+            route = message.get("route") or message.get("metadata", {}).get("route")
+            if route:
+                route_history.append(route)
+        last_route = self.metadata.get("last_route")
+        if last_route and (not route_history or route_history[-1] != last_route):
+            route_history.append(last_route)
+        last_assistant = next(
+            (message for message in reversed(self.messages) if message.get("role") == "assistant"),
+            None,
+        )
+        return {
+            "key": self.key,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "message_count": len(self.messages),
+            "metadata": dict(self.metadata),
+            "recent_events": recent_events,
+            "route_history": route_history[-recent_limit:],
+            "active_department": self.metadata.get("last_target"),
+            "last_deliverable_summary": (
+                last_assistant.get("content") if last_assistant else None
+            ),
+        }
 
 
 class COOSessionManager:
@@ -361,6 +418,9 @@ class NanobotCOO:
             else await self.decide_route(inbound.content, session)
         )
 
+        session.messages[-1]["route"] = route.as_dict()
+        self.session_manager.save(session)
+
         payload = {
             "message": inbound.content,
             "surface": surface,
@@ -376,6 +436,32 @@ class NanobotCOO:
         result["events"] = [event.as_dict() for event in self.bus.events]
         result["bus"] = self.bus.snapshot()
         return result
+
+
+    async def get_session_status(self, session_id: str) -> dict[str, Any]:
+        """Return a clean dashboard payload for COO observability surfaces."""
+        session = self.session_manager.get_or_create(session_id)
+        session_snapshot = session.snapshot()
+        bus_snapshot = self.bus.snapshot()
+        return {
+            "session_id": session_id,
+            "status": "active" if session.messages else "new",
+            "active_department": session_snapshot.get("active_department"),
+            "current_route": session.metadata.get("last_route", {}),
+            "last_deliverable_summary": session_snapshot.get(
+                "last_deliverable_summary"
+            ),
+            "recent_events": bus_snapshot.get("formatted_events", []),
+            "session": session_snapshot,
+            "route_history": session_snapshot.get("route_history", []),
+            "metrics": {
+                "message_count": session_snapshot.get("message_count", 0),
+                "inbound_queue_size": bus_snapshot.get("inbound_size", 0),
+                "outbound_queue_size": bus_snapshot.get("outbound_size", 0),
+                **bus_snapshot.get("stats", {}),
+            },
+            "bus": bus_snapshot,
+        }
 
     async def route_to_department(
         self,
@@ -439,6 +525,7 @@ class NanobotCOO:
                 metadata={
                     "task_id": task.task_id,
                     "department": deliverable.department,
+                    "route": payload.get("route", {}),
                 },
             )
         )

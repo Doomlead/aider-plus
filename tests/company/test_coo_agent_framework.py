@@ -156,3 +156,34 @@ def test_nanobot_coo_uses_llm_route_when_enabled(tmp_path):
         assert session.metadata["last_route"]["strategy"] == "llm"
 
     asyncio.run(run())
+
+
+def test_nanobot_coo_session_status_includes_formatted_events(tmp_path):
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        department = EchoDepartment(memory, name="engineering")
+        orchestrator.register(department)
+        coo = NanobotCOO(orchestrator=orchestrator, default_target="engineering")
+
+        await coo.receive_user_message(
+            message="implement session status",
+            session_id="cli:status",
+            surface="cli",
+            task_id="task-status",
+        )
+
+        formatted_events = coo.bus.get_formatted_events(limit=5)
+        status = await coo.get_session_status("cli:status")
+
+        assert formatted_events
+        assert any("cli:status" in event for event in formatted_events)
+        assert status["status"] == "active"
+        assert status["active_department"] == "engineering"
+        assert status["current_route"]["target"] == "engineering"
+        assert status["recent_events"] == coo.bus.snapshot()["formatted_events"]
+        assert status["metrics"]["message_count"] == 2
+        assert status["session"]["route_history"][-1]["target"] == "engineering"
+        assert status["session"]["last_deliverable_summary"]
+
+    asyncio.run(run())

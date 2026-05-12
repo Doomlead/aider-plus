@@ -53,3 +53,32 @@ on `CompanyConfig` directly.
 By default, the COO routes deterministically to avoid adding an extra LLM call to
 every user turn. Set `CompanyConfig.enable_coo_llm_routing=True` to allow the COO
 agent loop to classify the target department from session history and the prompt.
+
+## Observability and session status APIs
+
+The COO message bus is now the shared observability spine for CLI, Desktop, and
+Discord surfaces. `COOMessageBus.get_formatted_events(limit=20)` returns recent
+human-readable event strings that include timestamps, session keys, queue state,
+routing decisions, task IDs, and department handoffs. Raw events remain available
+through `COOMessageBus.snapshot()["recent_events"]`, while
+`snapshot()["formatted_events"]` gives UIs the same centralized formatting.
+
+Each `COOSession` exposes `snapshot()`, a compact persistence view with recent
+messages, route history, the active department, and the last deliverable summary.
+This keeps JSONL-backed sessions dashboard-friendly without making each UI parse
+conversation records differently.
+
+`NanobotCOO.get_session_status(session_id)` combines the persisted session
+snapshot with bus metrics into a clean dashboard payload:
+
+- `status`, `active_department`, `current_route`, and
+  `last_deliverable_summary` for status cards.
+- `recent_events` for real-time activity feeds in Desktop and Discord.
+- `metrics` for queue sizes, message counts, and bus publish/consume counters.
+- `session` and `route_history` for debugging routing decisions.
+
+Desktop's Company Dashboard includes a COO Activity section that refreshes from
+`get_session_status()`. Discord exposes the same payload via the `coo_status`
+command, with `session` as an alias. Bus event handlers also forward live COO
+activity into the existing Desktop event queue and Discord lifecycle stream when
+a Discord company event callback is registered.

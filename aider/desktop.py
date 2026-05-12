@@ -153,6 +153,7 @@ class DesktopCompanySession:
             orchestrator=self.orchestrator,
             agent_loop=agent_loops["coo"],
         )
+        self.coo.bus.on_event(self._record_coo_bus_event)
         for department in (
             self.product,
             self.ux,
@@ -173,6 +174,12 @@ class DesktopCompanySession:
         with self.event_lock:
             self.events.append(message)
             self.event_queue.append(message)
+            self.event_version += 1
+
+    async def _record_coo_bus_event(self, event):
+        with self.event_lock:
+            self.events.append(event)
+            self.event_queue.append(event)
             self.event_version += 1
 
     async def _record_background_error(self, message: str):
@@ -374,6 +381,15 @@ class DesktopCompanySession:
 
     def company_status(self) -> str:
         return self.orchestrator.company_status()
+
+    def coo_status(self) -> dict[str, Any]:
+        if self.coo is None:
+            return {}
+        session_id = f"desktop:{self.repo_path}"
+        future = asyncio.run_coroutine_threadsafe(
+            self.coo.get_session_status(session_id), self.loop
+        )
+        return future.result(timeout=5)
 
     def audit_records(self, limit: int = 10) -> list[dict]:
         records = self.coder.project_memory.data.get("audit_log", [])
@@ -615,6 +631,11 @@ class AiderPlusDesktop:
         self.deliverables_text.pack(fill="both", expand=True)
         panes.add(deliverables_frame, weight=2)
 
+        coo_frame = ttk.LabelFrame(panes, text="COO Activity", padding=4)
+        self.coo_status_text = scrolledtext.ScrolledText(coo_frame, wrap=tk.WORD, height=8)
+        self.coo_status_text.pack(fill="both", expand=True)
+        panes.add(coo_frame, weight=2)
+
     def _build_approvals_tab(self):
         toolbar = ttk.Frame(self.approvals_frame)
         toolbar.pack(fill="x", pady=(0, 8))
@@ -708,6 +729,7 @@ class AiderPlusDesktop:
     def refresh_dashboard(self):
         if not self.company:
             self._write_text(self.dashboard_text, "Company backend is not ready yet.")
+            self._write_text(self.coo_status_text, "Company backend is not ready yet.")
             return
         metrics = self.company.dashboard_metrics(turns_this_session=self.turns_this_session)
         for key, label in self.metric_labels.items():
@@ -715,6 +737,39 @@ class AiderPlusDesktop:
         status = self.company.company_status()
         self._write_text(self.dashboard_text, status)
         self._write_text(self.deliverables_text, self._format_deliverables())
+        self._write_text(self.coo_status_text, self._format_coo_status())
+
+    def _format_coo_status(self) -> str:
+        if not self.company:
+            return "Company backend is not ready yet."
+        try:
+            status = self.company.coo_status()
+        except Exception as err:
+            return f"COO status unavailable: {err}"
+        if not status:
+            return "No COO status is available yet."
+        current_route = status.get("current_route") or {}
+        lines = [
+            f"Session: {status.get('session_id')}",
+            f"Status: {status.get('status')}",
+            f"Active department: {status.get('active_department') or '—'}",
+            (
+                "Current route: "
+                f"{current_route.get('strategy', '—')} → "
+                f"{current_route.get('target', '—')}"
+            ),
+            "",
+            "Recent COO events:",
+        ]
+        events = status.get("recent_events") or []
+        if events:
+            lines.extend(f"- {event}" for event in events[-20:])
+        else:
+            lines.append("- No bus events yet.")
+        summary = status.get("last_deliverable_summary")
+        if summary:
+            lines.extend(["", "Last deliverable summary:", str(summary)[:1200]])
+        return "\n".join(lines)
 
     def refresh_approvals(self):
         for item in self.approvals_tree.get_children():

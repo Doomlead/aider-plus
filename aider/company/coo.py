@@ -345,17 +345,23 @@ class COOSessionManager:
 class COORouteDecision:
     """Explicit COO routing result for a user message."""
 
-    target: str
+    target: str = ""
     strategy: str = "deterministic"
     reason: str = "Route selected by COO"
     confidence: float = 0.5
     should_escalate_to_human: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
+    chosen_department: str | None = None
+    reasoning: str | None = None
 
     def __post_init__(self) -> None:
-        self.target = str(self.target or "").strip().lower()
+        target = self.chosen_department if self.chosen_department is not None else self.target
+        self.target = str(target or "").strip().lower()
+        self.chosen_department = self.target
         self.strategy = str(self.strategy or "deterministic").strip().lower()
-        self.reason = str(self.reason or "Route selected by COO").strip()
+        reason = self.reasoning if self.reasoning is not None else self.reason
+        self.reason = str(reason or "Route selected by COO").strip()
+        self.reasoning = self.reason
         try:
             self.confidence = float(self.confidence)
         except (TypeError, ValueError):
@@ -363,14 +369,6 @@ class COORouteDecision:
         self.confidence = max(0.0, min(1.0, self.confidence))
         self.should_escalate_to_human = bool(self.should_escalate_to_human)
         self.metadata = dict(self.metadata or {})
-
-    @property
-    def chosen_department(self) -> str:
-        return self.target
-
-    @property
-    def reasoning(self) -> str:
-        return self.reason
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -431,7 +429,7 @@ class NanobotCOO:
         base_delay: float = 1.0,
     ) -> Any:
         """Call an async operation with bounded exponential backoff."""
-        attempts = max(0, int(max_retries)) + 1
+        attempts = max(0, int(max_retries)) + 1 if callable(coro) else 1
         last_error: BaseException | None = None
         for attempt in range(attempts):
             try:
@@ -766,7 +764,7 @@ class NanobotCOO:
         parsed = self._parse_json(result.get("content", ""))
         candidate = str(
             parsed.get("chosen_department") or parsed.get("target") or ""
-        ).lower()
+        ).strip().lower()
         if candidate in self.orchestrator.departments:
             return COORouteDecision(
                 target=candidate,

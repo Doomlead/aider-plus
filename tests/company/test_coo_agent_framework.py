@@ -15,7 +15,7 @@ from aider.company.config import (
     DepartmentConfig,
     apply_agent_model_overrides_from_env,
 )
-from aider.company.coo import NanobotCOO
+from aider.company.coo import COORouteDecision, NanobotCOO
 from aider.company.department import Department
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.schemas import CompanyTask, Deliverable
@@ -53,6 +53,22 @@ class EchoDepartment(Department):
             status="success",
             metadata={},
         )
+
+
+def test_coo_route_decision_defaults_and_aliases():
+    decision = COORouteDecision(
+        chosen_department=" QA ",
+        reasoning="Needs regression coverage",
+        confidence="1.7",
+    )
+
+    assert decision.target == "qa"
+    assert decision.chosen_department == "qa"
+    assert decision.reason == "Needs regression coverage"
+    assert decision.reasoning == "Needs regression coverage"
+    assert decision.confidence == 1.0
+    assert decision.as_dict()["chosen_department"] == "qa"
+    assert decision.as_dict()["reasoning"] == "Needs regression coverage"
 
 
 def test_build_company_agent_loops_creates_dedicated_loop_per_agent(tmp_path):

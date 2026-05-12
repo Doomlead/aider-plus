@@ -663,7 +663,13 @@ def get_parser(default_config_files, git_root):
     group.add_argument(
         "--desktop",
         action=argparse.BooleanOptionalAction,
-        help="Run aider in a desktop app (default: False)",
+        help="Run aider in the zero-dependency native Tkinter desktop app (default: False)",
+        default=False,
+    )
+    group.add_argument(
+        "--desktop-tk",
+        action=argparse.BooleanOptionalAction,
+        help="Alias for --desktop; runs the native Tkinter desktop app (default: False)",
         default=False,
     )
     group.add_argument(

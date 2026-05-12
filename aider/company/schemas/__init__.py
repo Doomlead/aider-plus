@@ -94,6 +94,8 @@ class PRD:
     priority: str = "MVP"
     open_questions: list[str] = field(default_factory=list)
     version: str = "1.0"
+    revision_count: int = 0
+    previous_prd_summary: Optional[str] = None
 
     def to_markdown(self) -> str:
         """Return the PRD as a Markdown string for context injection."""
@@ -142,6 +144,8 @@ class PRD:
             "priority": self.priority,
             "open_questions": self.open_questions,
             "version": self.version,
+            "revision_count": self.revision_count,
+            "previous_prd_summary": self.previous_prd_summary,
         }
 
     @classmethod
@@ -158,6 +162,12 @@ class PRD:
             priority=str(d.get("priority", "MVP")),
             open_questions=list(d.get("open_questions", [])),
             version=str(d.get("version", "1.0")),
+            revision_count=int(d.get("revision_count", 0) or 0),
+            previous_prd_summary=(
+                str(d.get("previous_prd_summary"))
+                if d.get("previous_prd_summary") is not None
+                else None
+            ),
         )
 
 

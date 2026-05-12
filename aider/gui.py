@@ -16,7 +16,7 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
-from aider import urls
+from aider import models, urls
 from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
 from aider.coders import Coder
@@ -933,6 +933,7 @@ class GUI:
         tabs = st.tabs(
             [
                 "Chat",
+                "Settings",
                 "Company Dashboard",
                 "Approvals",
                 "Audit Log",
@@ -942,12 +943,14 @@ class GUI:
         with tabs[0]:
             self.do_chat_tab()
         with tabs[1]:
-            self.do_company_dashboard_page()
+            self.do_settings_tab(location="main")
         with tabs[2]:
-            self.do_company_approvals_page()
+            self.do_company_dashboard_page()
         with tabs[3]:
-            self.do_company_audit_log_page()
+            self.do_company_approvals_page()
         with tabs[4]:
+            self.do_company_audit_log_page()
+        with tabs[5]:
             self.do_project_memory_page()
 
     def do_chat_tab(self):
@@ -964,6 +967,28 @@ class GUI:
         else:
             st.info("Company Mode is paused. You are chatting directly with Aider.")
         self.do_messages_container()
+        self.do_agent_chat_box()
+
+    def do_agent_chat_box(self):
+        with st.container(border=True):
+            st.subheader("Chat with an agent")
+            st.caption(
+                "Send a prompt to the active Aider agent. When Company Mode is active, "
+                "the prompt follows the selected Company route unless bypass is enabled."
+            )
+            prompt = st.text_area(
+                "Agent prompt",
+                key=f"agent_prompt_{len(self.state.messages)}",
+                placeholder="Ask the agent to explain, edit, test, or implement something...",
+                disabled=self.prompt_pending(),
+            )
+            if st.button(
+                "Send to agent",
+                key="send_agent_prompt",
+                disabled=self.prompt_pending() or not prompt.strip(),
+                use_container_width=True,
+            ):
+                self.prompt = prompt.strip()
 
     def get_company_for_page(self):
         if not self.state.company_enabled:
@@ -1091,21 +1116,44 @@ class GUI:
     def count_user_turns(self):
         return sum(1 for msg in self.state.messages if msg.get("role") == "user")
 
-    def do_settings_tab(self):
+    def do_settings_tab(self, location="sidebar"):
         st.subheader("Settings")
-        st.caption("Configure API keys, model defaults, and provider settings.")
+        st.caption(
+            "Add API keys and change the model used by this desktop/browser session. "
+            "Settings are saved in the repo so future Aider launches can reuse them."
+        )
 
         env_values = self._read_env_values(self.env_path)
         conf_values = self._read_conf_values(self.conf_path)
+        current_model = self.coder.main_model
+        form_key = f"settings_form_{location}"
 
-        with st.form("settings_form", clear_on_submit=False):
-            model = st.text_input("Main model", value=conf_values.get("model", ""))
+        with st.form(form_key, clear_on_submit=False):
+            st.write("**Model selection**")
+            model = st.text_input(
+                "Main model",
+                value=conf_values.get("model") or current_model.name,
+                help="The primary model that will answer and edit code.",
+            )
             weak_model = st.text_input(
-                "Weak model", value=conf_values.get("weak-model", "")
+                "Weak model",
+                value=conf_values.get("weak-model") or current_model.weak_model.name,
+                help="Optional cheaper/faster model for lightweight tasks.",
             )
             editor_model = st.text_input(
-                "Editor model", value=conf_values.get("editor-model", "")
+                "Editor model",
+                value=conf_values.get("editor-model")
+                or current_model.editor_model.name,
+                help="Optional model for editor-mode edits.",
             )
+            apply_now = st.checkbox(
+                "Use this model for the current session now",
+                value=True,
+                help="Applies the selected model immediately without restarting the browser UI.",
+            )
+
+            st.write("**API keys**")
+            st.caption("Leave a saved key blank only if you do not want to change it.")
             openai_key = st.text_input(
                 "OpenAI API key",
                 value=env_values.get("OPENAI_API_KEY", ""),
@@ -1127,31 +1175,81 @@ class GUI:
             submitted = st.form_submit_button("Save settings")
 
         if submitted:
-            updates = {}
-            if openai_key:
-                updates["OPENAI_API_KEY"] = openai_key.strip()
-            if anthropic_key:
-                updates["ANTHROPIC_API_KEY"] = anthropic_key.strip()
-            if openrouter_key:
-                updates["OPENROUTER_API_KEY"] = openrouter_key.strip()
-            for line in provider_keys.splitlines():
-                line = line.strip()
-                if not line or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                if k and v:
-                    updates[k.strip()] = v.strip()
-
-            self._write_env_updates(self.env_path, updates)
-            self._write_conf_updates(
-                self.conf_path,
-                {
-                    "model": model.strip(),
-                    "weak-model": weak_model.strip(),
-                    "editor-model": editor_model.strip(),
-                },
+            updates = self._collect_api_key_updates(
+                openai_key, anthropic_key, openrouter_key, provider_keys
             )
+            self._write_env_updates(self.env_path, updates)
+            self._apply_env_updates(updates)
+            model_updates = {
+                "model": model.strip(),
+                "weak-model": weak_model.strip(),
+                "editor-model": editor_model.strip(),
+            }
+            self._write_conf_updates(self.conf_path, model_updates)
+            if apply_now:
+                self._apply_model_settings(model_updates)
             self.info(f"Saved settings to `{self.env_path}` and `{self.conf_path}`.")
+            st.success("Settings saved. New chats will use the selected model.")
+
+    def _collect_api_key_updates(
+        self, openai_key, anthropic_key, openrouter_key, provider_keys
+    ):
+        updates = {}
+        if openai_key:
+            updates["OPENAI_API_KEY"] = openai_key.strip()
+        if anthropic_key:
+            updates["ANTHROPIC_API_KEY"] = anthropic_key.strip()
+        if openrouter_key:
+            updates["OPENROUTER_API_KEY"] = openrouter_key.strip()
+        for line in provider_keys.splitlines():
+            line = line.strip()
+            if not line or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            if k and v:
+                updates[k.strip()] = v.strip()
+        return updates
+
+    def _apply_env_updates(self, updates: dict):
+        for key, value in updates.items():
+            os.environ[key] = value
+
+    def _apply_model_settings(self, model_updates: dict):
+        current_model = self.coder.main_model
+        model_name = model_updates.get("model") or current_model.name
+        weak_model_name = (
+            model_updates.get("weak-model") or current_model.weak_model.name
+        )
+        editor_model_name = (
+            model_updates.get("editor-model") or current_model.editor_model.name
+        )
+        if (
+            model_name == current_model.name
+            and weak_model_name == current_model.weak_model.name
+            and editor_model_name == current_model.editor_model.name
+        ):
+            return
+
+        next_model = models.Model(
+            model_name,
+            editor_model=editor_model_name,
+            weak_model=weak_model_name,
+        )
+        models.sanity_check_models(self.coder.commands.io, next_model)
+        edit_format = self.coder.edit_format
+        if edit_format == current_model.edit_format:
+            edit_format = next_model.edit_format
+        next_coder = Coder.create(
+            from_coder=self.coder,
+            main_model=next_model,
+            edit_format=edit_format,
+            show_announcements=False,
+        )
+        next_coder.yield_stream = True
+        next_coder.stream = True
+        next_coder.pretty = False
+        self.state.coder = next_coder
+        self.coder = next_coder
 
     def _read_env_values(self, path: Path):
         vals = {}
@@ -1402,8 +1500,9 @@ class GUI:
         return st.button(args, **kwargs)
 
     def __init__(self):
-        self.coder = get_coder()
         self.state = get_state()
+        self.state.init("coder", get_coder())
+        self.coder = self.state.coder
 
         # Force the coder to cooperate, regardless of cmd line args
         self.coder.yield_stream = True

@@ -1,6 +1,5 @@
 import json
 import os
-import platform
 import re
 import sys
 import threading
@@ -219,31 +218,6 @@ def check_streamlit_install(io):
         "You need to install the aider browser feature",
         ["aider-chat[browser]"],
     )
-
-
-def check_desktop_install(io):
-    ok = utils.check_pip_install_extra(
-        io,
-        "webview",
-        "You need desktop GUI dependencies.",
-        ["pywebview"],
-    )
-    if not ok:
-        io.tool_output("Install with: pip install pywebview")
-        io.tool_output("Or install aider desktop extras with: pip install 'aider-chat[browser]'")
-        return False
-
-    if platform.system() == "Windows":
-        # pywebview relies on WebView2 for the Edge backend.
-        webview2_path = Path(os.environ.get("ProgramFiles", "")) / "Microsoft" / "EdgeWebView"
-        if not webview2_path.exists():
-            io.tool_error("Microsoft Edge WebView2 runtime appears to be missing.")
-            io.tool_output(
-                "Install WebView2 runtime from: https://developer.microsoft.com/microsoft-edge/webview2/"
-            )
-            return False
-
-    return True
 
 
 def write_streamlit_credentials():
@@ -803,19 +777,12 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
 
     analytics.event("launched")
 
-    if args.desktop and not return_coder:
-        if not check_streamlit_install(io):
-            analytics.event("exit", reason="Streamlit not installed")
-            return
-        if not check_desktop_install(io):
-            analytics.event("exit", reason="Desktop dependencies not installed")
-            return
-
+    if (args.desktop or args.desktop_tk) and not return_coder:
         from aider.desktop import launch_desktop_gui
 
-        analytics.event("desktop gui session")
-        launch_desktop_gui(argv, write_streamlit_credentials, debug=args.desktop_debug)
-        analytics.event("exit", reason="Desktop GUI session ended")
+        analytics.event("desktop tkinter session")
+        launch_desktop_gui(argv, debug=args.desktop_debug)
+        analytics.event("exit", reason="Tkinter desktop session ended")
         return
 
     if args.gui and not return_coder:

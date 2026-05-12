@@ -379,15 +379,16 @@ class DiscordAiderBot:
             context={"project_name": Path(repo_path).name},
         )
 
-        deliverable = await self.coo.receive_user_message(
-            prompt=prompt,
-            channel="discord",
-            session_key=f"discord:{key}",
+        coo_result = await self.coo.receive_user_message(
+            message=prompt,
+            session_id=f"discord:{key}",
+            surface="discord",
             target="product",
             context={"project_name": Path(repo_path).name},
             task_id=task.task_id,
             origin=task.origin,
         )
+        deliverable = coo_result["deliverable"]
 
         return {
             "task_id": task.task_id,
@@ -417,7 +418,7 @@ class DiscordAiderBot:
         coder = await self.get_or_create_session(key, repo_path, model=model)
         self.on_reconnect_or_ping(key)
 
-        engineering = self._init_company_session(coder, callback=callback)
+        self._init_company_session(coder, callback=callback)
         if self.orchestrator and isinstance(self.orchestrator.memory, ProjectMemory):
             await self.orchestrator.recover_pending_approvals()
         task = CompanyTask(
@@ -429,12 +430,22 @@ class DiscordAiderBot:
             blocking=False,
         )
 
-        run_task = asyncio.create_task(self._run_engineering_task(engineering, task))
+        run_task = asyncio.create_task(
+            self.coo.receive_user_message(
+                message=prompt,
+                session_id=f"discord:{key}",
+                surface="discord",
+                target="engineering",
+                task_id=task.task_id,
+                origin=task.origin,
+            )
+        )
 
         try:
-            deliverable = await asyncio.wait_for(
+            coo_result = await asyncio.wait_for(
                 run_task, timeout=self.config.max_runtime_seconds
             )
+            deliverable = coo_result["deliverable"]
         except asyncio.TimeoutError as err:
             raise TimeoutError("Aider request timed out") from err
 
@@ -676,7 +687,6 @@ def build_discord_client(*args, **kwargs):
             await ctx.send(
                 format_audit_log_message(project_memory, limit=max(1, min(limit, 25)))
             )
-
 
         @bot.command(name="company_status")
         async def company_status(ctx):

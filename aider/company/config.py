@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from aider.company.nanobot import NanobotConfig
+    from aider.company.coo import COOAgentConfig
 
 
 @dataclass
@@ -55,7 +55,7 @@ class CompanyConfig:
     default_enable_caching: bool = True
     departments: Dict[str, DepartmentConfig] = field(default_factory=dict)
     record_caching_stats: bool = True
-    nanobot: Optional["NanobotConfig"] = None
+    coo_agent: Optional["COOAgentConfig"] = None
 
     def get_department_config(self, name: str) -> DepartmentConfig:
         """

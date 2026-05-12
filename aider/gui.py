@@ -27,7 +27,7 @@ from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
 from aider.company.departments.qa import QADepartment
 from aider.company.departments.ux import UXDepartment
-from aider.company.nanobot import COODepartment, NanobotBridge
+from aider.company.coo import COOAgentConfig, COOAgentKernel, COODepartment
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
@@ -209,11 +209,11 @@ class DesktopCompanySession:
             company_config=company_config,
             base_config=AgentLoopConfig(use_architect_mode=True),
         )
-        nanobot_bridge = NanobotBridge(company_config.nanobot)
+        coo_agent = COOAgentKernel(config=company_config.coo_agent or COOAgentConfig())
         self.coo = COODepartment(
             project_memory=project_memory,
             conversation_memory=conversation_memory,
-            bridge=nanobot_bridge,
+            agent=coo_agent,
         )
         self.engineering = EngineeringDepartment(
             project_memory=project_memory,

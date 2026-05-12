@@ -17,7 +17,7 @@ from aider.company.agents import DepartmentAgentFactory
 from aider.company.audit import AuditLogViewer
 from aider.company.approval import ApprovalManager
 from aider.company.config import default_company_config
-from aider.company.nanobot import COODepartment, NanobotBridge
+from aider.company.coo import COOAgentConfig, COOAgentKernel, COODepartment
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
 from aider.company.departments.devops import DevOpsDepartment
@@ -260,7 +260,7 @@ class DiscordAiderBot:
         self.coo = COODepartment(
             project_memory=coder.project_memory,
             conversation_memory=coder.conversation_memory,
-            bridge=NanobotBridge(company_config.nanobot),
+            agent=COOAgentKernel(config=company_config.coo_agent or COOAgentConfig()),
         )
         self.engineering = EngineeringDepartment(
             project_memory=coder.project_memory,

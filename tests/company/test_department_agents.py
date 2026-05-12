@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from aider.agent.loop import AgentLoopConfig
 from aider.company.agents import DepartmentAgentFactory
 from aider.company.config import CompanyConfig, DepartmentConfig, default_company_config
-from aider.company.nanobot import COODepartment, NanobotBridge, NanobotConfig
+from aider.company.coo import COOAgentConfig, COOAgentKernel, COODepartment
 from aider.company.schemas import CompanyTask, Deliverable
 from aider.memory import ProjectMemory
 
@@ -72,9 +72,9 @@ def test_default_company_config_applies_user_agent_model_overrides(monkeypatch):
     assert config.get_department_config("engineering").preferred_model == "model-c"
 
 
-def test_coo_department_publishes_nanobot_packet_and_routes_target(tmp_path):
+def test_coo_agent_kernel_routes_and_records_bounded_session_memory(tmp_path):
     memory = ProjectMemory(str(tmp_path))
-    bridge = NanobotBridge(NanobotConfig(enabled=False, channel="phase-1"))
+    agent = COOAgentKernel(config=COOAgentConfig(channel="phase-1", max_session_messages=3))
     routed = Deliverable(
         task_id="task-1-product",
         department="product",
@@ -83,7 +83,7 @@ def test_coo_department_publishes_nanobot_packet_and_routes_target(tmp_path):
         status="success",
     )
     recorder = SubmitRecorder(routed)
-    coo = COODepartment(memory, bridge=bridge)
+    coo = COODepartment(memory, agent=agent)
     coo._submit_task = recorder
 
     async def run_test():
@@ -102,9 +102,34 @@ def test_coo_department_publishes_nanobot_packet_and_routes_target(tmp_path):
     deliverable = asyncio.run(run_test())
 
     assert deliverable.department == "coo"
-    assert deliverable.payload["routed_to"] == "product"
-    assert bridge.messages[0]["channel"] == "phase-1"
-    assert bridge.messages[0]["recipient"] == "product"
+    assert deliverable.payload["content"]["routed_to"] == "product"
+    assert deliverable.payload["channel"] == "phase-1"
     assert recorder.tasks[0].origin == "coo"
     assert recorder.tasks[0].target == "product"
-    assert recorder.tasks[0].context["nanobot_packet"] == bridge.messages[0]
+    assert recorder.tasks[0].context["coo_message"]["recipient"] == "product"
+    assert len(agent.memory.as_dicts()) == 2
+
+
+def test_coo_routing_policy_uses_intent_when_no_explicit_target(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    recorder = SubmitRecorder()
+    coo = COODepartment(memory, agent=COOAgentKernel())
+    coo._submit_task = recorder
+
+    async def run_test():
+        return await coo.process(
+            CompanyTask(
+                task_id="task-2",
+                origin="ceo",
+                target="coo",
+                artifact_type="raw_prompt",
+                payload="Please fix the login bug in code",
+                blocking=False,
+                context={},
+            )
+        )
+
+    deliverable = asyncio.run(run_test())
+
+    assert deliverable.payload["content"]["routed_to"] == "engineering"
+    assert recorder.tasks[0].target == "engineering"

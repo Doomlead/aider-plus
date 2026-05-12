@@ -10,18 +10,21 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 
 @dataclass
-class DepartmentConfig:
+class AgentConfig:
     """
     Per-department runtime configuration.
 
     Attributes:
         name: Department identifier (matches Department.name).
-        enable_prompt_caching: Whether to pass cache_control options in API
-            calls made by this department. Default True.
+        enable_caching: Whether to pass cache_control options in API
+            calls made by this agent. Default True.
+        cache_type: Prompt-caching strategy. "auto" lets the agent loop use
+            native Aider/litellm support, "prompt" forces prompt caching, and
+            "none" disables caching.
         preferred_model: Optional model override for this department's agent
             loop calls. None means use the agent loop default.
         max_review_iterations: Optional cap for reviewer/programmer revision
@@ -29,9 +32,22 @@ class DepartmentConfig:
     """
 
     name: str
-    enable_prompt_caching: bool = True
+    enable_caching: bool = True
+    cache_type: Literal["auto", "prompt", "none"] = "auto"
     preferred_model: Optional[str] = None
     max_review_iterations: Optional[int] = None
+    enable_prompt_caching: Optional[bool] = None
+
+    def __post_init__(self) -> None:
+        if self.enable_prompt_caching is not None:
+            self.enable_caching = bool(self.enable_prompt_caching)
+        if self.cache_type == "none":
+            self.enable_caching = False
+        self.enable_prompt_caching = self.enable_caching
+
+
+class DepartmentConfig(AgentConfig):
+    """Backward-compatible name for per-department agent configuration."""
 
 
 @dataclass
@@ -70,7 +86,7 @@ class CompanyConfig:
                 return dept_config
         return DepartmentConfig(
             name=name,
-            enable_prompt_caching=self.default_enable_caching,
+            enable_caching=self.default_enable_caching,
         )
 
     def for_department(self, name: str) -> DepartmentConfig:
@@ -90,39 +106,94 @@ def default_company_config() -> CompanyConfig:
         departments={
             "coo": DepartmentConfig(
                 name="coo",
-                enable_prompt_caching=True,
+                enable_caching=True,
             ),
             "engineering": DepartmentConfig(
                 name="engineering",
-                enable_prompt_caching=True,
+                enable_caching=True,
                 preferred_model="claude-sonnet-4-5",
             ),
             "reviewer": DepartmentConfig(
                 name="reviewer",
-                enable_prompt_caching=True,
+                enable_caching=True,
                 preferred_model="claude-sonnet-4-5",
             ),
             "product": DepartmentConfig(
                 name="product",
-                enable_prompt_caching=True,
+                enable_caching=True,
             ),
             "ux": DepartmentConfig(
                 name="ux",
-                enable_prompt_caching=True,
+                enable_caching=True,
             ),
             "qa": DepartmentConfig(
                 name="qa",
-                enable_prompt_caching=False,
+                enable_caching=False,
             ),
             "devops": DepartmentConfig(
                 name="devops",
-                enable_prompt_caching=False,
+                enable_caching=False,
             ),
         },
         default_enable_caching=True,
         record_caching_stats=True,
         enable_coo_llm_routing=False,
     )
+
+
+DEFAULT_COMPANY_CONFIG = default_company_config()
+
+
+_COMPANY_AGENT_NAMES = ("coo", "product", "ux", "engineering", "reviewer", "qa", "devops")
+
+
+def _parse_bool_env(value: str) -> bool | None:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on", "enabled", "enable"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled", "disable", "none"}:
+        return False
+    return None
+
+
+def apply_agent_caching_overrides_from_env(config: CompanyConfig | None = None) -> CompanyConfig:
+    """Apply user-provided per-agent prompt caching overrides from environment variables.
+
+    Supported forms:
+    - AIDER_COMPANY_AGENT_CACHING="product:true,ux:false,engineering:true"
+    - AIDER_COMPANY_CACHING_PRODUCT="true"
+    - AIDER_COMPANY_CACHING_COO="false"
+    """
+    resolved = config or default_company_config()
+    overrides: dict[str, bool] = {}
+
+    packed = os.environ.get("AIDER_COMPANY_AGENT_CACHING", "")
+    for chunk in packed.split(","):
+        if not chunk.strip() or ":" not in chunk:
+            continue
+        name, value = chunk.split(":", 1)
+        parsed = _parse_bool_env(value)
+        if parsed is None:
+            continue
+        name = name.strip().lower()
+        if name:
+            overrides[name] = parsed
+
+    for name in _COMPANY_AGENT_NAMES:
+        value = os.environ.get(f"AIDER_COMPANY_CACHING_{name.upper()}")
+        if value is None:
+            continue
+        parsed = _parse_bool_env(value)
+        if parsed is not None:
+            overrides[name] = parsed
+
+    for name, enabled in overrides.items():
+        dept_config = resolved.get_department_config(name)
+        dept_config.enable_caching = enabled
+        dept_config.cache_type = "auto" if enabled else "none"
+        resolved.departments[name] = dept_config
+
+    return resolved
 
 
 def apply_agent_model_overrides_from_env(config: CompanyConfig | None = None) -> CompanyConfig:
@@ -146,7 +217,7 @@ def apply_agent_model_overrides_from_env(config: CompanyConfig | None = None) ->
         if name and model:
             overrides[name] = model
 
-    for name in ("coo", "product", "ux", "engineering", "reviewer", "qa", "devops"):
+    for name in _COMPANY_AGENT_NAMES:
         model = os.environ.get(f"AIDER_COMPANY_MODEL_{name.upper()}")
         if model:
             overrides[name] = model.strip()
@@ -156,4 +227,4 @@ def apply_agent_model_overrides_from_env(config: CompanyConfig | None = None) ->
         dept_config.preferred_model = model
         resolved.departments[name] = dept_config
 
-    return resolved
+    return apply_agent_caching_overrides_from_env(resolved)

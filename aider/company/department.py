@@ -24,6 +24,7 @@ class Department(ABC):
         self.memory = project_memory
         self.conversation = conversation_memory or ConversationMemory()
         self.config = config or DepartmentConfig(name=self.name)
+        self.agent_config = self.config
         self.inbox: asyncio.Queue[CompanyTask] = asyncio.Queue()
         self.tools: List[str] = []
         self._on_deliverable: Optional[Callable[[Deliverable], None]] = None
@@ -45,7 +46,7 @@ class Department(ABC):
         return ["playbook.*"]
 
     def _get_caching_enabled(self) -> bool:
-        return bool(self.config.enable_prompt_caching)
+        return bool(self.agent_config.enable_caching)
 
     async def receive(self, task: CompanyTask) -> None:
         await self.inbox.put(task)

@@ -6,7 +6,7 @@ from typing import Awaitable, Callable, Optional
 from aider import models
 from aider.agent import AiderAgentLoop
 from aider.agent.loop import AgentLoopConfig
-from aider.company.config import CompanyConfig, default_company_config
+from aider.company.config import AgentConfig, CompanyConfig, default_company_config
 
 AgentCallback = Optional[Callable[[str, dict], Awaitable[None]]]
 
@@ -31,6 +31,7 @@ def agent_loop_config_for_department(
     base_config: AgentLoopConfig | None,
     *,
     model_name: str | None = None,
+    agent_config: AgentConfig | None = None,
 ) -> AgentLoopConfig:
     """Copy the base agent-loop config and pin department models when requested."""
     config = replace(base_config) if base_config is not None else AgentLoopConfig()
@@ -39,6 +40,9 @@ def agent_loop_config_for_department(
             config.architect_model = model_name
         if config.editor_model is None:
             config.editor_model = model_name
+    if agent_config is not None:
+        config.enable_caching = agent_config.enable_caching
+        config.cache_type = agent_config.cache_type
     return config
 
 
@@ -59,27 +63,42 @@ def build_agent_loop_for_department(
     loop_config = agent_loop_config_for_department(
         base_config,
         model_name=dept_config.preferred_model,
+        agent_config=dept_config,
     )
     return AiderAgentLoop(
         coder=department_coder,
         callback=callback,
         config=loop_config,
-        enable_prompt_caching=dept_config.enable_prompt_caching,
+        enable_prompt_caching=dept_config.enable_caching,
+        cache_type=dept_config.cache_type,
     )
 
 
 def build_agent_loop_for_role(
+    role: str | None = None,
+    config: AgentConfig | None = None,
+    coder=None,
     *,
-    coder,
-    role_name: str,
+    role_name: str | None = None,
     company_config: CompanyConfig | None = None,
     callback: AgentCallback = None,
     base_config: AgentLoopConfig | None = None,
 ) -> AiderAgentLoop:
     """Build a dedicated AiderAgentLoop for any company role, including COO."""
+    resolved_role = role_name or role or (config.name if config is not None else None)
+    if resolved_role is None:
+        raise TypeError("build_agent_loop_for_role() requires a role or role_name")
+    if coder is None:
+        raise TypeError("build_agent_loop_for_role() requires coder")
+
+    if config is not None:
+        resolved_company_config = company_config or CompanyConfig()
+        resolved_company_config.departments[resolved_role.lower()] = config
+        company_config = resolved_company_config
+
     return build_agent_loop_for_department(
         coder=coder,
-        department_name=role_name,
+        department_name=resolved_role,
         company_config=company_config,
         callback=callback,
         base_config=base_config,

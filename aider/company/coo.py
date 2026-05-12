@@ -348,6 +348,13 @@ class NanobotCOO:
         self.session_manager = session_manager or COOSessionManager(orchestrator.memory)
         self.bus = bus or COOMessageBus()
         self.default_target = default_target
+        self.agent_config = orchestrator.company_config.get_department_config("coo")
+        if self.coo_agent_loop is not None:
+            self.coo_agent_loop.enable_prompt_caching = self.agent_config.enable_caching
+            loop_config = getattr(self.coo_agent_loop, "config", None)
+            if loop_config is not None:
+                loop_config.enable_caching = self.agent_config.enable_caching
+                loop_config.cache_type = self.agent_config.cache_type
         self.enable_llm_routing = (
             orchestrator.company_config.enable_coo_llm_routing
             if enable_llm_routing is None
@@ -601,6 +608,7 @@ class NanobotCOO:
                 "You are the COO routing user work to one department. "
                 'Return only JSON like {"target": "product", "reason": "..."}.'
             ),
+            enable_caching=self.agent_config.enable_caching,
         )
         parsed = self._parse_json(result.get("content", ""))
         candidate = str(parsed.get("target", "")).lower()

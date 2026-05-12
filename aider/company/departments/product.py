@@ -160,7 +160,7 @@ class ProductDepartment(Department):
         result = await self.agent_loop.run_structured(
             task=f"Feature request:\n{original_request}",
             system_prompt=_AMBIGUITY_SYSTEM,
-            enable_caching=self.config.enable_prompt_caching,
+            enable_caching=self.agent_config.enable_caching,
         )
         parsed = self._parse_json(result.get("content", ""))
         return bool(parsed.get("needs_clarification", False))
@@ -170,7 +170,7 @@ class ProductDepartment(Department):
         result = await self.agent_loop.run_structured(
             task=f"Feature request:\n{original_request}",
             system_prompt=_CLARIFICATION_SYSTEM,
-            enable_caching=self.config.enable_prompt_caching,
+            enable_caching=self.agent_config.enable_caching,
         )
         parsed = self._parse_json(result.get("content", ""))
         questions = parsed.get("questions", [])
@@ -199,7 +199,7 @@ class ProductDepartment(Department):
         result = await self.agent_loop.run_structured(
             task=task_text,
             system_prompt=_PRD_SYSTEM,
-            enable_caching=self.config.enable_prompt_caching,
+            enable_caching=self.agent_config.enable_caching,
             model=self.config.preferred_model or None,
         )
         parsed = self._parse_json(result.get("content", ""))
@@ -217,7 +217,7 @@ class ProductDepartment(Department):
         result = await self.agent_loop.run_structured(
             task=json.dumps(prd.to_dict()),
             system_prompt=_REVIEW_SYSTEM,
-            enable_caching=self.config.enable_prompt_caching,
+            enable_caching=self.agent_config.enable_caching,
         )
         parsed = self._parse_json(result.get("content", ""))
         if not parsed:
@@ -268,7 +268,7 @@ class ProductDepartment(Department):
         result = await self.agent_loop.run_structured(
             task=task_text,
             system_prompt=_PRD_SYSTEM,
-            enable_caching=self.config.enable_prompt_caching,
+            enable_caching=self.agent_config.enable_caching,
             model=self.config.preferred_model or None,
         )
         parsed = self._parse_json(result.get("content", ""))
@@ -368,7 +368,7 @@ class ProductDepartment(Department):
         result = await self.agent_loop.run_structured(
             task=json.dumps(review_payload),
             system_prompt=_REVIEW_SYSTEM,
-            enable_caching=self.config.enable_prompt_caching,
+            enable_caching=self.agent_config.enable_caching,
         )
         parsed = self._parse_json(result.get("content", ""))
         if not parsed:

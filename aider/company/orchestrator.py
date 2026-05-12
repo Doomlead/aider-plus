@@ -102,13 +102,17 @@ class CompanyOrchestrator:
         """Wire one DepartmentConfig into a department-owned agent loop."""
         dept_config = self.company_config.get_department_config(dept_name)
         department.config = dept_config
+        department.agent_config = dept_config
         agent_loop = getattr(department, "agent_loop", None)
         if agent_loop is None:
             return
 
-        agent_loop.enable_prompt_caching = dept_config.enable_prompt_caching
-
+        agent_loop.enable_prompt_caching = dept_config.enable_caching
         loop_config = getattr(agent_loop, "config", None)
+        if loop_config is not None:
+            loop_config.enable_caching = dept_config.enable_caching
+            loop_config.cache_type = dept_config.cache_type
+
         if loop_config is not None:
             loop_config.department_config = dept_config
 
@@ -814,6 +818,12 @@ class CompanyOrchestrator:
                 artifacts.append(f"Deployment: {project.deploy_result.status}")
             lines.append("Artifacts: " + (", ".join(artifacts) if artifacts else "none"))
         lines.append("Departments: " + (", ".join(sorted(self.departments)) or "none"))
+        caching_agents = []
+        for name in sorted({"coo", *self.departments.keys()}):
+            agent_config = self.company_config.get_department_config(name)
+            marker = "on" if agent_config.enable_caching else "off"
+            caching_agents.append(f"{name}:{marker}")
+        lines.append("Prompt caching: " + (", ".join(caching_agents) if caching_agents else "none"))
         lines.append(f"Pending approvals: {len(pending)}")
         if pending:
             for approval in pending:

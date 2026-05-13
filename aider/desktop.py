@@ -58,6 +58,28 @@ logger = logging.getLogger(__name__)
 _COMPANY_SESSIONS: dict[str, "DesktopCompanySession"] = {}
 _COMPANY_SESSIONS_LOCK = threading.Lock()
 
+AGENT_DISPLAY_NAMES = {
+    "coo": "COO",
+    "ux": "UX",
+    "qa": "QA",
+    "devops": "DevOps",
+}
+
+
+def company_agent_display_name(agent_name: str) -> str:
+    """Return the user-facing label for a Company agent name."""
+    normalized = str(agent_name or "").strip().lower()
+    return AGENT_DISPLAY_NAMES.get(normalized, normalized.replace("_", " ").title())
+
+
+def company_label(value: str) -> str:
+    """Return a UI label while preserving common Company acronyms."""
+    text = str(value or "").replace("_", " ").strip()
+    if not text:
+        return ""
+    words = [company_agent_display_name(word) for word in text.split()]
+    return " ".join(words)
+
 
 class DesktopCompanySession:
     """Desktop façade over the same Company workflow used by integrations."""
@@ -408,7 +430,7 @@ class DesktopCompanySession:
     def chat_with_agent(self, agent_name: str, prompt: str):
         return self.submit_background(
             self._run_agent_chat(agent_name, prompt),
-            f"{str(agent_name).title()} agent chat",
+            f"{company_agent_display_name(agent_name)} agent chat",
         )
 
     def pending_approvals(self):
@@ -575,13 +597,13 @@ CHAT_TARGET_GUIDE = {
     "Company Workflow": (
         "Routes the prompt through COO-led Product → UX → Engineering → QA → DevOps orchestration."
     ),
-    "Coo": "Talks directly with the COO routing/orchestration agent.",
+    "COO": "Talks directly with the COO routing/orchestration agent.",
     "Product": "Talks directly with the Product agent for requirements, PRDs, and ambiguity checks.",
-    "Ux": "Talks directly with the UX agent for design specs, screens, states, and accessibility.",
+    "UX": "Talks directly with the UX agent for design specs, screens, states, and accessibility.",
     "Engineering": "Talks directly with the Engineering agent for implementation plans and code changes.",
     "Reviewer": "Talks directly with the reviewer agent for implementation review and quality checks.",
-    "Qa": "Talks directly with the QA agent for test plans, test execution guidance, and validation.",
-    "Devops": "Talks directly with the DevOps agent for release, deployment, and operational guidance.",
+    "QA": "Talks directly with the QA agent for test plans, test execution guidance, and validation.",
+    "DevOps": "Talks directly with the DevOps agent for release, deployment, and operational guidance.",
 }
 
 DESKTOP_CHROME_GUIDE = (
@@ -824,7 +846,7 @@ class AiderPlusDesktop:
         self.chat_targets = [
             "Direct Aider",
             "Company Workflow",
-            *[name.title() for name in COMPANY_AGENT_NAMES],
+            *[company_agent_display_name(name) for name in COMPANY_AGENT_NAMES],
         ]
         for target in self.chat_targets:
             frame = ttk.Frame(self.chat_notebook, padding=4)
@@ -873,17 +895,6 @@ class AiderPlusDesktop:
             )
 
     def _build_settings_tab(self):
-        self._add_tab_description(self.settings_frame, "Settings")
-        intro = ttk.Label(
-            self.settings_frame,
-            text=(
-                "Every field below is described inline and summarized in the Settings field guide."
-            ),
-            wraplength=900,
-            justify="left",
-        )
-        intro.pack(fill="x", pady=(0, 8))
-
         canvas = tk.Canvas(self.settings_frame, highlightthickness=0)
         scrollbar = ttk.Scrollbar(
             self.settings_frame, orient="vertical", command=canvas.yview
@@ -897,8 +908,6 @@ class AiderPlusDesktop:
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-
-        self._add_field_guide(content, "Settings Field Guide", SETTINGS_FIELD_GUIDE)
 
         model_frame = ttk.LabelFrame(content, text="Aider Models", padding=8)
         model_frame.pack(fill="x", pady=(0, 8))
@@ -988,7 +997,7 @@ class AiderPlusDesktop:
         ttk.Label(agents_frame, text="Model override").grid(row=1, column=1, sticky="w")
         ttk.Label(agents_frame, text="Prompt caching").grid(row=1, column=2, sticky="w")
         for row, agent_name in enumerate(COMPANY_AGENT_NAMES, start=2):
-            ttk.Label(agents_frame, text=agent_name.title()).grid(
+            ttk.Label(agents_frame, text=company_agent_display_name(agent_name)).grid(
                 row=row, column=0, sticky="w", pady=2
             )
             model_var = tk.StringVar()
@@ -1048,10 +1057,6 @@ class AiderPlusDesktop:
         self.notebook.select(self.settings_frame)
 
     def _build_dashboard_tab(self):
-        self._add_tab_description(self.dashboard_frame, "Company Dashboard")
-        self._add_field_guide(
-            self.dashboard_frame, "Dashboard Field Guide", DASHBOARD_FIELD_GUIDE
-        )
         toolbar = ttk.Frame(self.dashboard_frame)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(
@@ -1106,10 +1111,6 @@ class AiderPlusDesktop:
         panes.add(coo_frame, weight=2)
 
     def _build_approvals_tab(self):
-        self._add_tab_description(self.approvals_frame, "Approvals")
-        self._add_field_guide(
-            self.approvals_frame, "Approvals Field Guide", APPROVALS_FIELD_GUIDE
-        )
         toolbar = ttk.Frame(self.approvals_frame)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(
@@ -1159,8 +1160,6 @@ class AiderPlusDesktop:
         )
 
     def _build_audit_tab(self):
-        self._add_tab_description(self.audit_frame, "Audit")
-        self._add_field_guide(self.audit_frame, "Audit Field Guide", AUDIT_FIELD_GUIDE)
         toolbar = ttk.Frame(self.audit_frame)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(toolbar, text="Refresh Audit", command=self.refresh_audit).pack(
@@ -1648,7 +1647,7 @@ class AiderPlusDesktop:
                 or getattr(event, "origin", None)
                 or "Company"
             )
-            self._append_chat(str(department).title(), str(message), tag="aider")
+            self._append_chat(company_label(department), str(message), tag="aider")
         if events:
             self.refresh_all()
         if self.company.background_error:
@@ -1729,7 +1728,7 @@ def _format_result(result: Any) -> str:
             for key in ("files", "files_changed", "commits", "status"):
                 value = result.get(key)
                 if value:
-                    details.append(f"{key.replace('_', ' ').title()}: {value}")
+                    details.append(f"{company_label(key)}: {value}")
             return str(summary) + ("\n\n" + "\n".join(details) if details else "")
         return json.dumps(result, indent=2, default=str)
     return str(result)

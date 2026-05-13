@@ -540,6 +540,25 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
 
     if argv is None:
         argv = sys.argv[1:]
+
+    company_cli_command = None
+    if argv and argv[0] == "company":
+        from aider.company.cli import (
+            CompanyCLIError,
+            handle_company_cli_pre_coder,
+            parse_company_cli,
+        )
+
+        try:
+            company_cli_command, argv = parse_company_cli(argv)
+        except CompanyCLIError as exc:
+            print(str(exc))
+            return 1
+
+        pre_coder_result = handle_company_cli_pre_coder(company_cli_command)
+        if pre_coder_result is not None:
+            return pre_coder_result
+
     if argv and argv[0] in {"onboard", "init"}:
         io = InputOutput(pretty=True, yes=False, input=input, output=output)
         return run_onboarding(io)
@@ -1141,6 +1160,18 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
     if return_coder:
         analytics.event("exit", reason="Returning coder object")
         return coder
+
+    if company_cli_command is not None:
+        from aider.company.cli import CompanyCLIError, run_company_cli_with_coder
+
+        try:
+            result = run_company_cli_with_coder(company_cli_command, coder)
+        except CompanyCLIError as exc:
+            io.tool_error(str(exc))
+            analytics.event("exit", reason="Company CLI error")
+            return 1
+        analytics.event("exit", reason="Completed company create")
+        return result
 
     ignores = []
     if git_root:

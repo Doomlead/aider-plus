@@ -54,11 +54,23 @@ logger = logging.getLogger(__name__)
 _COMPANY_SESSIONS = {}
 _COMPANY_SESSIONS_LOCK = threading.Lock()
 
+AGENT_DISPLAY_NAMES = {
+    "coo": "COO",
+    "ux": "UX",
+    "qa": "QA",
+    "devops": "DevOps",
+}
+
+
+def company_agent_display_name(agent_name: str) -> str:
+    normalized = str(agent_name or "").strip().lower()
+    return AGENT_DISPLAY_NAMES.get(normalized, normalized.replace("_", " ").title())
+
 
 AGENT_CHAT_TARGETS = [
     "Direct Aider",
     "Company Workflow",
-    *[name.title() for name in COMPANY_AGENT_NAMES],
+    *[company_agent_display_name(name) for name in COMPANY_AGENT_NAMES],
 ]
 
 
@@ -504,7 +516,7 @@ class DesktopCompanySession:
     def chat_with_agent(self, agent_name: str, prompt: str):
         return self.submit_background(
             self._run_agent_chat(agent_name, prompt),
-            f"{str(agent_name).title()} agent chat",
+            f"{company_agent_display_name(agent_name)} agent chat",
         )
 
     def pending_approvals(self):
@@ -1296,10 +1308,11 @@ class GUI:
             agent_api_keys = {}
             agent_local_settings = {}
             for agent_name in COMPANY_AGENT_NAMES:
-                with st.expander(f"{agent_name.title()} agent", expanded=False):
+                agent_label = company_agent_display_name(agent_name)
+                with st.expander(f"{agent_label} agent", expanded=False):
                     cols = st.columns([3, 2])
                     agent_models[agent_name] = cols[0].text_input(
-                        f"{agent_name.title()} model",
+                        f"{agent_label} model",
                         value=env_values.get(agent_model_env_name(agent_name), ""),
                         key=f"{form_key}_{agent_name}_model",
                     )
@@ -1307,7 +1320,7 @@ class GUI:
                         agent_caching_env_name(agent_name), "true"
                     )
                     agent_caching[agent_name] = cols[1].selectbox(
-                        f"{agent_name.title()} caching",
+                        f"{agent_label} caching",
                         ["true", "false", "default"],
                         index=["true", "false", "default"].index(
                             cache_default
@@ -1318,14 +1331,14 @@ class GUI:
                         help="Prompt caching override for this agent.",
                     )
                     agent_api_keys[agent_name] = st.text_input(
-                        f"{agent_name.title()} API key override",
+                        f"{agent_label} API key override",
                         value=env_values.get(agent_api_key_env_name(agent_name), ""),
                         type="password",
                         key=f"{form_key}_{agent_name}_api_key",
                         help="Optional per-agent credential saved as AIDER_COMPANY_API_KEY_<AGENT>.",
                     )
                     agent_local_settings[agent_name] = st.text_input(
-                        f"{agent_name.title()} local endpoint/setting",
+                        f"{agent_label} local endpoint/setting",
                         value=env_values.get(agent_local_env_name(agent_name), ""),
                         key=f"{form_key}_{agent_name}_local",
                         help="Optional local model endpoint or note saved as AIDER_COMPANY_LOCAL_<AGENT>.",

@@ -11,7 +11,15 @@ from aider.company.config import AgentConfig, CompanyConfig, default_company_con
 AgentCallback = Optional[Callable[[str, dict], Awaitable[None]]]
 
 
-DEPARTMENT_AGENT_NAMES = ("coo", "product", "ux", "engineering", "qa", "devops")
+DEPARTMENT_AGENT_NAMES = (
+    "coo",
+    "product",
+    "ux",
+    "engineering",
+    "reviewer",
+    "qa",
+    "devops",
+)
 COMPANY_AGENT_ROLE_NAMES = DEPARTMENT_AGENT_NAMES
 
 

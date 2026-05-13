@@ -30,6 +30,14 @@ def agent_caching_env_name(agent_name: str) -> str:
     return f"AIDER_COMPANY_CACHING_{agent_name.upper()}"
 
 
+def agent_api_key_env_name(agent_name: str) -> str:
+    return f"AIDER_COMPANY_API_KEY_{agent_name.upper()}"
+
+
+def agent_local_env_name(agent_name: str) -> str:
+    return f"AIDER_COMPANY_LOCAL_{agent_name.upper()}"
+
+
 def read_env_values(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.exists():
@@ -82,7 +90,10 @@ def collect_provider_key_updates(
 
 
 def collect_agent_env_updates(
-    agent_models: dict[str, str], agent_caching: dict[str, bool | str]
+    agent_models: dict[str, str],
+    agent_caching: dict[str, bool | str],
+    agent_api_keys: dict[str, str] | None = None,
+    agent_local_settings: dict[str, str] | None = None,
 ) -> dict[str, str]:
     updates: dict[str, str] = {}
     for agent_name in COMPANY_AGENT_NAMES:
@@ -99,6 +110,12 @@ def collect_agent_env_updates(
             else:
                 enabled = bool(value)
             updates[agent_caching_env_name(agent_name)] = "true" if enabled else "false"
+        api_key = ((agent_api_keys or {}).get(agent_name) or "").strip()
+        if api_key:
+            updates[agent_api_key_env_name(agent_name)] = api_key
+        local_setting = ((agent_local_settings or {}).get(agent_name) or "").strip()
+        if local_setting:
+            updates[agent_local_env_name(agent_name)] = local_setting
     return updates
 
 

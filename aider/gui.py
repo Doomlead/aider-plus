@@ -37,7 +37,9 @@ from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversa
 from aider.scrape import Scraper, has_playwright
 from aider.settings import (
     COMPANY_AGENT_NAMES,
+    agent_api_key_env_name,
     agent_caching_env_name,
+    agent_local_env_name,
     agent_model_env_name,
     apply_env_updates,
     collect_agent_env_updates,
@@ -51,6 +53,13 @@ from aider.settings import (
 logger = logging.getLogger(__name__)
 _COMPANY_SESSIONS = {}
 _COMPANY_SESSIONS_LOCK = threading.Lock()
+
+
+AGENT_CHAT_TARGETS = [
+    "Direct Aider",
+    "Company Workflow",
+    *[name.title() for name in COMPANY_AGENT_NAMES],
+]
 
 
 COMPANY_PHASES = [
@@ -181,6 +190,7 @@ class DesktopCompanySession:
         self.engineering = None
         self.qa = None
         self.devops = None
+        self.agent_loops = {}
         self.active_project = Project(
             project_id=str(uuid.uuid4()),
             name=Path(self.repo_path).name,
@@ -219,6 +229,7 @@ class DesktopCompanySession:
             company_config=company_config,
             base_config=AgentLoopConfig(use_architect_mode=True),
         )
+        self.agent_loops = agent_loops
         project_memory = self.coder.project_memory
         conversation_memory = self.coder.conversation_memory
         self.engineering = EngineeringDepartment(
@@ -481,6 +492,19 @@ class DesktopCompanySession:
                 metadata={"action": "revise", "feedback": feedback},
             ),
             f"Request changes {task_id}",
+        )
+
+    async def _run_agent_chat(self, agent_name: str, prompt: str):
+        normalized = str(agent_name or "").strip().lower()
+        loop = self.agent_loops.get(normalized)
+        if loop is None:
+            raise ValueError(f"Unknown company agent: {agent_name}")
+        return await loop.run(prompt)
+
+    def chat_with_agent(self, agent_name: str, prompt: str):
+        return self.submit_background(
+            self._run_agent_chat(agent_name, prompt),
+            f"{str(agent_name).title()} agent chat",
         )
 
     def pending_approvals(self):
@@ -1022,40 +1046,76 @@ class GUI:
             self.do_project_memory_page()
 
     def do_chat_tab(self):
-        if self.state.company_enabled:
-            if self.state.company_bypass_next:
+        st.caption(
+            "Use the tabs below to chat with classic Aider, the full Company workflow, "
+            "or any dedicated Company agent."
+        )
+        chat_tabs = st.tabs(AGENT_CHAT_TARGETS)
+        for target, tab in zip(AGENT_CHAT_TARGETS, chat_tabs):
+            with tab:
+                self.do_agent_chat_tab(target)
+
+    def do_agent_chat_tab(self, target: str):
+        self.state.active_agent_chat = target
+        if target == "Direct Aider":
+            if self.state.company_enabled and not self.state.company_bypass_next:
                 st.info(
-                    "Company Mode is active, but the next prompt will bypass it and use direct Aider chat."
+                    "This tab bypasses Company Mode and sends the prompt straight to classic Aider."
+                )
+            else:
+                st.info("You are chatting directly with classic Aider.")
+            self.do_messages_container()
+            self.do_agent_chat_box(target)
+            return
+
+        if target == "Company Workflow":
+            if self.state.company_enabled:
+                st.info(
+                    "Prompts in this tab are queued into the structured Company workflow "
+                    "using the selected Company route."
                 )
             else:
                 st.info(
-                    "Company Mode is active. Prompts are queued into the structured workflow; "
-                    "use the dedicated tabs for dashboard, approvals, audit log, and memory."
+                    "This tab starts or reuses the Company backend and queues prompts into "
+                    "the structured workflow even if Company Mode is paused globally."
                 )
         else:
-            st.info("Company Mode is paused. You are chatting directly with Aider.")
-        self.do_messages_container()
-        self.do_agent_chat_box()
+            st.info(
+                f"Prompts in this tab go directly to the {target} agent with its own "
+                "saved model, API key, local endpoint notes, and caching settings."
+            )
+        self.do_agent_messages_container(target)
+        self.do_agent_chat_box(target)
 
-    def do_agent_chat_box(self):
+    def do_agent_messages_container(self, target: str):
+        messages = self.state.agent_messages.setdefault(target, [])
+        if not messages:
+            st.caption("No messages in this agent tab yet.")
+        for msg in messages:
+            role = msg.get("role", "assistant")
+            with st.chat_message("user" if role == "user" else "assistant"):
+                st.write(msg.get("content", ""))
+
+    def do_agent_chat_box(self, target: str = "Direct Aider"):
         with st.container(border=True):
-            st.subheader("Chat with an agent")
+            st.subheader(f"Chat with {target}")
             st.caption(
-                "Send a prompt to the active Aider agent. When Company Mode is active, "
-                "the prompt follows the selected Company route unless bypass is enabled."
+                "Each tab keeps its own chat history. Agent tabs use per-agent settings "
+                "from the Settings page."
             )
             prompt = st.text_area(
                 "Agent prompt",
-                key=f"agent_prompt_{len(self.state.messages)}",
-                placeholder="Ask the agent to explain, edit, test, or implement something...",
+                key=f"agent_prompt_{target}_{len(self.state.agent_messages.get(target, []))}_{len(self.state.messages)}",
+                placeholder="Ask this agent to explain, edit, test, or implement something...",
                 disabled=self.prompt_pending(),
             )
             if st.button(
-                "Send to agent",
-                key="send_agent_prompt",
+                f"Send to {target}",
+                key=f"send_agent_prompt_{target}",
                 disabled=self.prompt_pending() or not prompt.strip(),
                 use_container_width=True,
             ):
+                self.state.agent_chat_target = target
                 self.prompt = prompt.strip()
 
     def get_company_for_page(self):
@@ -1233,27 +1293,43 @@ class GUI:
             )
             agent_models = {}
             agent_caching = {}
+            agent_api_keys = {}
+            agent_local_settings = {}
             for agent_name in COMPANY_AGENT_NAMES:
-                cols = st.columns([3, 2])
-                agent_models[agent_name] = cols[0].text_input(
-                    f"{agent_name.title()} model",
-                    value=env_values.get(agent_model_env_name(agent_name), ""),
-                    key=f"{form_key}_{agent_name}_model",
-                )
-                cache_default = env_values.get(
-                    agent_caching_env_name(agent_name), "true"
-                )
-                agent_caching[agent_name] = cols[1].selectbox(
-                    f"{agent_name.title()} caching",
-                    ["true", "false", "default"],
-                    index=["true", "false", "default"].index(
-                        cache_default
-                        if cache_default in {"true", "false", "default"}
-                        else "true"
-                    ),
-                    key=f"{form_key}_{agent_name}_caching",
-                    help="Prompt caching override for this agent.",
-                )
+                with st.expander(f"{agent_name.title()} agent", expanded=False):
+                    cols = st.columns([3, 2])
+                    agent_models[agent_name] = cols[0].text_input(
+                        f"{agent_name.title()} model",
+                        value=env_values.get(agent_model_env_name(agent_name), ""),
+                        key=f"{form_key}_{agent_name}_model",
+                    )
+                    cache_default = env_values.get(
+                        agent_caching_env_name(agent_name), "true"
+                    )
+                    agent_caching[agent_name] = cols[1].selectbox(
+                        f"{agent_name.title()} caching",
+                        ["true", "false", "default"],
+                        index=["true", "false", "default"].index(
+                            cache_default
+                            if cache_default in {"true", "false", "default"}
+                            else "true"
+                        ),
+                        key=f"{form_key}_{agent_name}_caching",
+                        help="Prompt caching override for this agent.",
+                    )
+                    agent_api_keys[agent_name] = st.text_input(
+                        f"{agent_name.title()} API key override",
+                        value=env_values.get(agent_api_key_env_name(agent_name), ""),
+                        type="password",
+                        key=f"{form_key}_{agent_name}_api_key",
+                        help="Optional per-agent credential saved as AIDER_COMPANY_API_KEY_<AGENT>.",
+                    )
+                    agent_local_settings[agent_name] = st.text_input(
+                        f"{agent_name.title()} local endpoint/setting",
+                        value=env_values.get(agent_local_env_name(agent_name), ""),
+                        key=f"{form_key}_{agent_name}_local",
+                        help="Optional local model endpoint or note saved as AIDER_COMPANY_LOCAL_<AGENT>.",
+                    )
 
             st.write("**API keys**")
             st.caption("Leave a saved key blank only if you do not want to change it.")
@@ -1290,7 +1366,11 @@ class GUI:
             updates = collect_provider_key_updates(
                 openai_key, anthropic_key, openrouter_key, provider_keys
             )
-            updates.update(collect_agent_env_updates(agent_models, agent_caching))
+            updates.update(
+                collect_agent_env_updates(
+                    agent_models, agent_caching, agent_api_keys, agent_local_settings
+                )
+            )
             write_env_updates(self.env_path, updates)
             apply_env_updates(updates)
             model_updates = {
@@ -1539,6 +1619,9 @@ class GUI:
         self.state.init("company_auto_refresh", True)
         self.state.init("company_bypass_next", False)
         self.state.init("company_event_version", 0)
+        self.state.init("agent_messages", {})
+        self.state.init("agent_chat_target", "Direct Aider")
+        self.state.init("active_agent_chat", "Direct Aider")
 
         self.state.init("initial_inchat_files", self.coder.get_inchat_relative_files())
         root = Path(self.coder.root)
@@ -1579,13 +1662,27 @@ class GUI:
         self.do_main_tabs()
         self.do_sidebar()
 
+        input_target = st.selectbox(
+            "Chat input target",
+            AGENT_CHAT_TARGETS,
+            index=(
+                AGENT_CHAT_TARGETS.index(self.state.agent_chat_target)
+                if self.state.agent_chat_target in AGENT_CHAT_TARGETS
+                else 0
+            ),
+            key="global_chat_input_target",
+            label_visibility="collapsed",
+            disabled=self.prompt_pending(),
+        )
+        self.state.active_agent_chat = input_target
         chat_placeholder = (
             "Say something (direct Aider chat)"
-            if not self.state.company_enabled or self.state.company_bypass_next
-            else "Say something for the Company workflow"
+            if input_target == "Direct Aider"
+            else f"Say something for {input_target}"
         )
         user_inp = st.chat_input(chat_placeholder)
         if user_inp:
+            self.state.agent_chat_target = input_target
             self.prompt = user_inp
 
         if self.prompt_pending():
@@ -1601,9 +1698,14 @@ class GUI:
 
         self.state.input_history.append(self.prompt)
 
-        if self.prompt_as:
+        target = self.state.agent_chat_target
+        if target != "Direct Aider":
+            self.state.agent_messages.setdefault(target, []).append(
+                {"role": "user", "content": self.prompt}
+            )
+        elif self.prompt_as:
             self.state.messages.append({"role": self.prompt_as, "content": self.prompt})
-        if self.prompt_as == "user":
+        if self.prompt_as == "user" and target == "Direct Aider":
             with self.messages.chat_message("user"):
                 st.write(self.prompt)
         elif self.prompt_as == "text":
@@ -1629,7 +1731,12 @@ class GUI:
 
     def process_chat(self):
         prompt = self.state.prompt
+        target = self.state.agent_chat_target
         self.state.prompt = None
+
+        if target != "Direct Aider":
+            self.process_agent_chat(target, prompt)
+            return
 
         if self.state.company_enabled and not self.state.company_bypass_next:
             self.process_company_chat(prompt)
@@ -1678,7 +1785,26 @@ class GUI:
         # re-render the UI for the non-prompt_pending state
         st.rerun()
 
-    def process_company_chat(self, prompt):
+    def process_agent_chat(self, target: str, prompt: str):
+        if target == "Company Workflow":
+            self.process_company_chat(prompt, target=target)
+            return
+
+        agent_name = target.lower()
+        try:
+            future = self.get_company().chat_with_agent(agent_name, prompt)
+            result = future.result()
+            content = result.get("summary") if isinstance(result, dict) else str(result)
+        except Exception as err:
+            content = f"{target} agent failed: {err}"
+            st.error(content)
+        self.state.agent_messages.setdefault(target, []).append(
+            {"role": "assistant", "content": content or "No response returned."}
+        )
+        self.state.agent_chat_target = "Direct Aider"
+        st.rerun()
+
+    def process_company_chat(self, prompt, target: str = "Company Workflow"):
         route = self.state.company_route
         if route == "Prototype":
             self.get_company().start_prototype(prompt)
@@ -1693,15 +1819,18 @@ class GUI:
                 "refresh status, review approvals, open the dashboard, or inspect "
                 "the audit log."
             )
-        self.state.messages.append(
-            {
-                "role": "assistant",
-                "content": (
-                    f"Queued `{route}` company workflow for background processing. "
-                    "Check the Company sidebar for progress and approvals."
-                ),
-            }
+        response_message = (
+            f"Queued `{route}` company workflow for background processing. "
+            "Check the Company sidebar for progress and approvals."
         )
+        if target == "Company Workflow":
+            self.state.agent_messages.setdefault(target, []).append(
+                {"role": "assistant", "content": response_message}
+            )
+        else:
+            self.state.messages.append(
+                {"role": "assistant", "content": response_message}
+            )
         st.rerun()
 
     def info(self, message, echo=True):

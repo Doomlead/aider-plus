@@ -20,6 +20,8 @@ def test_collect_provider_and_agent_settings_updates():
     agent_updates = collect_agent_env_updates(
         {"product": "gpt-4o", "engineering": "claude-sonnet-4-5"},
         {"product": True, "qa": False, "ux": "default"},
+        {"product": "product-key"},
+        {"engineering": "http://localhost:11434"},
     )
 
     assert provider_updates == {
@@ -32,6 +34,8 @@ def test_collect_provider_and_agent_settings_updates():
     assert agent_updates["AIDER_COMPANY_MODEL_ENGINEERING"] == "claude-sonnet-4-5"
     assert agent_updates["AIDER_COMPANY_CACHING_PRODUCT"] == "true"
     assert agent_updates["AIDER_COMPANY_CACHING_QA"] == "false"
+    assert agent_updates["AIDER_COMPANY_API_KEY_PRODUCT"] == "product-key"
+    assert agent_updates["AIDER_COMPANY_LOCAL_ENGINEERING"] == "http://localhost:11434"
     assert "AIDER_COMPANY_CACHING_UX" not in agent_updates
 
 

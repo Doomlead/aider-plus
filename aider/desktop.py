@@ -41,7 +41,9 @@ from aider.main import main as cli_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
 from aider.settings import (
     COMPANY_AGENT_NAMES,
+    agent_api_key_env_name,
     agent_caching_env_name,
+    agent_local_env_name,
     agent_model_env_name,
     apply_env_updates,
     collect_agent_env_updates,
@@ -87,6 +89,7 @@ class DesktopCompanySession:
         self.engineering = None
         self.qa = None
         self.devops = None
+        self.agent_loops = {}
         self.active_project = Project(
             project_id=str(uuid.uuid4()),
             name=Path(self.repo_path).name,
@@ -125,6 +128,7 @@ class DesktopCompanySession:
             company_config=company_config,
             base_config=AgentLoopConfig(use_architect_mode=True),
         )
+        self.agent_loops = agent_loops
         project_memory = self.coder.project_memory
         conversation_memory = self.coder.conversation_memory
         self.engineering = EngineeringDepartment(
@@ -394,6 +398,19 @@ class DesktopCompanySession:
             f"Request changes {task_id}",
         )
 
+    async def _run_agent_chat(self, agent_name: str, prompt: str):
+        normalized = str(agent_name or "").strip().lower()
+        loop = self.agent_loops.get(normalized)
+        if loop is None:
+            raise ValueError(f"Unknown company agent: {agent_name}")
+        return await loop.run(prompt)
+
+    def chat_with_agent(self, agent_name: str, prompt: str):
+        return self.submit_background(
+            self._run_agent_chat(agent_name, prompt),
+            f"{str(agent_name).title()} agent chat",
+        )
+
     def pending_approvals(self):
         return self.orchestrator.state.get_pending_approvals()
 
@@ -549,6 +566,9 @@ class AiderPlusDesktop:
         self.api_key_vars: dict[str, tk.StringVar] = {}
         self.agent_model_vars: dict[str, tk.StringVar] = {}
         self.agent_caching_vars: dict[str, tk.BooleanVar] = {}
+        self.agent_api_key_vars: dict[str, tk.StringVar] = {}
+        self.agent_local_vars: dict[str, tk.StringVar] = {}
+        self.chat_transcripts: dict[str, scrolledtext.ScrolledText] = {}
 
         self._setup_style()
         self._setup_ui()
@@ -609,30 +629,35 @@ class AiderPlusDesktop:
         self.status_label.pack(fill="x", pady=(8, 0))
 
     def _build_chat_tab(self):
-        self.chat_text = scrolledtext.ScrolledText(
-            self.chat_frame,
-            wrap=tk.WORD,
-            state="disabled",
-            font=("TkDefaultFont", 10),
-            padx=10,
-            pady=10,
-        )
-        self.chat_text.pack(fill="both", expand=True)
-        self.chat_text.tag_configure(
-            "user", foreground="#155EEF", font=("TkDefaultFont", 10, "bold")
-        )
-        self.chat_text.tag_configure(
-            "aider", foreground="#047857", font=("TkDefaultFont", 10, "bold")
-        )
-        self.chat_text.tag_configure(
-            "system", foreground="#6B7280", font=("TkDefaultFont", 10, "italic")
-        )
-        self.chat_text.tag_configure(
-            "error", foreground="#B42318", font=("TkDefaultFont", 10, "bold")
-        )
-        self.chat_text.tag_configure(
-            "code", font=("TkFixedFont", 10), background="#F3F4F6"
-        )
+        self.chat_notebook = ttk.Notebook(self.chat_frame)
+        self.chat_notebook.pack(fill="both", expand=True)
+        self.chat_targets = [
+            "Direct Aider",
+            "Company Workflow",
+            *[name.title() for name in COMPANY_AGENT_NAMES],
+        ]
+        for target in self.chat_targets:
+            frame = ttk.Frame(self.chat_notebook, padding=4)
+            text = scrolledtext.ScrolledText(
+                frame,
+                wrap=tk.WORD,
+                state="disabled",
+                font=("TkDefaultFont", 10),
+                padx=10,
+                pady=10,
+            )
+            text.pack(fill="both", expand=True)
+            for tag, foreground, font in (
+                ("user", "#155EEF", ("TkDefaultFont", 10, "bold")),
+                ("aider", "#047857", ("TkDefaultFont", 10, "bold")),
+                ("system", "#6B7280", ("TkDefaultFont", 10, "italic")),
+                ("error", "#B42318", ("TkDefaultFont", 10, "bold")),
+            ):
+                text.tag_configure(tag, foreground=foreground, font=font)
+            text.tag_configure("code", font=("TkFixedFont", 10), background="#F3F4F6")
+            self.chat_transcripts[target] = text
+            self.chat_notebook.add(frame, text=target)
+        self.chat_text = self.chat_transcripts["Company Workflow"]
 
         input_frame = ttk.Frame(self.chat_frame)
         input_frame.pack(fill="x", pady=(8, 0))
@@ -649,11 +674,13 @@ class AiderPlusDesktop:
         )
         self.send_button.pack(side="right", padx=(8, 0))
 
-        self._append_chat(
-            "System",
-            "Company Mode is starting. Send a request once the status bar says Ready.",
-            tag="system",
-        )
+        for target in self.chat_targets:
+            self._append_chat(
+                "System",
+                "Backend is starting. Send a request once the status bar says Ready.",
+                tag="system",
+                target=target,
+            )
 
     def _build_settings_tab(self):
         intro = ttk.Label(
@@ -762,7 +789,25 @@ class AiderPlusDesktop:
             ttk.Checkbutton(agents_frame, text="Enabled", variable=caching_var).grid(
                 row=row, column=2, sticky="w", pady=2
             )
+            api_var = tk.StringVar()
+            self.agent_api_key_vars[agent_name] = api_var
+            ttk.Entry(agents_frame, textvariable=api_var, show="•", width=28).grid(
+                row=row, column=3, sticky="ew", padx=8, pady=2
+            )
+            local_var = tk.StringVar()
+            self.agent_local_vars[agent_name] = local_var
+            ttk.Entry(agents_frame, textvariable=local_var, width=28).grid(
+                row=row, column=4, sticky="ew", padx=8, pady=2
+            )
+        ttk.Label(agents_frame, text="API key override").grid(
+            row=0, column=3, sticky="w"
+        )
+        ttk.Label(agents_frame, text="Local endpoint/setting").grid(
+            row=0, column=4, sticky="w"
+        )
         agents_frame.columnconfigure(1, weight=1)
+        agents_frame.columnconfigure(3, weight=1)
+        agents_frame.columnconfigure(4, weight=1)
 
         conf_frame = ttk.LabelFrame(content, text="Advanced .aider.conf.yml", padding=8)
         conf_frame.pack(fill="both", expand=True, pady=(0, 8))
@@ -928,6 +973,10 @@ class AiderPlusDesktop:
                 env_values.get(agent_caching_env_name(agent_name), "true").lower()
                 != "false"
             )
+        for agent_name, var in self.agent_api_key_vars.items():
+            var.set(env_values.get(agent_api_key_env_name(agent_name), ""))
+        for agent_name, var in self.agent_local_vars.items():
+            var.set(env_values.get(agent_local_env_name(agent_name), ""))
         self.provider_keys_text.delete("1.0", tk.END)
         self.conf_text.delete("1.0", tk.END)
         self.conf_text.insert(tk.END, conf_text)
@@ -949,8 +998,14 @@ class AiderPlusDesktop:
         agent_caching = {
             name: var.get() for name, var in self.agent_caching_vars.items()
         }
+        agent_api_keys = {
+            name: var.get() for name, var in self.agent_api_key_vars.items()
+        }
+        agent_local_settings = {
+            name: var.get() for name, var in self.agent_local_vars.items()
+        }
         env_updates = provider_updates | collect_agent_env_updates(
-            agent_models, agent_caching
+            agent_models, agent_caching, agent_api_keys, agent_local_settings
         )
         write_env_updates(self.env_path, env_updates)
         apply_env_updates(env_updates)
@@ -1036,33 +1091,54 @@ class AiderPlusDesktop:
         prompt = self.chat_entry.get().strip()
         if not prompt:
             return
+        target = self._current_chat_target()
         self.chat_entry.delete(0, tk.END)
-        self._append_chat("You", prompt, tag="user")
+        self._append_chat("You", prompt, tag="user", target=target)
 
-        if self.company and self.company.orchestrator:
-            self.turns_this_session += 1
-            future = self.company.run_auto(prompt)
-            self._track_future(future, "Company response")
-            self._set_busy(True, "Company workflow running…")
-        elif self.coder:
+        if target == "Direct Aider" and self.coder:
             self.turns_this_session += 1
             future = _submit_threaded(lambda: self.coder.run(with_message=prompt))
-            self._track_future(future, "Aider response")
+            self._track_future(future, "Aider response", target=target)
             self._set_busy(True, "Aider is responding…")
+        elif (
+            target == "Company Workflow" and self.company and self.company.orchestrator
+        ):
+            self.turns_this_session += 1
+            future = self.company.run_auto(prompt)
+            self._track_future(future, "Company response", target=target)
+            self._set_busy(True, "Company workflow running…")
+        elif self.company:
+            self.turns_this_session += 1
+            agent_name = target.lower()
+            future = self.company.chat_with_agent(agent_name, prompt)
+            self._track_future(future, f"{target} agent response", target=target)
+            self._set_busy(True, f"{target} agent is responding…")
         else:
             self._append_chat(
                 "Aider",
                 "Backend is still starting. Please try again shortly.",
                 tag="system",
+                target=target,
             )
 
-    def _append_chat(self, sender: str, message: str, tag: str = "aider"):
-        self.chat_text.config(state="normal")
+    def _current_chat_target(self) -> str:
+        if not hasattr(self, "chat_notebook"):
+            return "Company Workflow"
+        selected = self.chat_notebook.select()
+        return self.chat_notebook.tab(selected, "text") or "Company Workflow"
+
+    def _append_chat(
+        self, sender: str, message: str, tag: str = "aider", target: str | None = None
+    ):
+        widget = self.chat_transcripts.get(
+            target or self._current_chat_target(), self.chat_text
+        )
+        widget.config(state="normal")
         label_tag = tag if tag in {"user", "aider", "system", "error"} else "aider"
-        self.chat_text.insert(tk.END, f"{sender}: ", label_tag)
-        _insert_text_with_code_tags(self.chat_text, str(message).rstrip() + "\n\n")
-        self.chat_text.see(tk.END)
-        self.chat_text.config(state="disabled")
+        widget.insert(tk.END, f"{sender}: ", label_tag)
+        _insert_text_with_code_tags(widget, str(message).rstrip() + "\n\n")
+        widget.see(tk.END)
+        widget.config(state="disabled")
 
     def refresh_dashboard(self):
         if not self.company:
@@ -1264,8 +1340,10 @@ class AiderPlusDesktop:
             )
         return "\n\n".join(sections)
 
-    def _track_future(self, future: concurrent.futures.Future, label: str):
-        self._future_labels[future] = label
+    def _track_future(
+        self, future: concurrent.futures.Future, label: str, target: str | None = None
+    ):
+        self._future_labels[future] = (label, target)
         future.add_done_callback(lambda done: self._ui_queue.put(("future_done", done)))
 
     def _poll_background(self):
@@ -1321,17 +1399,27 @@ class AiderPlusDesktop:
             self.company.background_error = None
 
     def _handle_future_done(self, future: concurrent.futures.Future):
-        label = self._future_labels.pop(future, "Background task")
+        label_info = self._future_labels.pop(future, ("Background task", None))
+        if isinstance(label_info, tuple):
+            label, target = label_info
+        else:
+            label, target = label_info, None
         try:
             result = future.result()
         except concurrent.futures.CancelledError:
-            self._append_chat("System", f"{label} was cancelled.", tag="system")
+            self._append_chat(
+                "System", f"{label} was cancelled.", tag="system", target=target
+            )
         except Exception as err:
-            self._append_chat("Error", f"{label} failed: {err}", tag="error")
+            self._append_chat(
+                "Error", f"{label} failed: {err}", tag="error", target=target
+            )
             self._set_busy(False, f"{label} failed")
         else:
             if result:
-                self._append_chat("Aider", _format_result(result), tag="aider")
+                self._append_chat(
+                    "Aider", _format_result(result), tag="aider", target=target
+                )
             self._set_busy(False, "Ready")
             self.refresh_all()
 

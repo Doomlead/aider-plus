@@ -41,7 +41,9 @@ from aider.main import main as cli_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
 from aider.settings import (
     COMPANY_AGENT_NAMES,
+    agent_api_key_env_name,
     agent_caching_env_name,
+    agent_local_env_name,
     agent_model_env_name,
     apply_env_updates,
     collect_agent_env_updates,
@@ -87,6 +89,7 @@ class DesktopCompanySession:
         self.engineering = None
         self.qa = None
         self.devops = None
+        self.agent_loops = {}
         self.active_project = Project(
             project_id=str(uuid.uuid4()),
             name=Path(self.repo_path).name,
@@ -125,6 +128,7 @@ class DesktopCompanySession:
             company_config=company_config,
             base_config=AgentLoopConfig(use_architect_mode=True),
         )
+        self.agent_loops = agent_loops
         project_memory = self.coder.project_memory
         conversation_memory = self.coder.conversation_memory
         self.engineering = EngineeringDepartment(
@@ -394,6 +398,19 @@ class DesktopCompanySession:
             f"Request changes {task_id}",
         )
 
+    async def _run_agent_chat(self, agent_name: str, prompt: str):
+        normalized = str(agent_name or "").strip().lower()
+        loop = self.agent_loops.get(normalized)
+        if loop is None:
+            raise ValueError(f"Unknown company agent: {agent_name}")
+        return await loop.run(prompt)
+
+    def chat_with_agent(self, agent_name: str, prompt: str):
+        return self.submit_background(
+            self._run_agent_chat(agent_name, prompt),
+            f"{str(agent_name).title()} agent chat",
+        )
+
     def pending_approvals(self):
         return self.orchestrator.state.get_pending_approvals()
 
@@ -525,6 +542,172 @@ WINDOW_SIZE = "1200x800"
 MIN_WINDOW_SIZE = (1000, 700)
 POLL_INTERVAL_MS = 350
 
+DESKTOP_TAB_GUIDE = {
+    "Chat": (
+        "Talk to classic Aider, send work through the full Company workflow, or open a "
+        "dedicated conversation with one Company agent. The text box at the bottom sends "
+        "to whichever chat sub-tab is selected."
+    ),
+    "Settings": (
+        "Save repo-local model, provider, per-agent, and advanced Aider configuration. "
+        "Settings are written to .env and .aider.conf.yml in the current repository."
+    ),
+    "Company Dashboard": (
+        "Monitor Company Mode progress, active runs, recent deliverables, and COO routing "
+        "or recovery activity."
+    ),
+    "Approvals": (
+        "Review human gates raised by Product, UX, Engineering, QA, DevOps, or the COO and "
+        "approve, reject, or request changes with feedback."
+    ),
+    "Audit": (
+        "Read the repo-scoped audit log for Company workflow events, decisions, approvals, "
+        "and generated artifacts."
+    ),
+    "Guide": (
+        "Explains every desktop tab, chat target, settings field, dashboard field, approval "
+        "field, and audit field."
+    ),
+}
+
+CHAT_TARGET_GUIDE = {
+    "Direct Aider": "Sends the prompt straight to the normal Aider coding session.",
+    "Company Workflow": (
+        "Routes the prompt through COO-led Product → UX → Engineering → QA → DevOps orchestration."
+    ),
+    "Coo": "Talks directly with the COO routing/orchestration agent.",
+    "Product": "Talks directly with the Product agent for requirements, PRDs, and ambiguity checks.",
+    "Ux": "Talks directly with the UX agent for design specs, screens, states, and accessibility.",
+    "Engineering": "Talks directly with the Engineering agent for implementation plans and code changes.",
+    "Reviewer": "Talks directly with the reviewer agent for implementation review and quality checks.",
+    "Qa": "Talks directly with the QA agent for test plans, test execution guidance, and validation.",
+    "Devops": "Talks directly with the DevOps agent for release, deployment, and operational guidance.",
+}
+
+DESKTOP_CHROME_GUIDE = (
+    ("⚙ Settings", "Header shortcut that opens the Settings tab."),
+    ("Repo", "Header label showing the repository connected to this desktop session."),
+    ("Status bar", "Bottom label showing startup, busy, ready, or error state."),
+)
+
+CHAT_FIELD_GUIDE = (
+    (
+        "Chat sub-tab",
+        "Selects which transcript and agent/workflow receives the next message.",
+    ),
+    (
+        "Transcript",
+        "Read-only conversation history for the selected Direct Aider, workflow, or agent tab.",
+    ),
+    ("Message box", "Type the prompt to send to the selected chat sub-tab."),
+    ("Send", "Submits the message box contents to the selected chat sub-tab."),
+)
+
+SETTINGS_FIELD_GUIDE = (
+    (
+        "Main model",
+        "Primary model used by direct Aider chat for answers and code edits.",
+    ),
+    ("Weak model", "Optional cheaper/faster model used for lightweight helper work."),
+    ("Editor model", "Optional model used for editor-mode file edits."),
+    (
+        "Apply model to the current desktop session now",
+        "Immediately rebuilds the active desktop coder with the selected Aider models after saving.",
+    ),
+    ("OpenAI API key", "Repo-local OPENAI_API_KEY value saved to .env."),
+    ("Anthropic API key", "Repo-local ANTHROPIC_API_KEY value saved to .env."),
+    ("OpenRouter API key", "Repo-local OPENROUTER_API_KEY value saved to .env."),
+    (
+        "Other provider keys/env",
+        "Additional KEY=value lines saved to .env, such as GEMINI_API_KEY or local provider settings.",
+    ),
+    (
+        "Agent",
+        "The Company role being configured: COO, Product, UX, Engineering, Reviewer, QA, or DevOps.",
+    ),
+    (
+        "Model override",
+        "Optional AIDER_COMPANY_MODEL_<AGENT> model name for that one agent; blank uses defaults.",
+    ),
+    (
+        "Prompt caching",
+        "Turns request-level prompt caching on or off for that one agent when supported by the provider.",
+    ),
+    (
+        "API key override",
+        "Optional AIDER_COMPANY_API_KEY_<AGENT> secret for a role-specific provider credential.",
+    ),
+    (
+        "Local endpoint/setting",
+        "Optional AIDER_COMPANY_LOCAL_<AGENT> value for a local model endpoint or runtime note.",
+    ),
+    (
+        "Advanced .aider.conf.yml",
+        "Raw Aider YAML configuration; model fields above are merged into this file on save.",
+    ),
+    ("Reload Settings", "Reloads values from .env and .aider.conf.yml into the form."),
+    (
+        "Save Settings",
+        "Writes form values, applies environment updates, and restarts Company sessions.",
+    ),
+)
+
+DASHBOARD_FIELD_GUIDE = (
+    (
+        "Refresh Dashboard",
+        "Manually reloads metrics, Company status, deliverables, and COO activity.",
+    ),
+    ("Phase", "Current project workflow phase reported by Company Mode."),
+    ("Pending Approvals", "Number of open approval gates requiring user action."),
+    ("Active Runs", "Number of background Company tasks still running."),
+    ("Chat Turns", "Number of prompts sent during this desktop session."),
+    (
+        "Company Status",
+        "Plain-text orchestrator status for departments, queues, and project state.",
+    ),
+    (
+        "Recent Deliverables",
+        "Latest PRDs, design specs, engineering output, QA results, and deployment notes.",
+    ),
+    (
+        "COO Activity",
+        "COO route, active department, recent events, errors, and recovery suggestions.",
+    ),
+)
+
+APPROVALS_FIELD_GUIDE = (
+    ("Refresh Approvals", "Reloads pending approval gates from Company state."),
+    ("Task", "Identifier for the gated task or approval request."),
+    ("Department", "Agent or department that created the approval gate."),
+    (
+        "Gate",
+        "Type of approval being requested, such as PRD approval or human escalation.",
+    ),
+    ("Status", "Current approval state, usually pending until acted on."),
+    (
+        "Approval Details",
+        "Full JSON payload for the selected approval, including artifact preview and metadata.",
+    ),
+    (
+        "Feedback",
+        "Optional message sent with approve/reject, required when requesting changes.",
+    ),
+    ("Approve", "Accepts the selected gate and lets the workflow continue."),
+    (
+        "Request Changes",
+        "Rejects the gate as a revision request and sends the feedback back to the workflow.",
+    ),
+    ("Reject", "Rejects the selected gate and records the feedback/reason."),
+)
+
+AUDIT_FIELD_GUIDE = (
+    ("Refresh Audit", "Reloads the latest audit records from project memory."),
+    (
+        "Audit log",
+        "Read-only chronological record of Company workflow events and decisions.",
+    ),
+)
+
 
 class AiderPlusDesktop:
     """Pure Tkinter desktop shell around Aider Company Mode."""
@@ -549,6 +732,9 @@ class AiderPlusDesktop:
         self.api_key_vars: dict[str, tk.StringVar] = {}
         self.agent_model_vars: dict[str, tk.StringVar] = {}
         self.agent_caching_vars: dict[str, tk.BooleanVar] = {}
+        self.agent_api_key_vars: dict[str, tk.StringVar] = {}
+        self.agent_local_vars: dict[str, tk.StringVar] = {}
+        self.chat_transcripts: dict[str, scrolledtext.ScrolledText] = {}
 
         self._setup_style()
         self._setup_ui()
@@ -590,49 +776,88 @@ class AiderPlusDesktop:
         self.approvals_frame = ttk.Frame(self.notebook, padding=8)
         self.audit_frame = ttk.Frame(self.notebook, padding=8)
         self.settings_frame = ttk.Frame(self.notebook, padding=8)
+        self.guide_frame = ttk.Frame(self.notebook, padding=8)
 
         self.notebook.add(self.chat_frame, text="Chat")
         self.notebook.add(self.settings_frame, text="Settings")
         self.notebook.add(self.dashboard_frame, text="Company Dashboard")
         self.notebook.add(self.approvals_frame, text="Approvals")
         self.notebook.add(self.audit_frame, text="Audit")
+        self.notebook.add(self.guide_frame, text="Guide")
 
         self._build_chat_tab()
         self._build_settings_tab()
         self._build_dashboard_tab()
         self._build_approvals_tab()
         self._build_audit_tab()
+        self._build_guide_tab()
 
         self.status_label = ttk.Label(
             outer, text="Ready", anchor="w", style="Status.TLabel"
         )
         self.status_label.pack(fill="x", pady=(8, 0))
 
+    def _add_tab_description(self, parent, tab_name: str):
+        ttk.Label(
+            parent,
+            text=DESKTOP_TAB_GUIDE[tab_name],
+            wraplength=960,
+            justify="left",
+        ).pack(fill="x", pady=(0, 8))
+
+    def _add_field_guide(self, parent, title: str, rows):
+        frame = ttk.LabelFrame(parent, text=title, padding=8)
+        frame.pack(fill="x", pady=(0, 8))
+        for row, (field, description) in enumerate(rows):
+            ttk.Label(frame, text=field, style="Metric.TLabel").grid(
+                row=row, column=0, sticky="nw", pady=2
+            )
+            ttk.Label(frame, text=description, wraplength=760, justify="left").grid(
+                row=row, column=1, sticky="ew", padx=(12, 0), pady=2
+            )
+        frame.columnconfigure(1, weight=1)
+        return frame
+
     def _build_chat_tab(self):
-        self.chat_text = scrolledtext.ScrolledText(
-            self.chat_frame,
-            wrap=tk.WORD,
-            state="disabled",
-            font=("TkDefaultFont", 10),
-            padx=10,
-            pady=10,
-        )
-        self.chat_text.pack(fill="both", expand=True)
-        self.chat_text.tag_configure(
-            "user", foreground="#155EEF", font=("TkDefaultFont", 10, "bold")
-        )
-        self.chat_text.tag_configure(
-            "aider", foreground="#047857", font=("TkDefaultFont", 10, "bold")
-        )
-        self.chat_text.tag_configure(
-            "system", foreground="#6B7280", font=("TkDefaultFont", 10, "italic")
-        )
-        self.chat_text.tag_configure(
-            "error", foreground="#B42318", font=("TkDefaultFont", 10, "bold")
-        )
-        self.chat_text.tag_configure(
-            "code", font=("TkFixedFont", 10), background="#F3F4F6"
-        )
+        self._add_tab_description(self.chat_frame, "Chat")
+        self._add_field_guide(self.chat_frame, "Chat Field Guide", CHAT_FIELD_GUIDE)
+        self.chat_notebook = ttk.Notebook(self.chat_frame)
+        self.chat_notebook.pack(fill="both", expand=True)
+        self.chat_targets = [
+            "Direct Aider",
+            "Company Workflow",
+            *[name.title() for name in COMPANY_AGENT_NAMES],
+        ]
+        for target in self.chat_targets:
+            frame = ttk.Frame(self.chat_notebook, padding=4)
+            ttk.Label(
+                frame,
+                text=CHAT_TARGET_GUIDE.get(
+                    target, "Talk directly with this Company agent."
+                ),
+                wraplength=900,
+                justify="left",
+            ).pack(fill="x", pady=(0, 4))
+            text = scrolledtext.ScrolledText(
+                frame,
+                wrap=tk.WORD,
+                state="disabled",
+                font=("TkDefaultFont", 10),
+                padx=10,
+                pady=10,
+            )
+            text.pack(fill="both", expand=True)
+            for tag, foreground, font in (
+                ("user", "#155EEF", ("TkDefaultFont", 10, "bold")),
+                ("aider", "#047857", ("TkDefaultFont", 10, "bold")),
+                ("system", "#6B7280", ("TkDefaultFont", 10, "italic")),
+                ("error", "#B42318", ("TkDefaultFont", 10, "bold")),
+            ):
+                text.tag_configure(tag, foreground=foreground, font=font)
+            text.tag_configure("code", font=("TkFixedFont", 10), background="#F3F4F6")
+            self.chat_transcripts[target] = text
+            self.chat_notebook.add(frame, text=target)
+        self.chat_text = self.chat_transcripts["Company Workflow"]
 
         input_frame = ttk.Frame(self.chat_frame)
         input_frame.pack(fill="x", pady=(8, 0))
@@ -649,18 +874,20 @@ class AiderPlusDesktop:
         )
         self.send_button.pack(side="right", padx=(8, 0))
 
-        self._append_chat(
-            "System",
-            "Company Mode is starting. Send a request once the status bar says Ready.",
-            tag="system",
-        )
+        for target in self.chat_targets:
+            self._append_chat(
+                "System",
+                "Backend is starting. Send a request once the status bar says Ready.",
+                tag="system",
+                target=target,
+            )
 
     def _build_settings_tab(self):
+        self._add_tab_description(self.settings_frame, "Settings")
         intro = ttk.Label(
             self.settings_frame,
             text=(
-                "Configure Aider models, provider API keys, per-agent Company Mode models, "
-                "prompt caching, and any extra .aider.conf.yml options."
+                "Every field below is described inline and summarized in the Settings field guide."
             ),
             wraplength=900,
             justify="left",
@@ -681,8 +908,16 @@ class AiderPlusDesktop:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+        self._add_field_guide(content, "Settings Field Guide", SETTINGS_FIELD_GUIDE)
+
         model_frame = ttk.LabelFrame(content, text="Aider Models", padding=8)
         model_frame.pack(fill="x", pady=(0, 8))
+        ttk.Label(
+            model_frame,
+            text="These fields control the default direct Aider model stack.",
+            wraplength=820,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 6))
         for row, (key, label, help_text) in enumerate(
             (
                 ("model", "Main model", "Primary model for answers and edits."),
@@ -696,7 +931,8 @@ class AiderPlusDesktop:
                     "Editor model",
                     "Optional model for editor-mode edits.",
                 ),
-            )
+            ),
+            start=1,
         ):
             ttk.Label(model_frame, text=label).grid(
                 row=row, column=0, sticky="w", pady=2
@@ -714,17 +950,24 @@ class AiderPlusDesktop:
             model_frame,
             text="Apply model to the current desktop session now",
             variable=self.apply_model_now_var,
-        ).grid(row=3, column=1, sticky="w", pady=(6, 0))
+        ).grid(row=4, column=1, sticky="w", pady=(6, 0))
         model_frame.columnconfigure(1, weight=1)
 
         api_frame = ttk.LabelFrame(content, text="API Keys and Environment", padding=8)
         api_frame.pack(fill="x", pady=(0, 8))
+        ttk.Label(
+            api_frame,
+            text="Provider credentials and extra KEY=value environment settings saved to .env.",
+            wraplength=820,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         for row, (key, label) in enumerate(
             (
                 ("OPENAI_API_KEY", "OpenAI API key"),
                 ("ANTHROPIC_API_KEY", "Anthropic API key"),
                 ("OPENROUTER_API_KEY", "OpenRouter API key"),
-            )
+            ),
+            start=1,
         ):
             ttk.Label(api_frame, text=label).grid(row=row, column=0, sticky="w", pady=2)
             var = tk.StringVar()
@@ -734,21 +977,27 @@ class AiderPlusDesktop:
             )
         ttk.Label(
             api_frame, text="Other provider keys/env (KEY=value, one per line)"
-        ).grid(row=3, column=0, sticky="nw", pady=2)
+        ).grid(row=4, column=0, sticky="nw", pady=2)
         self.provider_keys_text = scrolledtext.ScrolledText(
             api_frame, wrap=tk.WORD, height=4
         )
-        self.provider_keys_text.grid(row=3, column=1, sticky="ew", padx=8, pady=2)
+        self.provider_keys_text.grid(row=4, column=1, sticky="ew", padx=8, pady=2)
         api_frame.columnconfigure(1, weight=1)
 
         agents_frame = ttk.LabelFrame(
             content, text="Company Agent Models and Caching", padding=8
         )
         agents_frame.pack(fill="x", pady=(0, 8))
-        ttk.Label(agents_frame, text="Agent").grid(row=0, column=0, sticky="w")
-        ttk.Label(agents_frame, text="Model override").grid(row=0, column=1, sticky="w")
-        ttk.Label(agents_frame, text="Prompt caching").grid(row=0, column=2, sticky="w")
-        for row, agent_name in enumerate(COMPANY_AGENT_NAMES, start=1):
+        ttk.Label(
+            agents_frame,
+            text="Each row configures one Company agent. Blank overrides fall back to shared defaults.",
+            wraplength=980,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=5, sticky="ew", pady=(0, 6))
+        ttk.Label(agents_frame, text="Agent").grid(row=1, column=0, sticky="w")
+        ttk.Label(agents_frame, text="Model override").grid(row=1, column=1, sticky="w")
+        ttk.Label(agents_frame, text="Prompt caching").grid(row=1, column=2, sticky="w")
+        for row, agent_name in enumerate(COMPANY_AGENT_NAMES, start=2):
             ttk.Label(agents_frame, text=agent_name.title()).grid(
                 row=row, column=0, sticky="w", pady=2
             )
@@ -762,10 +1011,34 @@ class AiderPlusDesktop:
             ttk.Checkbutton(agents_frame, text="Enabled", variable=caching_var).grid(
                 row=row, column=2, sticky="w", pady=2
             )
+            api_var = tk.StringVar()
+            self.agent_api_key_vars[agent_name] = api_var
+            ttk.Entry(agents_frame, textvariable=api_var, show="•", width=28).grid(
+                row=row, column=3, sticky="ew", padx=8, pady=2
+            )
+            local_var = tk.StringVar()
+            self.agent_local_vars[agent_name] = local_var
+            ttk.Entry(agents_frame, textvariable=local_var, width=28).grid(
+                row=row, column=4, sticky="ew", padx=8, pady=2
+            )
+        ttk.Label(agents_frame, text="API key override").grid(
+            row=1, column=3, sticky="w"
+        )
+        ttk.Label(agents_frame, text="Local endpoint/setting").grid(
+            row=1, column=4, sticky="w"
+        )
         agents_frame.columnconfigure(1, weight=1)
+        agents_frame.columnconfigure(3, weight=1)
+        agents_frame.columnconfigure(4, weight=1)
 
         conf_frame = ttk.LabelFrame(content, text="Advanced .aider.conf.yml", padding=8)
         conf_frame.pack(fill="both", expand=True, pady=(0, 8))
+        ttk.Label(
+            conf_frame,
+            text="Edit raw Aider YAML. Saving merges the model fields above into this text.",
+            wraplength=820,
+            justify="left",
+        ).pack(fill="x", pady=(0, 4))
         self.conf_text = scrolledtext.ScrolledText(conf_frame, wrap=tk.WORD, height=10)
         self.conf_text.pack(fill="both", expand=True)
 
@@ -785,6 +1058,10 @@ class AiderPlusDesktop:
         self.notebook.select(self.settings_frame)
 
     def _build_dashboard_tab(self):
+        self._add_tab_description(self.dashboard_frame, "Company Dashboard")
+        self._add_field_guide(
+            self.dashboard_frame, "Dashboard Field Guide", DASHBOARD_FIELD_GUIDE
+        )
         toolbar = ttk.Frame(self.dashboard_frame)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(
@@ -839,6 +1116,10 @@ class AiderPlusDesktop:
         panes.add(coo_frame, weight=2)
 
     def _build_approvals_tab(self):
+        self._add_tab_description(self.approvals_frame, "Approvals")
+        self._add_field_guide(
+            self.approvals_frame, "Approvals Field Guide", APPROVALS_FIELD_GUIDE
+        )
         toolbar = ttk.Frame(self.approvals_frame)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(
@@ -888,6 +1169,8 @@ class AiderPlusDesktop:
         )
 
     def _build_audit_tab(self):
+        self._add_tab_description(self.audit_frame, "Audit")
+        self._add_field_guide(self.audit_frame, "Audit Field Guide", AUDIT_FIELD_GUIDE)
         toolbar = ttk.Frame(self.audit_frame)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(toolbar, text="Refresh Audit", command=self.refresh_audit).pack(
@@ -896,6 +1179,35 @@ class AiderPlusDesktop:
 
         self.audit_text = scrolledtext.ScrolledText(self.audit_frame, wrap=tk.WORD)
         self.audit_text.pack(fill="both", expand=True)
+
+    def _build_guide_tab(self):
+        self._add_tab_description(self.guide_frame, "Guide")
+        canvas = tk.Canvas(self.guide_frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(
+            self.guide_frame, orient="vertical", command=canvas.yview
+        )
+        content = ttk.Frame(canvas)
+        content.bind(
+            "<Configure>",
+            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.create_window((0, 0), window=content, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self._add_field_guide(content, "Window Controls", DESKTOP_CHROME_GUIDE)
+        self._add_field_guide(
+            content, "Top-Level Tabs", tuple(DESKTOP_TAB_GUIDE.items())
+        )
+        self._add_field_guide(content, "Chat Fields", CHAT_FIELD_GUIDE)
+        self._add_field_guide(
+            content, "Chat Sub-Tabs", tuple(CHAT_TARGET_GUIDE.items())
+        )
+        self._add_field_guide(content, "Settings Fields", SETTINGS_FIELD_GUIDE)
+        self._add_field_guide(content, "Dashboard Fields", DASHBOARD_FIELD_GUIDE)
+        self._add_field_guide(content, "Approval Fields", APPROVALS_FIELD_GUIDE)
+        self._add_field_guide(content, "Audit Fields", AUDIT_FIELD_GUIDE)
 
     def refresh_settings_fields(self):
         if not self.coder:
@@ -928,6 +1240,10 @@ class AiderPlusDesktop:
                 env_values.get(agent_caching_env_name(agent_name), "true").lower()
                 != "false"
             )
+        for agent_name, var in self.agent_api_key_vars.items():
+            var.set(env_values.get(agent_api_key_env_name(agent_name), ""))
+        for agent_name, var in self.agent_local_vars.items():
+            var.set(env_values.get(agent_local_env_name(agent_name), ""))
         self.provider_keys_text.delete("1.0", tk.END)
         self.conf_text.delete("1.0", tk.END)
         self.conf_text.insert(tk.END, conf_text)
@@ -949,8 +1265,14 @@ class AiderPlusDesktop:
         agent_caching = {
             name: var.get() for name, var in self.agent_caching_vars.items()
         }
+        agent_api_keys = {
+            name: var.get() for name, var in self.agent_api_key_vars.items()
+        }
+        agent_local_settings = {
+            name: var.get() for name, var in self.agent_local_vars.items()
+        }
         env_updates = provider_updates | collect_agent_env_updates(
-            agent_models, agent_caching
+            agent_models, agent_caching, agent_api_keys, agent_local_settings
         )
         write_env_updates(self.env_path, env_updates)
         apply_env_updates(env_updates)
@@ -1036,33 +1358,54 @@ class AiderPlusDesktop:
         prompt = self.chat_entry.get().strip()
         if not prompt:
             return
+        target = self._current_chat_target()
         self.chat_entry.delete(0, tk.END)
-        self._append_chat("You", prompt, tag="user")
+        self._append_chat("You", prompt, tag="user", target=target)
 
-        if self.company and self.company.orchestrator:
-            self.turns_this_session += 1
-            future = self.company.run_auto(prompt)
-            self._track_future(future, "Company response")
-            self._set_busy(True, "Company workflow running…")
-        elif self.coder:
+        if target == "Direct Aider" and self.coder:
             self.turns_this_session += 1
             future = _submit_threaded(lambda: self.coder.run(with_message=prompt))
-            self._track_future(future, "Aider response")
+            self._track_future(future, "Aider response", target=target)
             self._set_busy(True, "Aider is responding…")
+        elif (
+            target == "Company Workflow" and self.company and self.company.orchestrator
+        ):
+            self.turns_this_session += 1
+            future = self.company.run_auto(prompt)
+            self._track_future(future, "Company response", target=target)
+            self._set_busy(True, "Company workflow running…")
+        elif self.company:
+            self.turns_this_session += 1
+            agent_name = target.lower()
+            future = self.company.chat_with_agent(agent_name, prompt)
+            self._track_future(future, f"{target} agent response", target=target)
+            self._set_busy(True, f"{target} agent is responding…")
         else:
             self._append_chat(
                 "Aider",
                 "Backend is still starting. Please try again shortly.",
                 tag="system",
+                target=target,
             )
 
-    def _append_chat(self, sender: str, message: str, tag: str = "aider"):
-        self.chat_text.config(state="normal")
+    def _current_chat_target(self) -> str:
+        if not hasattr(self, "chat_notebook"):
+            return "Company Workflow"
+        selected = self.chat_notebook.select()
+        return self.chat_notebook.tab(selected, "text") or "Company Workflow"
+
+    def _append_chat(
+        self, sender: str, message: str, tag: str = "aider", target: str | None = None
+    ):
+        widget = self.chat_transcripts.get(
+            target or self._current_chat_target(), self.chat_text
+        )
+        widget.config(state="normal")
         label_tag = tag if tag in {"user", "aider", "system", "error"} else "aider"
-        self.chat_text.insert(tk.END, f"{sender}: ", label_tag)
-        _insert_text_with_code_tags(self.chat_text, str(message).rstrip() + "\n\n")
-        self.chat_text.see(tk.END)
-        self.chat_text.config(state="disabled")
+        widget.insert(tk.END, f"{sender}: ", label_tag)
+        _insert_text_with_code_tags(widget, str(message).rstrip() + "\n\n")
+        widget.see(tk.END)
+        widget.config(state="disabled")
 
     def refresh_dashboard(self):
         if not self.company:
@@ -1264,8 +1607,10 @@ class AiderPlusDesktop:
             )
         return "\n\n".join(sections)
 
-    def _track_future(self, future: concurrent.futures.Future, label: str):
-        self._future_labels[future] = label
+    def _track_future(
+        self, future: concurrent.futures.Future, label: str, target: str | None = None
+    ):
+        self._future_labels[future] = (label, target)
         future.add_done_callback(lambda done: self._ui_queue.put(("future_done", done)))
 
     def _poll_background(self):
@@ -1321,17 +1666,27 @@ class AiderPlusDesktop:
             self.company.background_error = None
 
     def _handle_future_done(self, future: concurrent.futures.Future):
-        label = self._future_labels.pop(future, "Background task")
+        label_info = self._future_labels.pop(future, ("Background task", None))
+        if isinstance(label_info, tuple):
+            label, target = label_info
+        else:
+            label, target = label_info, None
         try:
             result = future.result()
         except concurrent.futures.CancelledError:
-            self._append_chat("System", f"{label} was cancelled.", tag="system")
+            self._append_chat(
+                "System", f"{label} was cancelled.", tag="system", target=target
+            )
         except Exception as err:
-            self._append_chat("Error", f"{label} failed: {err}", tag="error")
+            self._append_chat(
+                "Error", f"{label} failed: {err}", tag="error", target=target
+            )
             self._set_busy(False, f"{label} failed")
         else:
             if result:
-                self._append_chat("Aider", _format_result(result), tag="aider")
+                self._append_chat(
+                    "Aider", _format_result(result), tag="aider", target=target
+                )
             self._set_busy(False, "Ready")
             self.refresh_all()
 

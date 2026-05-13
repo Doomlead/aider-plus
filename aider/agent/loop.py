@@ -12,6 +12,7 @@ from aider.onboarding import onboarding_paths
 from aider.llm import litellm
 from aider import models
 from aider.agent.tools import Tool, ToolPermissionError, ToolRegistry
+from aider.mcp import MCPClientManager, MCPConfig, mcp_tool_to_aider_tool
 
 
 @dataclass
@@ -24,6 +25,7 @@ class AgentLoopConfig:
     reviewer_model: str | None = None
     enable_caching: bool = True
     cache_type: Literal["auto", "prompt", "none"] = "auto"
+    mcp: MCPConfig | None = None
 
 
 @dataclass
@@ -78,6 +80,7 @@ class AiderAgentLoop:
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
         config: Optional[AgentLoopConfig] = None,
         tool_registry: ToolRegistry | None = None,
+        mcp_manager: MCPClientManager | None = None,
         enable_prompt_caching: bool | None = None,
         cache_type: Literal["auto", "prompt", "none"] | None = None,
     ):
@@ -94,6 +97,9 @@ class AiderAgentLoop:
         self.editor_coder = self._build_editor_coder()
         self.architect_coder = self._build_architect_coder()
         self.tool_registry = tool_registry or ToolRegistry()
+        self.mcp_manager = mcp_manager
+        self.mcp_approval_handler = None
+        self._mcp_initialized_scopes: set[str] = set()
         self.tool_registry.register(
             Tool(
                 name="aider_coder",
@@ -362,6 +368,7 @@ class AiderAgentLoop:
             conversation_memory.add(role="user", content=user_message)
 
         context = self.build_context(user_message)
+        await self._initialize_mcp_tools()
         await self._emit("context_built", {"context": asdict(context)})
 
         user_turn_content = context.get_user_turn_content()
@@ -390,15 +397,7 @@ class AiderAgentLoop:
             handled_tool = False
             for call in tool_calls:
                 args = json.loads(call.function.arguments or "{}")
-                task = args.get("task", "")
-                constraints = args.get("constraints", "")
-                include_diff = bool(args.get("include_diff", False))
-                composed_task = task if not constraints else f"{task}\n\nConstraints:\n{constraints}"
-                exec_args = {
-                    "task": composed_task,
-                    "include_diff": include_diff,
-                    "iteration": idx + 1,
-                }
+                exec_args = self._tool_call_arguments(call.function.name, args, idx + 1)
                 try:
                     coder_result = await self.tool_registry.execute(call.function.name, exec_args)
                 except ToolPermissionError as err:
@@ -412,7 +411,7 @@ class AiderAgentLoop:
                 except ValueError:
                     continue
                 handled_tool = True
-                last_coder_result = coder_result.to_dict()
+                last_coder_result = self._tool_result_to_dict(coder_result)
                 break
 
             if not handled_tool:
@@ -424,6 +423,48 @@ class AiderAgentLoop:
             "agent_iterations": min(self.config.max_iterations, 3),
             "coder_result": last_coder_result,
         }
+
+    async def _initialize_mcp_tools(self) -> None:
+        mcp_config = self.config.mcp
+        if self.mcp_manager is None and mcp_config is not None and mcp_config.enabled:
+            self.mcp_manager = MCPClientManager(
+                mcp_config, approval_handler=self.mcp_approval_handler
+            )
+        if self.mcp_manager is None or not self.mcp_manager.config.enabled:
+            return
+        if self.mcp_approval_handler is not None:
+            self.mcp_manager.approval_handler = self.mcp_approval_handler
+        project_dir = getattr(getattr(self.coder, "root", None), "as_posix", lambda: None)()
+        if project_dir is None:
+            project_dir = str(getattr(self.coder, "root", "") or "")
+        task_dir = project_dir
+        scope_key = f"{project_dir}:{task_dir}"
+        if scope_key in self._mcp_initialized_scopes:
+            return
+        tools = await self.mcp_manager.list_tools(
+            project_dir=project_dir, task_dir=task_dir, scope_key=scope_key
+        )
+        for tool_ref in tools:
+            self.tool_registry.register(mcp_tool_to_aider_tool(self.mcp_manager, tool_ref))
+        self._mcp_initialized_scopes.add(scope_key)
+
+    @staticmethod
+    def _tool_call_arguments(name: str, args: dict, iteration: int) -> dict:
+        if name != "aider_coder":
+            return args
+        task = args.get("task", "")
+        constraints = args.get("constraints", "")
+        include_diff = bool(args.get("include_diff", False))
+        composed_task = task if not constraints else f"{task}\n\nConstraints:\n{constraints}"
+        return {"task": composed_task, "include_diff": include_diff, "iteration": iteration}
+
+    @staticmethod
+    def _tool_result_to_dict(result: Any) -> dict:
+        if hasattr(result, "to_dict"):
+            return result.to_dict()
+        if isinstance(result, dict):
+            return result
+        return {"result": result}
 
     async def _run_architect_then_editor(self, *, task: str, include_diff: bool, iteration: int):
         if not self.config.use_architect_mode:

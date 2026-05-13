@@ -12,6 +12,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, Literal, Optional
 
+from aider.mcp.config import MCPConfig
+
 
 @dataclass
 class AgentConfig:
@@ -70,6 +72,7 @@ class CompanyConfig:
     departments: Dict[str, DepartmentConfig] = field(default_factory=dict)
     record_caching_stats: bool = True
     enable_coo_llm_routing: bool = False
+    mcp: MCPConfig = field(default_factory=MCPConfig)
 
     def get_department_config(self, name: str) -> DepartmentConfig:
         """

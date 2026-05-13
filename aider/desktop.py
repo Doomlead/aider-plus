@@ -819,8 +819,6 @@ class AiderPlusDesktop:
         return frame
 
     def _build_chat_tab(self):
-        self._add_tab_description(self.chat_frame, "Chat")
-        self._add_field_guide(self.chat_frame, "Chat Field Guide", CHAT_FIELD_GUIDE)
         self.chat_notebook = ttk.Notebook(self.chat_frame)
         self.chat_notebook.pack(fill="both", expand=True)
         self.chat_targets = [
@@ -830,14 +828,6 @@ class AiderPlusDesktop:
         ]
         for target in self.chat_targets:
             frame = ttk.Frame(self.chat_notebook, padding=4)
-            ttk.Label(
-                frame,
-                text=CHAT_TARGET_GUIDE.get(
-                    target, "Talk directly with this Company agent."
-                ),
-                wraplength=900,
-                justify="left",
-            ).pack(fill="x", pady=(0, 4))
             text = scrolledtext.ScrolledText(
                 frame,
                 wrap=tk.WORD,
@@ -1022,10 +1012,10 @@ class AiderPlusDesktop:
                 row=row, column=4, sticky="ew", padx=8, pady=2
             )
         ttk.Label(agents_frame, text="API key override").grid(
-            row=1, column=3, sticky="w"
+            row=0, column=3, sticky="w"
         )
         ttk.Label(agents_frame, text="Local endpoint/setting").grid(
-            row=1, column=4, sticky="w"
+            row=0, column=4, sticky="w"
         )
         agents_frame.columnconfigure(1, weight=1)
         agents_frame.columnconfigure(3, weight=1)

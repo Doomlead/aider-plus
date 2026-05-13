@@ -6,7 +6,6 @@ import concurrent.futures
 import logging
 import os
 import random
-import re
 import sys
 import threading
 import uuid
@@ -36,6 +35,18 @@ from aider.io import InputOutput
 from aider.main import main as cli_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
 from aider.scrape import Scraper, has_playwright
+from aider.settings import (
+    COMPANY_AGENT_NAMES,
+    agent_caching_env_name,
+    agent_model_env_name,
+    apply_env_updates,
+    collect_agent_env_updates,
+    collect_provider_key_updates,
+    parse_conf_text,
+    read_env_values,
+    write_conf_text,
+    write_env_updates,
+)
 
 logger = logging.getLogger(__name__)
 _COMPANY_SESSIONS = {}
@@ -576,6 +587,14 @@ class DesktopCompanySession:
         ):
             consolidate_conversation(conversation_memory, project_memory)
             project_memory.persist()
+
+
+def shutdown_desktop_company_session(_coder) -> None:
+    repo_path = str(Path(_coder.root).resolve())
+    with _COMPANY_SESSIONS_LOCK:
+        session = _COMPANY_SESSIONS.get(repo_path)
+    if session is not None and not session._shutdown:
+        session.shutdown()
 
 
 def get_desktop_company_session(_coder):
@@ -1169,17 +1188,22 @@ class GUI:
     def do_settings_tab(self, location="sidebar"):
         st.subheader("Settings")
         st.caption(
-            "Add API keys and change the model used by this desktop/browser session. "
-            "Settings are saved in the repo so future Aider launches can reuse them."
+            "Add API keys, tune Aider model settings, and configure per-agent Company Mode "
+            "models/caching. Settings are saved in this repo for future launches."
         )
 
-        env_values = self._read_env_values(self.env_path)
-        conf_values = self._read_conf_values(self.conf_path)
+        env_values = read_env_values(self.env_path)
+        conf_text = (
+            self.conf_path.read_text(encoding="utf-8")
+            if self.conf_path.exists()
+            else ""
+        )
+        conf_values = parse_conf_text(conf_text)
         current_model = self.coder.main_model
         form_key = f"settings_form_{location}"
 
         with st.form(form_key, clear_on_submit=False):
-            st.write("**Model selection**")
+            st.write("**Aider model selection**")
             model = st.text_input(
                 "Main model",
                 value=conf_values.get("model") or current_model.name,
@@ -1199,8 +1223,37 @@ class GUI:
             apply_now = st.checkbox(
                 "Use this model for the current session now",
                 value=True,
-                help="Applies the selected model immediately without restarting the browser UI.",
+                help="Applies the selected Aider model immediately without restarting the browser UI.",
             )
+
+            st.write("**Company agent models**")
+            st.caption(
+                "Each agent can use its own model via AIDER_COMPANY_MODEL_<AGENT>. "
+                "Leave blank to use the default/main model. Changes apply to new Company sessions."
+            )
+            agent_models = {}
+            agent_caching = {}
+            for agent_name in COMPANY_AGENT_NAMES:
+                cols = st.columns([3, 2])
+                agent_models[agent_name] = cols[0].text_input(
+                    f"{agent_name.title()} model",
+                    value=env_values.get(agent_model_env_name(agent_name), ""),
+                    key=f"{form_key}_{agent_name}_model",
+                )
+                cache_default = env_values.get(
+                    agent_caching_env_name(agent_name), "true"
+                )
+                agent_caching[agent_name] = cols[1].selectbox(
+                    f"{agent_name.title()} caching",
+                    ["true", "false", "default"],
+                    index=["true", "false", "default"].index(
+                        cache_default
+                        if cache_default in {"true", "false", "default"}
+                        else "true"
+                    ),
+                    key=f"{form_key}_{agent_name}_caching",
+                    help="Prompt caching override for this agent.",
+                )
 
             st.write("**API keys**")
             st.caption("Leave a saved key blank only if you do not want to change it.")
@@ -1220,49 +1273,50 @@ class GUI:
                 type="password",
             )
             provider_keys = st.text_area(
-                "Other provider keys (one per line, eg GEMINI_API_KEY=...)", value=""
+                "Other provider keys or environment settings (one per line, eg GEMINI_API_KEY=...)",
+                value="",
+            )
+
+            st.write("**Advanced Aider configuration**")
+            conf_editor = st.text_area(
+                ".aider.conf.yml",
+                value=conf_text,
+                height=220,
+                help="Edit any other Aider YAML configuration. Model fields above are merged into this file on save.",
             )
             submitted = st.form_submit_button("Save settings")
 
         if submitted:
-            updates = self._collect_api_key_updates(
+            updates = collect_provider_key_updates(
                 openai_key, anthropic_key, openrouter_key, provider_keys
             )
-            self._write_env_updates(self.env_path, updates)
-            self._apply_env_updates(updates)
+            updates.update(collect_agent_env_updates(agent_models, agent_caching))
+            write_env_updates(self.env_path, updates)
+            apply_env_updates(updates)
             model_updates = {
                 "model": model.strip(),
                 "weak-model": weak_model.strip(),
                 "editor-model": editor_model.strip(),
             }
-            self._write_conf_updates(self.conf_path, model_updates)
+            write_conf_text(self.conf_path, conf_editor, model_updates)
             if apply_now:
                 self._apply_model_settings(model_updates)
+            shutdown_desktop_company_session(self.coder)
+            self.company = None
             self.info(f"Saved settings to `{self.env_path}` and `{self.conf_path}`.")
-            st.success("Settings saved. New chats will use the selected model.")
+            st.success(
+                "Settings saved. New chats and new Company agent sessions will use the updated configuration."
+            )
 
     def _collect_api_key_updates(
         self, openai_key, anthropic_key, openrouter_key, provider_keys
     ):
-        updates = {}
-        if openai_key:
-            updates["OPENAI_API_KEY"] = openai_key.strip()
-        if anthropic_key:
-            updates["ANTHROPIC_API_KEY"] = anthropic_key.strip()
-        if openrouter_key:
-            updates["OPENROUTER_API_KEY"] = openrouter_key.strip()
-        for line in provider_keys.splitlines():
-            line = line.strip()
-            if not line or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            if k and v:
-                updates[k.strip()] = v.strip()
-        return updates
+        return collect_provider_key_updates(
+            openai_key, anthropic_key, openrouter_key, provider_keys
+        )
 
     def _apply_env_updates(self, updates: dict):
-        for key, value in updates.items():
-            os.environ[key] = value
+        apply_env_updates(updates)
 
     def _apply_model_settings(self, model_updates: dict):
         current_model = self.coder.main_model
@@ -1300,48 +1354,6 @@ class GUI:
         next_coder.pretty = False
         self.state.coder = next_coder
         self.coder = next_coder
-
-    def _read_env_values(self, path: Path):
-        vals = {}
-        if not path.exists():
-            return vals
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, val = line.split("=", 1)
-            vals[key.strip()] = val.strip().strip('"').strip("'")
-        return vals
-
-    def _write_env_updates(self, path: Path, updates: dict):
-        if not updates:
-            return
-        existing = {}
-        if path.exists():
-            existing = self._read_env_values(path)
-        existing.update(updates)
-        lines = [f"{k}={v}" for k, v in sorted(existing.items())]
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    def _read_conf_values(self, path: Path):
-        vals = {}
-        if not path.exists():
-            return vals
-        for line in path.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^\s*([a-zA-Z0-9_-]+)\s*:\s*(.+?)\s*$", line)
-            if m:
-                vals[m.group(1)] = m.group(2).strip().strip('"').strip("'")
-        return vals
-
-    def _write_conf_updates(self, path: Path, updates: dict):
-        existing = {}
-        if path.exists():
-            existing = self._read_conf_values(path)
-        for key, value in updates.items():
-            if value:
-                existing[key] = value
-        lines = [f"{k}: {v}" for k, v in sorted(existing.items())]
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def do_recommended_actions(self):
         text = "Aider works best when your code is stored in a git repo.  \n"

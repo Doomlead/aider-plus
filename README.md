@@ -89,10 +89,11 @@ Aider Plus now combines upstream Aider with a multi-surface autonomous delivery 
 
 ### Coordinate through a Nanobot-inspired COO
 
-- `NanobotCOO` provides a durable per-session message bus that decouples chat surfaces from Company orchestration.
-- The COO can route prompts deterministically or through an LLM-backed JSON route decision, with route history, aliases, confidence, explanation, and optional human-escalation flags.
+- `NanobotCOO` treats the human as the CEO and the COO as a persistent personal assistant plus company operator.
+- `COOActionDecision` lets the COO answer directly, ask CEO clarification, inspect status, remember/recall COO memory, reserve tool use, or delegate to the internal company.
+- Delegation still uses `COORouteDecision` and the existing CompanyOrchestrator path, so Product → UX → Engineering → QA → DevOps logic remains unchanged.
 - Routing is resilient: transient failures are retried, bad route aliases are normalized, final failures can fall back to a safe department, and exhausted retries create observable human-escalation metadata.
-- Browser, desktop, and Discord status views can show current route, active department, queue events, recent errors, pending escalations, and deliverable summaries.
+- Browser, desktop, and Discord status views can show current COO action, current route, active department, queue events, recent errors, pending escalations, COO memory, and deliverable summaries.
 
 ### Expose multiple user surfaces
 
@@ -359,12 +360,13 @@ Approval gates are persisted in project memory so pending PRD, clarification, re
 
 ## Nanobot COO orchestration
 
-The COO layer adds a small, observable coordination bus on top of Company Mode:
+The COO layer adds a small, observable CEO/COO assistant loop on top of Company Mode:
 
 - `COOMessageBus` keeps inbound/outbound queues, queue statistics, bounded event history, formatted dashboard events, and event handlers for browser/desktop/Discord updates.
-- `COOSessionManager` persists per-channel/user session history and metadata in project memory, including route history, last department, last deliverable, recent errors, and pending human escalations.
-- `COORouteDecision` normalizes target aliases, carries confidence/reasoning/strategy fields, and can request human escalation for ambiguous, unsafe, or low-confidence requests.
-- `NanobotCOO` can call an agent loop for JSON route decisions when `enable_coo_llm_routing` is enabled, or fall back to deterministic keyword routing.
+- `COOSessionManager` persists per-channel/user session history and metadata in project memory, including route history, last COO action, last department, last deliverable, recent errors, and pending human escalations.
+- `COOActionDecision` lets the COO answer the CEO directly, ask for clarification, inspect status, update/recall repo-local COO memory, reserve tool use, or delegate into the internal company.
+- `COORouteDecision` remains the delegation-level department routing object, normalizing target aliases, confidence/reasoning/strategy fields, and human escalation flags.
+- `NanobotCOO` can call an agent loop for JSON action/route decisions when `enable_coo_llm_routing` is enabled, or fall back to deterministic personal actions plus keyword routing.
 - Retry wrappers around routing and department execution record final failures, emit warning events, preserve recovery suggestions, and optionally create human-escalation payloads.
 
 ---

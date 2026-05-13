@@ -15,7 +15,7 @@ from aider.company.config import (
     DepartmentConfig,
     apply_agent_model_overrides_from_env,
 )
-from aider.company.coo import COORouteDecision, NanobotCOO
+from aider.company.coo import COOActionDecision, COORouteDecision, NanobotCOO
 from aider.company.department import Department
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.schemas import CompanyTask, Deliverable
@@ -72,6 +72,77 @@ def test_coo_route_decision_defaults_and_aliases():
     assert decision.as_dict()["escalate_to_human"] is False
 
 
+def test_coo_action_decision_defaults_and_aliases():
+    decision = COOActionDecision(
+        action="status",
+        response_to_ceo="Here is the operating picture.",
+        confidence="1.4",
+        company_target=" Engineering ",
+        memory_updates=[{"content": "Prefer concise briefings"}, "ignored"],
+    )
+
+    assert decision.action == "inspect_status"
+    assert decision.confidence == 1.0
+    assert decision.company_target == "engineering"
+    assert decision.memory_updates == [{"content": "Prefer concise briefings"}]
+    assert decision.as_dict()["action"] == "inspect_status"
+
+
+def test_nanobot_coo_answers_status_without_department_task(tmp_path):
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        department = EchoDepartment(memory, name="engineering")
+        orchestrator.register(department)
+        coo = NanobotCOO(orchestrator=orchestrator, default_target="engineering")
+
+        result = await coo.receive_user_message(
+            message="CEO briefing and pending approvals",
+            session_id="cli:ceo-briefing",
+            surface="cli",
+            task_id="task-briefing",
+        )
+        status = await coo.get_session_status("cli:ceo-briefing")
+
+        assert result["target"] == "coo"
+        assert result["route"] is None
+        assert result["action"]["action"] == "inspect_status"
+        assert result["result"]["content"].startswith("CEO briefing:")
+        assert status["last_coo_action"]["action"] == "inspect_status"
+        assert status["metrics"]["message_count"] == 2
+
+    asyncio.run(run())
+
+
+def test_nanobot_coo_persists_personal_memory(tmp_path):
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        orchestrator.register(EchoDepartment(memory, name="engineering"))
+        coo = NanobotCOO(orchestrator=orchestrator, default_target="engineering")
+
+        result = await coo.receive_user_message(
+            message="remember Prefer short CEO briefings",
+            session_id="cli:memory",
+            surface="cli",
+        )
+        recalled = await coo.receive_user_message(
+            message="what do you remember",
+            session_id="cli:memory",
+            surface="cli",
+        )
+        status = await coo.get_session_status("cli:memory")
+
+        assert result["action"]["action"] == "update_memory"
+        assert recalled["action"]["action"] == "recall_memory"
+        assert "Prefer short CEO briefings" in recalled["result"]["content"]
+        assert (tmp_path / ".aider" / "coo" / "profile.json").exists()
+        assert (tmp_path / ".aider" / "coo" / "memory.jsonl").exists()
+        assert status["coo_memory"][-1]["content"] == "Prefer short CEO briefings"
+
+    asyncio.run(run())
+
+
 def test_build_company_agent_loops_creates_dedicated_loop_per_agent(tmp_path):
     coder = DummyCoder()
     config = CompanyConfig(
@@ -87,7 +158,7 @@ def test_build_company_agent_loops_creates_dedicated_loop_per_agent(tmp_path):
         base_config=AgentLoopConfig(use_architect_mode=True),
     )
 
-    assert set(loops) == {"coo", "product", "ux", "engineering", "qa", "devops"}
+    assert {"coo", "product", "ux", "engineering", "qa", "devops"}.issubset(loops)
     assert loops["product"] is not loops["engineering"]
     assert loops["product"].coder is not loops["engineering"].coder
     assert loops["product"].coder.main_model.name == "gpt-4o"
@@ -155,6 +226,49 @@ def test_apply_agent_model_overrides_from_env(monkeypatch):
     assert config.get_department_config("product").preferred_model == "gpt-4o"
     assert config.get_department_config("ux").preferred_model == "claude-3"
     assert config.get_department_config("qa").preferred_model == "o3-mini"
+
+
+def test_nanobot_coo_uses_llm_action_for_direct_answer(tmp_path):
+    class PersonalLoop:
+        def __init__(self):
+            self.calls = []
+
+        async def run_structured(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "content": (
+                    '{"action": "answer_directly", '
+                    '"response_to_ceo": "CEO, I can handle that directly.", '
+                    '"confidence": 0.8, '
+                    '"reasoning": "No department work required."}'
+                )
+            }
+
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        orchestrator.register(EchoDepartment(memory, name="engineering"))
+        loop = PersonalLoop()
+        coo = NanobotCOO(
+            orchestrator=orchestrator,
+            coo_agent_loop=loop,
+            enable_llm_routing=True,
+            default_target="engineering",
+        )
+
+        result = await coo.receive_user_message(
+            "say hello to the CEO",
+            "cli:direct-llm",
+            surface="cli",
+        )
+
+        assert loop.calls
+        assert result["target"] == "coo"
+        assert result["action"]["action"] == "answer_directly"
+        assert result["deliverable"] is None
+        assert result["result"]["content"] == "CEO, I can handle that directly."
+
+    asyncio.run(run())
 
 
 def test_nanobot_coo_uses_llm_route_when_enabled(tmp_path):

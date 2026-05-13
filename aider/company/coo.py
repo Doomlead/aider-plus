@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Literal, Optional
 
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.schemas import CompanyTask, Deliverable
@@ -151,6 +151,7 @@ class COOMessageBus:
         for event in self.events[-max(1, limit) :]:
             message_metadata = event.metadata.get("message_metadata", {})
             route = message_metadata.get("route") or {}
+            coo_action = message_metadata.get("coo_action") or {}
             target = message_metadata.get("department") or message_metadata.get(
                 "target"
             )
@@ -169,6 +170,8 @@ class COOMessageBus:
                     details.append(f"recovery: {recovery}")
                 if message_metadata.get("escalate_to_human"):
                     details.append("human escalation pending")
+            if coo_action:
+                details.append(f"action {coo_action.get('action', 'unknown')}")
             if route:
                 details.append(
                     "route "
@@ -244,7 +247,9 @@ class COOSession:
             ),
             None,
         )
-        pending_escalations = list(self.metadata.get("pending_human_escalations", []) or [])
+        pending_escalations = list(
+            self.metadata.get("pending_human_escalations", []) or []
+        )
         recent_errors = list(self.metadata.get("recent_errors", []) or [])
         if self.metadata.get("last_error") and (
             not recent_errors or recent_errors[-1] != self.metadata.get("last_error")
@@ -356,6 +361,95 @@ class COOSessionManager:
 
 
 @dataclass
+class COOActionDecision:
+    """High-level CEO-facing action chosen by the Nanobot-style COO.
+
+    The COO first decides how to serve the CEO: answer directly, clarify,
+    inspect status, update memory, use a tool, or delegate into the existing
+    CompanyOrchestrator. Department routing is one possible action, not the
+    whole COO job.
+    """
+
+    action: Literal[
+        "answer_directly",
+        "ask_ceo_clarification",
+        "delegate_company_task",
+        "inspect_status",
+        "update_memory",
+        "recall_memory",
+        "use_tool",
+    ] = "delegate_company_task"
+    response_to_ceo: str = ""
+    confidence: float = 0.5
+    requires_approval: bool = False
+    company_target: str | None = None
+    tool_name: str | None = None
+    memory_updates: list[dict[str, Any]] = field(default_factory=list)
+    context: dict[str, Any] = field(default_factory=dict)
+    route: "COORouteDecision | None" = None
+    reasoning: str = ""
+
+    def __post_init__(self) -> None:
+        allowed = {
+            "answer_directly",
+            "ask_ceo_clarification",
+            "delegate_company_task",
+            "inspect_status",
+            "update_memory",
+            "recall_memory",
+            "use_tool",
+        }
+        aliases = {
+            "answer": "answer_directly",
+            "clarify": "ask_ceo_clarification",
+            "ask_clarification": "ask_ceo_clarification",
+            "delegate": "delegate_company_task",
+            "route": "delegate_company_task",
+            "status": "inspect_status",
+            "remember": "update_memory",
+            "recall": "recall_memory",
+            "tool": "use_tool",
+        }
+        action = str(self.action or "delegate_company_task").strip().lower()
+        action = aliases.get(action, action)
+        if action not in allowed:
+            action = "delegate_company_task"
+        self.action = action  # type: ignore[assignment]
+        self.response_to_ceo = str(self.response_to_ceo or "").strip()
+        try:
+            self.confidence = float(self.confidence)
+        except (TypeError, ValueError):
+            self.confidence = 0.5
+        self.confidence = max(0.0, min(1.0, self.confidence))
+        self.requires_approval = bool(self.requires_approval)
+        if self.company_target is not None:
+            self.company_target = str(self.company_target).strip().lower() or None
+        if self.tool_name is not None:
+            self.tool_name = str(self.tool_name).strip() or None
+        self.memory_updates = [
+            update for update in (self.memory_updates or []) if isinstance(update, dict)
+        ]
+        self.context = dict(self.context or {})
+        self.reasoning = str(
+            self.reasoning or self.context.get("reasoning") or ""
+        ).strip()
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "action": self.action,
+            "response_to_ceo": self.response_to_ceo,
+            "confidence": self.confidence,
+            "requires_approval": self.requires_approval,
+            "company_target": self.company_target,
+            "tool_name": self.tool_name,
+            "memory_updates": self.memory_updates,
+            "context": self.context,
+            "route": self.route.as_dict() if self.route else None,
+            "reasoning": self.reasoning,
+        }
+
+
+@dataclass
 class COORouteDecision:
     """Explicit COO routing result for a user message."""
 
@@ -370,7 +464,11 @@ class COORouteDecision:
     reasoning: str | None = None
 
     def __post_init__(self) -> None:
-        target = self.chosen_department if self.chosen_department is not None else self.target
+        target = (
+            self.chosen_department
+            if self.chosen_department is not None
+            else self.target
+        )
         self.target = str(target or "").strip().lower()
         self.chosen_department = self.target
         self.strategy = str(self.strategy or "deterministic").strip().lower()
@@ -520,7 +618,9 @@ class NanobotCOO:
         error_details: dict[str, Any],
     ) -> CompanyTask:
         """Open a blocking human approval gate for unrecoverable COO failures."""
-        target = error_details.get("fallback_target") or session.metadata.get("last_target")
+        target = error_details.get("fallback_target") or session.metadata.get(
+            "last_target"
+        )
         if target not in self.orchestrator.departments:
             target = (
                 self.default_target
@@ -532,7 +632,8 @@ class NanobotCOO:
         target = target or "coo"
         task = CompanyTask(
             task_id=str(
-                error_details.get("approval_task_id") or f"coo-escalation-{uuid.uuid4()}"
+                error_details.get("approval_task_id")
+                or f"coo-escalation-{uuid.uuid4()}"
             ),
             origin="coo",
             target=target,
@@ -629,14 +730,72 @@ class NanobotCOO:
         )
         self.session_manager.save(session)
 
-        route = (
-            COORouteDecision(
-                target=target, strategy="explicit", reason="Caller provided target"
-            )
-            if target
-            else await self.decide_route(inbound.content, session)
+        payload = {
+            "message": inbound.content,
+            "surface": surface,
+            "artifact_type": artifact_type,
+            "context": context or {},
+            "blocking": blocking,
+            "wait": wait,
+            "task_id": task_id,
+            "origin": origin or surface,
+        }
+        return await self.run_personal_turn(
+            session=session,
+            message=inbound,
+            target=target,
+            payload=payload,
         )
 
+    async def run_personal_turn(
+        self,
+        *,
+        session: COOSession,
+        message: COOMessage,
+        target: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run one CEO-facing COO assistant turn.
+
+        The COO first acts like a persistent personal assistant: it may answer the
+        CEO, ask for clarification, update/recall memory, inspect company status,
+        or delegate into the existing CompanyOrchestrator. Delegation reuses the
+        original department-routing path so Product→UX→Engineering→QA→DevOps
+        orchestration remains unchanged.
+        """
+        payload = dict(payload or {})
+        payload.setdefault("message", message.content)
+        payload.setdefault("surface", message.channel)
+        payload.setdefault("artifact_type", "raw_prompt")
+        payload.setdefault("context", {})
+        payload.setdefault("blocking", False)
+        payload.setdefault("wait", True)
+        payload.setdefault("origin", message.channel)
+
+        action = await self.decide_action(message.content, session, target=target)
+        session.messages[-1]["coo_action"] = action.as_dict()
+        session.metadata["last_coo_action"] = action.as_dict()
+        self.session_manager.save(session)
+
+        if action.action == "delegate_company_task":
+            route = action.route or COORouteDecision(
+                target=action.company_target or target or self.default_target,
+                strategy="coo_action",
+                reason=action.reasoning
+                or "COO delegated work to an internal department",
+                confidence=action.confidence,
+            )
+            return await self.delegate_company_task(session, message, route, payload)
+
+        return await self._complete_personal_action(session, message, action, payload)
+
+    async def _delegate_with_route(
+        self,
+        session: COOSession,
+        inbound: COOMessage,
+        route: COORouteDecision,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         session.messages[-1]["route"] = route.as_dict()
         self.session_manager.save(session)
 
@@ -654,8 +813,8 @@ class NanobotCOO:
             )
             await self._emit_coo_error(
                 session=session,
-                session_id=session_id,
-                surface=surface,
+                session_id=session.key,
+                surface=inbound.channel,
                 error=RuntimeError(route.reason),
                 error_type="coo_route_requires_human",
                 retries=0,
@@ -665,22 +824,14 @@ class NanobotCOO:
                 approval_task_id=escalation.task_id,
             )
 
-        payload = {
-            "message": inbound.content,
-            "surface": surface,
-            "artifact_type": artifact_type,
-            "context": context or {},
-            "blocking": blocking,
-            "wait": wait,
-            "task_id": task_id,
-            "origin": origin or surface,
-            "route": route.as_dict(),
-        }
+        payload = dict(payload)
+        payload["route"] = route.as_dict()
+
         async def emit_primary_handoff_failure(err: BaseException) -> None:
             await self._emit_coo_error(
                 session=session,
-                session_id=session_id,
-                surface=surface,
+                session_id=session.key,
+                surface=inbound.channel,
                 error=err,
                 error_type="department_handoff_failed",
                 retries=3,
@@ -716,8 +867,8 @@ class NanobotCOO:
                 )
                 await self._emit_coo_error(
                     session=session,
-                    session_id=session_id,
-                    surface=surface,
+                    session_id=session.key,
+                    surface=inbound.channel,
                     error=err,
                     error_type="deterministic_handoff_failed",
                     retries=3,
@@ -750,9 +901,424 @@ class NanobotCOO:
                         "department": "coo",
                     },
                 }
+        result["action"] = session.metadata.get("last_coo_action", {})
         result["events"] = [event.as_dict() for event in self.bus.events]
         result["bus"] = self.bus.snapshot()
         return result
+
+    async def decide_action(
+        self,
+        prompt: str,
+        session: COOSession,
+        *,
+        target: str | None = None,
+    ) -> COOActionDecision:
+        """Choose the COO's CEO-facing action before any department routing."""
+        if target:
+            route = COORouteDecision(
+                target=target, strategy="explicit", reason="Caller provided target"
+            )
+            return COOActionDecision(
+                action="delegate_company_task",
+                company_target=route.target,
+                route=route,
+                confidence=1.0,
+                reasoning=route.reason,
+            )
+
+        deterministic = self._deterministic_personal_action(prompt, session)
+        if deterministic is not None:
+            return deterministic
+
+        if self.enable_llm_routing and self.coo_agent_loop is not None:
+            decision = await self._llm_action(prompt, session)
+            if decision is not None:
+                return decision
+
+        route = self._deterministic_route(prompt)
+        return COOActionDecision(
+            action="delegate_company_task",
+            company_target=route.target,
+            route=route,
+            confidence=route.confidence,
+            reasoning=route.reason,
+        )
+
+    def _deterministic_personal_action(
+        self, prompt: str, session: COOSession
+    ) -> COOActionDecision | None:
+        """Fast local personal-assistant actions that should not become tasks."""
+        text = prompt.strip()
+        prompt_lower = text.lower()
+        if not text:
+            return COOActionDecision(
+                action="ask_ceo_clarification",
+                response_to_ceo="CEO, what would you like me to operate on next?",
+                confidence=1.0,
+                reasoning="Empty message needs CEO clarification.",
+            )
+        if prompt_lower.startswith(("remember ", "note ", "preference:")):
+            content = text.split(" ", 1)[1] if " " in text else text
+            return COOActionDecision(
+                action="update_memory",
+                response_to_ceo=f"Noted, CEO. I will remember: {content}",
+                confidence=0.95,
+                memory_updates=[{"type": "ceo_preference", "content": content}],
+                reasoning="CEO asked the COO to remember a preference or note.",
+            )
+        if any(
+            phrase in prompt_lower
+            for phrase in (
+                "company status",
+                "coo status",
+                "status update",
+                "ceo briefing",
+                "operating brief",
+                "pending approval",
+                "pending approvals",
+            )
+        ):
+            return COOActionDecision(
+                action="inspect_status",
+                response_to_ceo=self._format_company_status_for_ceo(session),
+                confidence=0.9,
+                reasoning="CEO requested status instead of new execution work.",
+            )
+        if any(
+            phrase in prompt_lower
+            for phrase in ("what do you remember", "recall memory", "coo memory")
+        ):
+            memory_items = self.recall_ceo_memory(limit=8)
+            if memory_items:
+                lines = ["CEO, here is what I remember:"]
+                lines.extend(f"- {item.get('content', item)}" for item in memory_items)
+                response = "\n".join(lines)
+            else:
+                response = "CEO, I do not have any COO memory notes yet."
+            return COOActionDecision(
+                action="recall_memory",
+                response_to_ceo=response,
+                confidence=0.9,
+                reasoning="CEO asked to recall COO memory.",
+            )
+        return None
+
+    async def _llm_action(
+        self, prompt: str, session: COOSession
+    ) -> COOActionDecision | None:
+        task_payload = {
+            "prompt": prompt,
+            "history": session.get_history(12),
+            "ceo_profile": self._read_coo_profile(),
+            "coo_memory": self.recall_ceo_memory(limit=8),
+            "company_status": self.inspect_company_status(session),
+            "departments": sorted(self.orchestrator.departments),
+        }
+        surface = (
+            session.messages[-1].get("surface") if session.messages else "coo"
+        ) or "coo"
+
+        async def emit_llm_action_failure(err: BaseException) -> None:
+            await self._emit_coo_error(
+                session=session,
+                session_id=session.key,
+                surface=surface,
+                error=err,
+                error_type="llm_route_failed",
+                retries=3,
+                user_message=prompt,
+                recovery_suggestion="falling back to deterministic routing",
+                escalate_to_human=False,
+            )
+
+        try:
+            result = await self._call_with_retry(
+                lambda: self.coo_agent_loop.run_structured(
+                    task=json.dumps(task_payload, ensure_ascii=False),
+                    system_prompt=self._get_coo_action_prompt(session),
+                    enable_caching=self.agent_config.enable_caching,
+                ),
+                base_delay=0.01,
+                on_final_failure=emit_llm_action_failure,
+            )
+        except Exception:
+            return None
+
+        parsed = self._parse_json(result.get("content", ""))
+        return self._action_from_parsed(parsed)
+
+    def _action_from_parsed(self, parsed: dict[str, Any]) -> COOActionDecision | None:
+        if not parsed:
+            return None
+        candidate = (
+            str(
+                parsed.get("company_target")
+                or parsed.get("chosen_department")
+                or parsed.get("target")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+        action_name = parsed.get("action")
+        if not action_name and candidate:
+            action_name = "delegate_company_task"
+        if not action_name:
+            return None
+
+        route = None
+        if candidate:
+            if candidate not in self.orchestrator.departments:
+                return None
+            route = COORouteDecision(
+                target=candidate,
+                strategy="llm",
+                reason=str(parsed.get("reasoning") or parsed.get("reason") or ""),
+                confidence=parsed.get("confidence", 0.5),
+                should_escalate_to_human=bool(
+                    parsed.get("should_escalate_to_human", False)
+                ),
+                escalate_to_human=bool(parsed.get("escalate_to_human", False)),
+                metadata={"raw": parsed},
+            )
+        return COOActionDecision(
+            action=action_name,
+            response_to_ceo=str(
+                parsed.get("response_to_ceo") or parsed.get("response") or ""
+            ),
+            confidence=parsed.get("confidence", 0.5),
+            requires_approval=bool(parsed.get("requires_approval", False)),
+            company_target=candidate or parsed.get("company_target"),
+            tool_name=parsed.get("tool_name"),
+            memory_updates=parsed.get("memory_updates", []) or [],
+            context=parsed.get("context", {}) or {},
+            route=route,
+            reasoning=str(parsed.get("reasoning") or parsed.get("reason") or ""),
+        )
+
+    async def _complete_personal_action(
+        self,
+        session: COOSession,
+        message: COOMessage,
+        action: COOActionDecision,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        if action.action == "inspect_status":
+            content = action.response_to_ceo or self._format_company_status_for_ceo(
+                session
+            )
+        elif action.action == "update_memory":
+            for update in action.memory_updates:
+                self.remember_ceo_preference(update)
+            content = action.response_to_ceo or "Noted, CEO. I updated COO memory."
+        elif action.action == "recall_memory":
+            content = action.response_to_ceo
+        elif action.action == "ask_ceo_clarification":
+            content = (
+                action.response_to_ceo or "CEO, can you clarify the desired outcome?"
+            )
+        elif action.action == "use_tool":
+            content = (
+                action.response_to_ceo
+                or f"CEO, I identified `{action.tool_name or 'a tool'}` as the next tool, but this COO tool adapter is not wired yet."
+            )
+        else:
+            content = action.response_to_ceo or "CEO, I am ready to help."
+
+        session.add_message(
+            "assistant",
+            content,
+            department="coo",
+            status="success",
+            task_id=payload.get("task_id"),
+            coo_action=action.as_dict(),
+        )
+        session.metadata["last_deliverable_summary"] = content
+        self.session_manager.save(session)
+        await self.bus.publish_outbound(
+            COOMessage(
+                channel=message.channel,
+                session_key=session.key,
+                role="assistant",
+                content=content,
+                metadata={
+                    "task_id": payload.get("task_id"),
+                    "department": "coo",
+                    "coo_action": action.as_dict(),
+                },
+            )
+        )
+        result = {
+            "session_id": session.key,
+            "task_id": payload.get("task_id"),
+            "target": "coo",
+            "status": "success",
+            "route": None,
+            "action": action.as_dict(),
+            "deliverable": None,
+            "result": {
+                "summary": content,
+                "content": content,
+                "artifact_type": action.action,
+                "metadata": {"coo_action": action.as_dict()},
+                "department": "coo",
+            },
+        }
+        result["events"] = [event.as_dict() for event in self.bus.events]
+        result["bus"] = self.bus.snapshot()
+        return result
+
+    async def delegate_company_task(
+        self,
+        session: COOSession,
+        message: COOMessage,
+        route: COORouteDecision,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """COO tool: delegate CEO work into the internal company workflow."""
+        return await self._delegate_with_route(session, message, route, payload)
+
+    def inspect_company_status(self, session: COOSession) -> dict[str, Any]:
+        """COO tool: return a structured CEO operating-status payload."""
+        return self._company_status_payload(session)
+
+    def get_pending_approvals(self) -> list[str]:
+        """COO tool: list pending approval IDs that need CEO attention."""
+        return sorted(self.orchestrator.approvals.gates)
+
+    def remember_ceo_preference(self, item: dict[str, Any] | str) -> dict[str, Any]:
+        """COO tool: persist a CEO preference or operational note."""
+        payload = (
+            {"type": "ceo_preference", "content": item}
+            if isinstance(item, str)
+            else dict(item)
+        )
+        self._append_coo_memory(payload)
+        return payload
+
+    def recall_ceo_memory(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        """COO tool: recall recent repo-local COO memory notes."""
+        return self._read_coo_memory(limit=limit)
+
+    def _coo_memory_dir(self) -> Path:
+        path = Path(self.orchestrator.memory.repo_path) / ".aider" / "coo"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _coo_profile_path(self) -> Path:
+        return self._coo_memory_dir() / "profile.json"
+
+    def _coo_memory_path(self) -> Path:
+        return self._coo_memory_dir() / "memory.jsonl"
+
+    def _read_coo_profile(self) -> dict[str, Any]:
+        path = self._coo_profile_path()
+        if not path.exists():
+            profile = {
+                "role": "Chief Executive Officer",
+                "coo_role": "Chief Operating Officer personal assistant",
+                "communication_style": "executive, concise, action-oriented",
+                "approval_preferences": {
+                    "prd": "ask",
+                    "release": "ask",
+                    "risky_tools": "ask",
+                },
+            }
+            path.write_text(
+                json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            return profile
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _append_coo_memory(self, item: dict[str, Any]) -> None:
+        payload = {"created_at": datetime.utcnow().isoformat(), **dict(item)}
+        if "content" not in payload:
+            payload["content"] = json.dumps(item, ensure_ascii=False)
+        with open(self._coo_memory_path(), "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + os.linesep)
+
+    def _read_coo_memory(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        path = self._coo_memory_path()
+        if not path.exists():
+            return []
+        items: list[dict[str, Any]] = []
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    items.append(payload)
+        return items[-max(1, limit) :]
+
+    def _company_status_payload(self, session: COOSession) -> dict[str, Any]:
+        project = self.orchestrator.active_project
+        pending_approvals = self.get_pending_approvals()
+        return {
+            "ceo_role": "Chief Executive Officer",
+            "coo_role": "Chief Operating Officer",
+            "active_project_phase": getattr(project, "phase", None) or "unassigned",
+            "active_project_name": getattr(project, "name", None),
+            "departments": sorted(self.orchestrator.departments),
+            "active_department": session.metadata.get("last_target"),
+            "last_task_id": session.metadata.get("last_task_id"),
+            "last_route": session.metadata.get("last_route", {}),
+            "pending_approvals": pending_approvals,
+            "recent_errors": list(session.metadata.get("recent_errors", []) or [])[-5:],
+            "message_count": len(session.messages),
+        }
+
+    def _format_company_status_for_ceo(self, session: COOSession) -> str:
+        status = self._company_status_payload(session)
+        lines = [
+            "CEO briefing:",
+            f"- Project phase: {status['active_project_phase']}",
+            f"- Departments online: {', '.join(status['departments']) or 'none'}",
+            f"- Active department: {status['active_department'] or 'none'}",
+            f"- Last task: {status['last_task_id'] or 'none'}",
+            f"- Pending CEO approvals: {len(status['pending_approvals'])}",
+        ]
+        if status["pending_approvals"]:
+            lines.append("  - " + ", ".join(status["pending_approvals"]))
+        if status["recent_errors"]:
+            lines.append(f"- Recent COO errors: {len(status['recent_errors'])}")
+        return "\n".join(lines)
+
+    def _get_coo_action_prompt(self, session: COOSession) -> str:
+        departments = sorted(self.orchestrator.departments)
+        return (
+            "You are NanobotCOO, the Chief Operating Officer and persistent personal "
+            "assistant for the human Chief Executive Officer (CEO). Your job is to "
+            "understand the CEO's intent, answer directly when no delegation is needed, "
+            "ask clarifying questions when the objective is unclear, remember durable "
+            "CEO preferences, inspect company status, use approved tools, or delegate "
+            "work into the existing Aider Plus CompanyOrchestrator.\n\n"
+            "Do not replace Product, UX, Engineering, QA, DevOps, or the "
+            "CompanyOrchestrator. When execution belongs to the internal company, choose "
+            "action=delegate_company_task and select exactly one company_target from the "
+            f"available departments: {', '.join(departments)}.\n"
+            "When a direct executive response is enough, choose answer_directly. "
+            "When the CEO asks about status or approvals, choose inspect_status. "
+            "When the CEO asks you to remember something, choose update_memory. "
+            "When the CEO asks what you remember, choose recall_memory. "
+            "When unsafe or ambiguous, choose ask_ceo_clarification.\n\n"
+            "Return only JSON matching this COOActionDecision schema:\n"
+            "{\n"
+            '  "action": "answer_directly | ask_ceo_clarification | delegate_company_task | inspect_status | update_memory | recall_memory | use_tool",\n'
+            '  "response_to_ceo": "short executive response when not delegating",\n'
+            '  "company_target": "one available department when delegating, otherwise null",\n'
+            '  "tool_name": "optional tool name",\n'
+            '  "confidence": 0.0,\n'
+            '  "requires_approval": false,\n'
+            '  "memory_updates": [{"type": "ceo_preference", "content": "..."}],\n'
+            '  "reasoning": "short explanation"\n'
+            "}\n\n"
+            f"Current company status: {json.dumps(self._company_status_payload(session), ensure_ascii=False)}"
+        )
 
     async def get_session_status(self, session_id: str) -> dict[str, Any]:
         """Return a clean dashboard payload for COO observability surfaces."""
@@ -764,6 +1330,9 @@ class NanobotCOO:
             "status": "active" if session.messages else "new",
             "active_department": session_snapshot.get("active_department"),
             "current_route": session.metadata.get("last_route", {}),
+            "last_coo_action": session.metadata.get("last_coo_action", {}),
+            "ceo_profile": self._read_coo_profile(),
+            "coo_memory": self.recall_ceo_memory(limit=5),
             "last_deliverable_summary": session_snapshot.get(
                 "last_deliverable_summary"
             ),
@@ -957,9 +1526,11 @@ class NanobotCOO:
             return None
 
         parsed = self._parse_json(result.get("content", ""))
-        candidate = str(
-            parsed.get("chosen_department") or parsed.get("target") or ""
-        ).strip().lower()
+        candidate = (
+            str(parsed.get("chosen_department") or parsed.get("target") or "")
+            .strip()
+            .lower()
+        )
         if candidate in self.orchestrator.departments:
             return COORouteDecision(
                 target=candidate,

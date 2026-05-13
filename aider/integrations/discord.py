@@ -143,15 +143,16 @@ def format_company_status_message(orchestrator: CompanyOrchestrator) -> str:
     return f"🏢 **Company Dashboard**\n```\n{rendered[:1800]}\n```"
 
 
-
 def format_coo_status_message(status: dict) -> str:
     if not status:
-        return "🤖 **COO Status**\nNo COO session is active yet."
+        return "🤖 **CEO/COO Briefing**\nNo COO session is active yet."
     current_route = status.get("current_route") or {}
+    last_action = status.get("last_coo_action") or {}
     lines = [
-        "🤖 **COO Status**",
+        "🤖 **CEO/COO Briefing**",
         f"Session: `{status.get('session_id')}`",
         f"Status: `{status.get('status')}`",
+        f"COO action: `{last_action.get('action', '—')}`",
         f"Active department: `{status.get('active_department') or '—'}`",
         (
             "Current route: "
@@ -162,18 +163,20 @@ def format_coo_status_message(status: dict) -> str:
     error_count = int(status.get("error_count", 0) or 0)
     if error_count > 0:
         last_error = status.get("last_error") or {}
-        lines.extend([
-            "",
-            "🚨 **Recent COO errors**",
-            f"• Count: `{error_count}`",
-            (
-                "• Last: "
-                f"`{last_error.get('error_type', 'unknown_error')}` "
-                f"after `{last_error.get('retries', 0)}` retries — "
-                f"{last_error.get('message', '')}"
-            ),
-            f"• Recovery: {last_error.get('recovery_suggestion', 'review COO activity')}",
-        ])
+        lines.extend(
+            [
+                "",
+                "🚨 **Recent COO errors**",
+                f"• Count: `{error_count}`",
+                (
+                    "• Last: "
+                    f"`{last_error.get('error_type', 'unknown_error')}` "
+                    f"after `{last_error.get('retries', 0)}` retries — "
+                    f"{last_error.get('message', '')}"
+                ),
+                f"• Recovery: {last_error.get('recovery_suggestion', 'review COO activity')}",
+            ]
+        )
         if last_error.get("escalate_to_human"):
             lines.append(
                 "• Human escalation pending"
@@ -189,6 +192,7 @@ def format_coo_status_message(status: dict) -> str:
     if summary:
         lines.extend(["", "**Last deliverable**", str(summary)[:800]])
     return "\n".join(lines)[:1900]
+
 
 class DiscordSessionManager:
     """In-memory session store keyed by channel/user/repo for easy future persistence."""
@@ -669,9 +673,9 @@ def build_discord_client(*args, **kwargs):
                 destination = (
                     "Engineering"
                     if self.gate_name == "release_approval"
-                    else "COO"
-                    if self.gate_name == "coo_human_escalation"
-                    else "Product"
+                    else (
+                        "COO" if self.gate_name == "coo_human_escalation" else "Product"
+                    )
                 )
                 await interaction.response.send_message(
                     f"📝 Change request sent back to {destination}.",
@@ -728,7 +732,9 @@ def build_discord_client(*args, **kwargs):
                     "proceed."
                 )
             elif self.gate_name == "coo_human_escalation":
-                content = "❌ COO escalation rejected. Review the session before retrying."
+                content = (
+                    "❌ COO escalation rejected. Review the session before retrying."
+                )
             else:
                 content = "❌ PRD rejected and routed back to Product."
             await interaction.response.edit_message(content=content, view=self)
@@ -816,9 +822,7 @@ def build_discord_client(*args, **kwargs):
             key = DiscordSessionKey(
                 guild_id=getattr(getattr(ctx, "guild", None), "id", 0) or 0,
                 channel_id=(
-                    getattr(channel, "id", None)
-                    or getattr(ctx, "channel_id", 0)
-                    or 0
+                    getattr(channel, "id", None) or getattr(ctx, "channel_id", 0) or 0
                 ),
                 user_id=getattr(author, "id", None),
                 repo_path=repo_path,

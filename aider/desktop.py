@@ -597,7 +597,7 @@ CHAT_TARGET_GUIDE = {
     "Company Workflow": (
         "Routes the prompt through COO-led Product → UX → Engineering → QA → DevOps orchestration."
     ),
-    "COO": "Talks directly with the COO routing/orchestration agent.",
+    "COO": "Ask the COO personal assistant to brief the CEO, remember preferences, or delegate work.",
     "Product": "Talks directly with the Product agent for requirements, PRDs, and ambiguity checks.",
     "UX": "Talks directly with the UX agent for design specs, screens, states, and accessibility.",
     "Engineering": "Talks directly with the Engineering agent for implementation plans and code changes.",
@@ -693,7 +693,7 @@ DASHBOARD_FIELD_GUIDE = (
     ),
     (
         "COO Activity",
-        "COO route, active department, recent events, errors, and recovery suggestions.",
+        "CEO/COO action, route, active department, recent events, errors, memory, and recovery suggestions.",
     ),
 )
 
@@ -1100,7 +1100,7 @@ class AiderPlusDesktop:
         self.deliverables_text.pack(fill="both", expand=True)
         panes.add(deliverables_frame, weight=2)
 
-        coo_frame = ttk.LabelFrame(panes, text="COO Activity", padding=4)
+        coo_frame = ttk.LabelFrame(panes, text="CEO/COO Activity", padding=4)
         self.coo_status_text = scrolledtext.ScrolledText(
             coo_frame, wrap=tk.WORD, height=8
         )
@@ -1424,11 +1424,13 @@ class AiderPlusDesktop:
         except Exception as err:
             return f"COO status unavailable: {err}"
         if not status:
-            return "No COO status is available yet."
+            return "No CEO/COO status is available yet."
         current_route = status.get("current_route") or {}
+        last_action = status.get("last_coo_action") or {}
         lines = [
             f"Session: {status.get('session_id')}",
             f"Status: {status.get('status')}",
+            f"COO action: {last_action.get('action', '—')}",
             f"Active department: {status.get('active_department') or '—'}",
             (
                 "Current route: "
@@ -1437,6 +1439,9 @@ class AiderPlusDesktop:
             ),
             f"Prompt caching: {self.company.caching_status()}",
         ]
+        coo_memory = status.get("coo_memory") or []
+        if coo_memory:
+            lines.append(f"COO memory notes: {len(coo_memory)}")
         error_count = int(status.get("error_count", 0) or 0)
         if error_count > 0:
             last_error = status.get("last_error") or {}

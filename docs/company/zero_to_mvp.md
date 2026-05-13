@@ -6,15 +6,19 @@ Aider Plus is designed around one product promise:
 >
 > A software company that keeps working after v0.
 
-The `aider company create` command makes that promise the default entry point
-for new product work. It turns a raw product idea into a template-grounded
-Company brief, then runs it through Aider's repo-aware implementation loop so the
-result remains reviewable, testable, and ready for future iteration.
+The `aider company create` command keeps the current-repo path for existing
+projects. The `aider company new` command adds a thin warehouse manager for new
+product work: it creates or reuses a Git-backed repo under `products/`, records
+it in `warehouse.json`, then runs the same template-grounded Company brief
+through Aider's repo-aware implementation loop so the result remains reviewable,
+testable, and ready for future iteration.
 
 ## Command
 
 ```bash
 aider company create "Build a simple habit tracker web app with login, dashboard, and streaks"
+# or create a product repo under ./products first
+aider company new "Build a simple habit tracker web app with login, dashboard, and streaks" --name habit-tracker
 ```
 
 Choose a product shape with `--template`:
@@ -40,6 +44,21 @@ List templates:
 ```bash
 aider company templates
 ```
+
+## Warehouse commands
+
+The warehouse is a registry of normal Git repositories, not a replacement for
+Git repos:
+
+```bash
+aider warehouse init ./products
+aider warehouse list
+aider warehouse open habit-tracker
+aider warehouse status
+```
+
+Each product directory remains independently editable with classic Aider, Company
+Mode, desktop, browser, CI, and normal Git tooling.
 
 ## Templates
 

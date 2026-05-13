@@ -20,6 +20,7 @@
 - [Configuration and model providers](#configuration-and-model-providers)
 - [Common workflows](#common-workflows)
 - [Zero-to-MVP golden path](#zero-to-mvp-golden-path)
+- [Products warehouse](#products-warehouse)
 - [Company workflow](#company-workflow)
 - [Nanobot COO orchestration](#nanobot-coo-orchestration)
 - [Memory, retrieval, learning, and observability](#memory-retrieval-learning-and-observability)
@@ -91,15 +92,17 @@ Aider Plus now combines upstream Aider with a multi-surface autonomous delivery 
 ### Coordinate through a Nanobot-inspired COO
 
 - `NanobotCOO` treats the human as the CEO and the COO as a persistent personal assistant plus company operator.
+- The COO feature list is intentionally Nanobot-like: a small readable core, research-friendly decision objects, built-in chat/API/memory/MCP/deployment paths, and hackable adapters instead of a hidden monolith.
+- Chat messages arrive from CLI, Discord, browser, desktop, or API adapters; the machine-learning agent loop decides whether tools are needed; memory and skills are pulled into context; product-building or iteration requests are forwarded to `CompanyOrchestrator`.
 - `COOActionDecision` lets the COO answer directly, ask CEO clarification, inspect status, remember/recall COO memory, reserve tool use, or delegate to the internal company.
 - Delegation still uses `COORouteDecision` and the existing CompanyOrchestrator path, so Product → UX → Engineering → QA → DevOps logic remains unchanged.
 - Routing is resilient: transient failures are retried, bad route aliases are normalized, final failures can fall back to a safe department, and exhausted retries create observable human-escalation metadata.
-- Browser, desktop, and Discord status views can show current COO action, current route, active department, queue events, recent errors, pending escalations, COO memory, and deliverable summaries.
+- Browser and desktop are the full operational consoles for approvals, audit/status views, memory, settings, and dashboards; Discord is kept as a chat-app ingress/egress adapter that forwards messages into the shared COO/company runtime.
 
 ### Expose multiple user surfaces
 
 - **Terminal**: direct Aider CLI, `--headless`, `--bot-mode`, `--desktop`, onboarding commands, and approval commands.
-- **Discord**: bot façade for headless engineering tasks, prototype flows, COO-routed work, approvals, audit viewing, company status, COO status, and memory consolidation.
+- **Discord**: chat-app adapter only; it receives/sends chat messages and delegates all product, approval, audit, status, memory, and dashboard behavior to the shared COO/company runtime exposed in desktop/browser/API surfaces.
 - **Browser GUI**: Streamlit chat UI with main Chat, Company dashboard, Memory, Settings, Guide, and per-agent tabs for COO/Product/UX/Engineering/Reviewer/QA/DevOps.
 - **Native desktop GUI**: zero-dependency Tkinter launcher with direct chat, Company workflow routing, per-agent tabs, dashboard/status panels, approvals, audit log, project memory, settings editor, and guide text without requiring Streamlit, pywebview, WebView2, or a browser.
 - **Python APIs**: `AiderAgentLoop`, `AgentLoopConfig`, `ToolRegistry`, `CompanyConfig`, `DepartmentConfig`/`AgentConfig`, `CompanyOrchestrator`, `NanobotCOO`, department classes, `ProjectMemory`, `ContextBuilder`, `MemoryRetriever`, `PlaybookManager`, `AuditPatternExtractor`, Discord/session helpers, settings helpers, and desktop/browser helpers.
@@ -122,7 +125,7 @@ Important runtime areas:
 High-level flow:
 
 ```text
-User / Script / Discord / Browser GUI / Native Desktop
+User / Script / chat app adapters / Browser GUI / Native Desktop
         |
         +--> classic Aider coder path
         |
@@ -310,9 +313,11 @@ Choose a product template for more grounded Product/UX/Engineering/QA handoffs:
 ```bash
 aider company templates
 aider company create "Build a webhook API for Stripe events" --template fastapi-backend -- --model gpt-5.5
+aider company new "Build a habit tracker" --name habit-tracker --template nextjs-app
+aider warehouse list
 ```
 
-Built-in templates cover SaaS dashboards, CLI tools, FastAPI backends, Next.js apps, Discord bots, browser extensions, data apps, and internal admin tools. Use `--dry-plan` to preview the generated Company brief without calling a model. See `docs/company/zero_to_mvp.md` for the full lifecycle example.
+Use `company create` inside the current repo, or use `company new` to create/select a Git-backed product repo inside the central `products/` warehouse before routing the same brief through Company Mode. Built-in templates cover SaaS dashboards, CLI tools, FastAPI backends, Next.js apps, Discord bots, browser extensions, data apps, and internal admin tools. Use `--dry-plan` to preview the generated Company brief without calling a model. See `docs/company/zero_to_mvp.md` for the full lifecycle example.
 
 ### 6) Company prototype flow
 
@@ -348,6 +353,26 @@ The template catalog gives Product, UX, Engineering, QA, and DevOps more concret
 - `internal-admin` for operational back-office tools.
 
 Preview the generated brief with `--dry-plan`, list templates with `aider company templates`, and pass normal Aider options after `--`. The full lifecycle example in `docs/company/zero_to_mvp.md` shows the intended proof path from initial idea through clarification, PRD, UX spec, engineering diff, QA failure, engineering revision, passing QA, release approval, DevOps result, and post-mortem playbook entry.
+
+---
+
+## Products warehouse
+
+Aider Plus now adds a thin ChatDev-inspired product studio layer without replacing Aider's repo-native workflow:
+
+> **Warehouse = a registry of Git-backed product repos, not a replacement for repos.**
+
+The default warehouse is a `products/` directory under the current working directory. Each product gets its own normal Git repository, `.aider` state, settings, audit/memory, and future iteration history. The warehouse keeps a lightweight `warehouse.json` registry plus a shared `.aider/coo/` location for cross-product COO memory experiments.
+
+```bash
+aider warehouse init ./products
+aider company new "Build a habit tracker" --name habit-tracker --template nextjs-app
+aider warehouse list
+aider warehouse open habit-tracker
+aider warehouse status
+```
+
+`aider company create` remains the current-repo path. `aider company new` creates or reuses `products/<product-name>/`, initializes Git there, records it in the registry, changes into that repo, and then runs the same template-grounded Company brief so Engineering builds the coherent MVP structure inside the product repo.
 
 ---
 
@@ -457,16 +482,9 @@ Aider Plus treats MCP as an optional external tool/context layer that complement
 
 ## Discord integration
 
-The Discord integration is designed for non-interactive operation:
+Discord is intentionally treated as a chat app, not as a second product console. It should receive messages, preserve channel/session identity, and forward those messages into the shared NanobotCOO/company runtime. Product creation, iteration, approvals, audit logs, dashboards, memory consolidation, status inspection, and settings belong to the common runtime and are surfaced fully in desktop, browser, CLI, or API paths.
 
-- Headless Aider execution for coding prompts.
-- CompanyOrchestrator-backed engineering and prototype tasks.
-- Product/PRD workflows and approval handoffs.
-- NanobotCOO-backed message routing, status, route history, recent error display, and human escalation notices.
-- Audit-log and company-dashboard rendering.
-- Dream/conversation consolidation for long-running sessions.
-
-The onboarding flow can prompt for Discord bot configuration, and provider keys can still come from environment/config files.
+This keeps Discord thin and hackable: if a feature works through the COO/company runtime, Discord can expose it as chat text without owning separate business logic. The onboarding flow can still prompt for Discord bot configuration, and provider keys can still come from environment/config files.
 
 ---
 

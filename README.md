@@ -19,6 +19,7 @@
 - [Installation](#installation)
 - [Configuration and model providers](#configuration-and-model-providers)
 - [Common workflows](#common-workflows)
+- [Zero-to-MVP golden path](#zero-to-mvp-golden-path)
 - [Company workflow](#company-workflow)
 - [Nanobot COO orchestration](#nanobot-coo-orchestration)
 - [Memory, retrieval, learning, and observability](#memory-retrieval-learning-and-observability)
@@ -46,7 +47,7 @@ Aider Plus turns upstream Aider into a foundation for **agentic software deliver
 5. Learn from prior sessions by extracting typed audit patterns, deduplicating and bounding a playbook, retrieving only relevant lessons, and tracking task/QA/token/cache metrics across runs.
 6. Expose the same runtime to CLI commands, scripts, Discord bots, Streamlit/browser UI, a zero-dependency Tkinter desktop app, and Python APIs.
 
-In short: this repository is both an interactive AI pair-programmer and an embeddable runtime for autonomous software agents that can plan, implement, review, approve, test, release, observe, recover, and improve from historical outcomes.
+In short: this repository is both an interactive AI pair-programmer and an embeddable runtime for autonomous software agents that can plan, implement, review, approve, test, release, observe, recover, and improve from historical outcomes. The headline differentiator is **ChatDev-like product creation with Aider-like continuous development**: a software company that keeps working after v0.
 
 ---
 
@@ -296,17 +297,57 @@ result = await loop.run("Add validation and tests for the payment payload")
 
 Use `NanobotCOO`, Discord messages, browser per-agent tabs, or desktop per-agent tabs to let the COO classify a request, track the session, route to the right department, retry/fallback on failures, and expose status/events to the UI.
 
-### 5) Company prototype flow
+### 5) Zero-to-MVP product creation
+
+Use the golden path when you want Aider Plus to turn a product idea into an MVP-shaped implementation while preserving Aider's ability to iterate on that repo afterward:
+
+```bash
+aider company create "Build a simple habit tracker web app with login, dashboard, and streaks"
+```
+
+Choose a product template for more grounded Product/UX/Engineering/QA handoffs:
+
+```bash
+aider company templates
+aider company create "Build a webhook API for Stripe events" --template fastapi-backend -- --model gpt-5.5
+```
+
+Built-in templates cover SaaS dashboards, CLI tools, FastAPI backends, Next.js apps, Discord bots, browser extensions, data apps, and internal admin tools. Use `--dry-plan` to preview the generated Company brief without calling a model. See `docs/company/zero_to_mvp.md` for the full lifecycle example.
+
+### 6) Company prototype flow
 
 Use `CompanyOrchestrator`, Discord `/prototype`, or Company Mode in the GUI/desktop to route a raw product idea through Product ambiguity detection, optional CEO clarification, typed PRD creation, PRD approval, UX/design, Engineering implementation, reviewer revisions, QA, release approval, DevOps, and post-mortem learning.
 
-### 6) Retrieval-aware playbook learning
+### 7) Retrieval-aware playbook learning
 
 Let Company workflow runs accumulate audit logs. Post-mortems extract typed lessons into the playbook, `PlaybookManager` deduplicates and bounds them, and `ContextBuilder` injects only relevant lessons for the next task.
 
-### 7) Browser or desktop Company Mode
+### 8) Browser or desktop Company Mode
 
 Start `aider --browser` or `aider --desktop`, choose direct chat, Company workflow, or a specific agent tab; watch the dashboard, approve or reject gates, inspect audit/COO events, edit settings, read the guide, and view project memory without leaving the UI.
+
+---
+
+## Zero-to-MVP golden path
+
+`aider company create` is the primary product-creation entry point. It translates a raw idea into a template-grounded Company brief and runs that brief through Aider's repo-aware implementation loop so v0 remains reviewable and ready for continuous development.
+
+```bash
+aider company create "Build a simple habit tracker web app with login, dashboard, and streaks"
+```
+
+The template catalog gives Product, UX, Engineering, QA, and DevOps more concrete defaults for common product shapes:
+
+- `saas-dashboard` for authenticated dashboard products.
+- `cli-tool` for command-line products.
+- `fastapi-backend` for Python API services.
+- `nextjs-app` for React/Next.js apps.
+- `discord-bot` for Discord command/event bots.
+- `browser-extension` for manifest/popup/content-script projects.
+- `data-app` for ingestion, transforms, charts, and exports.
+- `internal-admin` for operational back-office tools.
+
+Preview the generated brief with `--dry-plan`, list templates with `aider company templates`, and pass normal Aider options after `--`. The full lifecycle example in `docs/company/zero_to_mvp.md` shows the intended proof path from initial idea through clarification, PRD, UX spec, engineering diff, QA failure, engineering revision, passing QA, release approval, DevOps result, and post-mortem playbook entry.
 
 ---
 

@@ -23,6 +23,7 @@
 - [Nanobot COO orchestration](#nanobot-coo-orchestration)
 - [Memory, retrieval, learning, and observability](#memory-retrieval-learning-and-observability)
 - [Prompt caching and per-agent configuration](#prompt-caching-and-per-agent-configuration)
+- [MCP integration](#mcp-integration)
 - [Discord integration](#discord-integration)
 - [Browser GUI](#browser-gui)
 - [Native desktop mode](#native-desktop-mode)
@@ -73,6 +74,7 @@ Aider Plus now combines upstream Aider with a multi-surface autonomous delivery 
 - Agent calls can use LiteLLM-compatible tool definitions, bounded tool iterations, prompt-cache metadata, coder-native message assembly, and structured result metadata.
 - Coding tool calls execute through Aider-backed architect/editor orchestration so planning and implementation can be separated while still using normal Aider file editing.
 - `ToolRegistry` centralizes tool registration, tool dispatch, department-aware allowlists, and structured permission failures.
+- Optional MCP client support lazily connects project/task-scoped stdio, Streamable HTTP, or SSE servers, adapts discovered MCP tools into `ToolRegistry`, and keeps LiteLLM/LiteLLM Proxy as the model gateway rather than a tool transport.
 
 ### Orchestrate Company Mode delivery
 
@@ -395,6 +397,18 @@ Company Mode supports prompt-caching controls at multiple layers:
 - Settings helpers write `.env` key/value updates and `.aider.conf.yml`-style config updates so browser and desktop surfaces share configuration behavior.
 
 Recommended defaults keep caching enabled for prompt-heavy agents such as COO, Product, UX, Engineering, and Reviewer while leaving smaller QA/DevOps prompts uncached unless configured otherwise.
+
+---
+
+## MCP integration
+
+Aider Plus treats MCP as an optional external tool/context layer that complements, but does not replace, LiteLLM or LiteLLM Proxy:
+
+- `aider.mcp.MCPClientManager` lazily connects configured MCP servers per project/task scope and supports stdio, Streamable HTTP, and SSE transports when the optional `mcp` extra is installed.
+- MCP server settings live in `MCPConfig` / `MCPServerConfig`, separate from model/provider settings, so LiteLLM remains responsible for model routing while MCP remains responsible for tools and context.
+- Discovered MCP tools are converted into normal Aider Plus `ToolRegistry` tools named like `mcp__server__tool`, preserving department allowlists, permission failures, and optional human approval gates for high-risk calls.
+- `AiderPlusMCPServer` provides a small safe MCP-server façade that can expose status, context/memory, headless-task submission, Company-task submission, pending approvals, and approval/rejection actions.
+- Install optional MCP dependencies with `python -m pip install -e '.[mcp]'`; base installs remain MCP-free for CI and minimal local setups.
 
 ---
 

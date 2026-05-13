@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import uuid
 from typing import Awaitable, Callable, Dict, List, Optional, Union
 
 from aider.memory import ProjectMemory
@@ -107,11 +108,18 @@ class CompanyOrchestrator:
         if agent_loop is None:
             return
 
+        if hasattr(agent_loop, "mcp_approval_handler"):
+            agent_loop.mcp_approval_handler = self._request_mcp_tool_approval
+        mcp_manager = getattr(agent_loop, "mcp_manager", None)
+        if mcp_manager is not None:
+            mcp_manager.approval_handler = self._request_mcp_tool_approval
+
         agent_loop.enable_prompt_caching = dept_config.enable_caching
         loop_config = getattr(agent_loop, "config", None)
         if loop_config is not None:
             loop_config.enable_caching = dept_config.enable_caching
             loop_config.cache_type = dept_config.cache_type
+            loop_config.mcp = self.company_config.mcp
 
         if loop_config is not None:
             loop_config.department_config = dept_config
@@ -154,6 +162,32 @@ class CompanyOrchestrator:
 
         task.add_done_callback(_done)
         return task
+
+    async def _request_mcp_tool_approval(self, request: dict) -> bool:
+        """Create a human approval gate for high-risk MCP tool calls."""
+        server = str(request.get("server", "unknown"))
+        tool = str(request.get("tool", "unknown"))
+        arguments = request.get("arguments", {})
+        gate_task = CompanyTask(
+            task_id=f"mcp-approval-{uuid.uuid4().hex[:12]}",
+            origin="mcp",
+            target="engineering",
+            artifact_type="mcp_tool_call",
+            payload={"server": server, "tool": tool, "arguments": arguments},
+            blocking=True,
+            context={
+                "gate_name": "mcp_tool_approval",
+                "approver_role": "ceo",
+                "artifact_preview": json.dumps(
+                    {"server": server, "tool": tool, "arguments": arguments},
+                    sort_keys=True,
+                )[:1500],
+                "handoff_to": "engineering",
+            },
+        )
+        decision = await self.approvals.create_request(gate_task)
+        self.approvals.close_request(gate_task.task_id)
+        return bool(decision.approved)
 
     async def shutdown(self) -> None:
         """Cancel orchestrator-owned tasks and wait for graceful exit."""

@@ -175,7 +175,10 @@ def handle_company_cli_pre_coder(command: CompanyCLICommand) -> int | None:
                 command.project_name or slugify_product_name(command.idea)[:48]
             )
             print(f"Warehouse: {warehouse}")
-            print(f"Product repo: {warehouse / slugify_product_name(product_name)}")
+            print(f"Products dir: {warehouse / 'products'}")
+            print(
+                f"Product repo: {warehouse / 'products' / slugify_product_name(product_name)}"
+            )
         print(render_company_plan(command))
         return 0
     return None
@@ -279,6 +282,7 @@ def handle_warehouse_cli(command: WarehouseCLICommand) -> int:
             manager.init()
             print(f"Warehouse initialized at {manager.root}")
             print(f"Registry: {manager.registry_path}")
+            print(f"Products dir: {manager.products_dir}")
             return 0
         if command.action == "list":
             products = manager.list_products()
@@ -294,6 +298,7 @@ def handle_warehouse_cli(command: WarehouseCLICommand) -> int:
             status = manager.status()
             print(f"Warehouse: {status['root']}")
             print(f"Registry: {status['registry']}")
+            print(f"Products dir: {status['products_dir']}")
             print(
                 f"Products: {status['products']} ({status['existing_products']} existing, {status['missing_products']} missing)"
             )
@@ -331,6 +336,7 @@ def prepare_company_workspace(command: CompanyCLICommand) -> None:
     object.__setattr__(command, "product_path", record.path)
     os.chdir(record.path)
     print(f"Warehouse: {manager.root}")
+    print(f"Products dir: {manager.products_dir}")
     print(f"Product repo: {record.path}")
 
 

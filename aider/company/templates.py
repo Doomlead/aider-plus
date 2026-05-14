@@ -1,14 +1,16 @@
 """Zero-to-MVP product templates for Aider Plus Company Mode.
 
-The templates are intentionally lightweight. They do not scaffold files by
-copying a framework skeleton; instead they ground Product, UX, Engineering,
-QA, and DevOps prompts with product-shape-specific expectations so the same
-repo-native Aider workflow can create v0 and keep iterating afterward.
+The templates are intentionally lightweight. They scaffold a coherent MVP shape
+without copying a full framework distribution, then ground Product, UX,
+Engineering, QA, and DevOps prompts with product-shape-specific expectations so
+the same repo-native Aider workflow can create v0 and keep iterating afterward.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from string import Template
 
 
 @dataclass(frozen=True)
@@ -214,6 +216,253 @@ TEMPLATES: dict[str, ProjectTemplate] = {
     ),
 }
 
+COMMON_STARTER_FILES: dict[str, str] = {
+    ".gitignore": """# Aider Plus product repo
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+node_modules/
+dist/
+build/
+.next/
+.DS_Store
+""",
+    "docs/product-brief.md": """# $project_name Product Brief
+
+## Idea
+$idea
+
+## Template
+$template_label (`$template_key`)
+
+## Delivery Loop
+- Product: clarify the core user, promise, and MVP scope.
+- UX: define the first-run flow, main screens, and accessible states.
+- Engineering: keep the implementation repo-native, modular, and testable.
+- QA: add smoke checks around the critical path and edge states.
+- DevOps: document local run, configuration, and deployment assumptions.
+
+## Next Iteration Notes
+Capture user approvals, QA findings, and follow-up scope here so future company
+runs can keep evolving the same Git repository.
+""",
+}
+
+TEMPLATE_STARTER_FILES: dict[str, dict[str, str]] = {
+    "saas-dashboard": {
+        "README.md": """# $project_name
+
+$idea
+
+Aider Plus scaffolded this as a SaaS dashboard MVP. Start with the product brief
+in `docs/product-brief.md`, then evolve the app with Company Mode inside this
+normal Git repository.
+
+## Suggested MVP Structure
+- `src/app/` — pages, routes, and dashboard shell
+- `src/components/` — reusable UI components
+- `src/lib/` — data contracts, permissions, and service adapters
+- `tests/` — smoke and unit checks for critical flows
+
+## Local Development
+Document the selected framework commands here after the first implementation
+pass, for example install, test, lint, and run commands.
+""",
+        "src/app/README.md": """# App shell
+
+Define routes, layouts, dashboard states, and authenticated/unauthenticated
+boundaries here.
+""",
+        "src/components/README.md": """# Components
+
+Keep metric cards, tables, forms, empty states, and dialogs reusable and
+accessible.
+""",
+        "src/lib/README.md": """# Product logic
+
+Keep data contracts, permission helpers, and mock service adapters here so the
+MVP can later connect to real auth, billing, and persistence.
+""",
+        "tests/README.md": """# Tests
+
+Add smoke tests for navigation, auth guards, CRUD paths, and dashboard empty or
+error states.
+""",
+    },
+    "nextjs-app": {
+        "README.md": """# $project_name
+
+$idea
+
+Aider Plus scaffolded this as a Next.js-style MVP workspace while keeping the
+repo Git-native and dependency-light until implementation choices are confirmed.
+
+## Suggested MVP Structure
+- `app/` — routes and page-level data boundaries
+- `components/` — accessible UI components and states
+- `lib/` — product data, service adapters, and pure helpers
+- `tests/` — route/component smoke tests
+
+## Local Development
+After Company Mode selects concrete dependencies, document install, run, lint,
+and test commands here.
+""",
+        "app/README.md": """# Routes
+
+Model primary routes, loading/error/empty states, and conversion or engagement
+flows here.
+""",
+        "components/README.md": """# Components
+
+Build accessible components with explicit props for loading, disabled, error,
+and responsive states.
+""",
+        "lib/README.md": """# Product data and helpers
+
+Keep fetch boundaries, mocked data, and reusable transformations isolated from
+UI components.
+""",
+        "tests/README.md": """# Tests
+
+Add component rendering, route smoke, accessibility-critical, and data state
+checks here.
+""",
+    },
+    "fastapi-backend": {
+        "README.md": """# $project_name
+
+$idea
+
+Aider Plus scaffolded this as a FastAPI backend MVP. Keep route contracts,
+service logic, and persistence boundaries separate as the API evolves.
+
+## Suggested MVP Structure
+- `app/main.py` — API entrypoint and health route
+- `app/routers/` — resource routes
+- `app/schemas/` — request/response contracts
+- `app/services/` — business logic
+- `app/repositories/` — persistence adapters
+- `tests/` — route and schema tests
+""",
+        "app/main.py": """\"\"\"$project_name API entrypoint.\"\"\"\n\n\ndef health() -> dict[str, str]:\n    return {\"status\": \"ok\", \"product\": \"$project_slug\"}\n""",
+        "app/routers/README.md": "Route modules live here. Keep transport concerns thin.\n",
+        "app/schemas/README.md": "Request and response models live here.\n",
+        "app/services/README.md": "Business logic lives here, outside route handlers.\n",
+        "app/repositories/README.md": "Persistence adapters live here and should be swappable in tests.\n",
+        "tests/README.md": "Add route, validation, auth boundary, and not-found tests here.\n",
+    },
+    "cli-tool": {
+        "README.md": """# $project_name
+
+$idea
+
+Aider Plus scaffolded this as a CLI MVP.
+
+## Suggested MVP Structure
+- `src/$python_package/cli.py` — argument parsing and command dispatch
+- `src/$python_package/commands/` — small command handlers
+- `tests/` — parser, exit-code, and golden-output checks
+""",
+        "src/$python_package/__init__.py": '"""$project_name package."""\n',
+        "src/$python_package/cli.py": """\"\"\"CLI entrypoint for $project_name.\"\"\"\n\n\ndef main(argv: list[str] | None = None) -> int:\n    \"\"\"Run the CLI. Replace this placeholder during implementation.\"\"\"\n    return 0\n""",
+        "src/$python_package/commands/README.md": "Keep command handlers small and testable.\n",
+        "tests/README.md": "Add argument parsing, exit code, invalid input, and golden-output tests here.\n",
+    },
+    "discord-bot": {
+        "README.md": """# $project_name
+
+$idea
+
+Aider Plus scaffolded this as a Discord bot MVP.
+
+## Suggested MVP Structure
+- `bot/commands/` — command handlers
+- `bot/events/` — event handlers
+- `bot/services/` — moderation/business logic
+- `tests/` — mocked Discord client and permission checks
+
+Never commit Discord tokens. Document required environment variables in
+`.env.example` before running the bot.
+""",
+        ".env.example": "DISCORD_TOKEN=\nDISCORD_GUILD_ID=\n",
+        "bot/commands/README.md": "Command handlers live here. Keep permission checks explicit.\n",
+        "bot/events/README.md": "Event handlers live here. Avoid business logic in transport code.\n",
+        "bot/services/README.md": "Reusable moderation or product services live here.\n",
+        "tests/README.md": "Add mocked command, permission-denial, event payload, and config tests here.\n",
+    },
+    "browser-extension": {
+        "README.md": """# $project_name
+
+$idea
+
+Aider Plus scaffolded this as a browser extension MVP.
+
+## Suggested MVP Structure
+- `extension/manifest.json` — minimal permissions and extension metadata
+- `extension/popup/` — popup UI
+- `extension/options/` — options UI
+- `extension/content/` — content scripts
+- `src/` — reusable logic separated from browser APIs
+- `tests/` — manifest, selector, and pure-logic checks
+""",
+        "extension/manifest.json": """{
+  "manifest_version": 3,
+  "name": "$project_name",
+  "version": "0.0.1",
+  "permissions": []
+}
+""",
+        "extension/popup/README.md": "Popup UI files live here.\n",
+        "extension/options/README.md": "Options UI and settings flows live here.\n",
+        "extension/content/README.md": "Content scripts live here. Keep DOM selectors configurable.\n",
+        "src/README.md": "Reusable extension logic separated from browser APIs lives here.\n",
+        "tests/README.md": "Add manifest, permission, selector, and pure-logic tests here.\n",
+    },
+    "data-app": {
+        "README.md": """# $project_name
+
+$idea
+
+Aider Plus scaffolded this as a data app MVP.
+
+## Suggested MVP Structure
+- `data/sample/` — representative fixtures
+- `src/ingestion/` — source readers and refresh boundaries
+- `src/transforms/` — pure transformations and metrics
+- `src/presentation/` — charts, views, and export contracts
+- `tests/` — fixture-driven transform and chart contract tests
+""",
+        "data/sample/README.md": "Place small representative sample data fixtures here.\n",
+        "src/ingestion/README.md": "Source readers and freshness checks live here.\n",
+        "src/transforms/README.md": "Pure transforms and metric definitions live here.\n",
+        "src/presentation/README.md": "Chart contracts, views, and export adapters live here.\n",
+        "tests/README.md": "Add fixture-driven transform, dirty data, and export contract tests here.\n",
+    },
+    "internal-admin": {
+        "README.md": """# $project_name
+
+$idea
+
+Aider Plus scaffolded this as an internal admin MVP.
+
+## Suggested MVP Structure
+- `src/app/` — queues, detail screens, and workflows
+- `src/components/` — confirmation states, filters, tables, and forms
+- `src/lib/permissions/` — role and approval boundaries
+- `src/lib/audit/` — audit event contracts or placeholders
+- `tests/` — permission, destructive-action, and filter checks
+""",
+        "src/app/README.md": "Workflow queues, details, and operator flows live here.\n",
+        "src/components/README.md": "Admin components, confirmation states, filters, and tables live here.\n",
+        "src/lib/permissions/README.md": "Role checks and approval boundaries live here.\n",
+        "src/lib/audit/README.md": "Audit event contracts and placeholders live here.\n",
+        "tests/README.md": "Add permission, destructive-action, filter, and audit assertion tests here.\n",
+    },
+}
+
+
 DEFAULT_TEMPLATE_KEY = "saas-dashboard"
 
 
@@ -234,6 +483,52 @@ def get_template(key: str | None) -> ProjectTemplate:
         raise ValueError(
             f"Unknown project template '{key}'. Available templates: {choices}"
         ) from exc
+
+
+def render_template_starter_files(
+    *,
+    idea: str,
+    template_key: str | None = None,
+    project_name: str,
+    project_slug: str,
+) -> dict[str, str]:
+    """Return the starter file map for a product template.
+
+    The files are intentionally thin placeholders and docs, not a full generated
+    framework. They give Company Mode a coherent MVP structure to iterate inside
+    while preserving the repo as a normal Git repository.
+    """
+
+    template = get_template(template_key)
+    python_package = project_slug.replace("-", "_")
+    values = {
+        "idea": idea.strip(),
+        "project_name": project_name.strip(),
+        "project_slug": project_slug,
+        "python_package": python_package,
+        "template_key": template.key,
+        "template_label": template.label,
+    }
+    files: dict[str, str] = {
+        ".aider/company/product.json": json.dumps(
+            {
+                "name": project_name.strip(),
+                "slug": project_slug,
+                "template": template.key,
+                "idea": idea.strip(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    }
+    for path, content in {
+        **COMMON_STARTER_FILES,
+        **TEMPLATE_STARTER_FILES.get(template.key, {}),
+    }.items():
+        rendered_path = Template(path).safe_substitute(values)
+        files[rendered_path] = Template(content).safe_substitute(values)
+    return files
 
 
 def render_zero_to_mvp_prompt(

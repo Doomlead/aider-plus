@@ -10,7 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from aider.company.templates import render_template_starter_files
+
 WAREHOUSE_REGISTRY = "warehouse.json"
+DEFAULT_WAREHOUSE_DIRNAME = "AiderPlusWarehouse"
 DEFAULT_PRODUCTS_DIRNAME = "products"
 
 
@@ -57,10 +60,10 @@ def slugify_product_name(name: str) -> str:
 
 
 def default_warehouse_path(cwd: str | Path | None = None) -> Path:
-    """Default to a local ./products warehouse for studio-style product work."""
+    """Default to a local ./AiderPlusWarehouse studio root."""
 
     root = Path(cwd) if cwd is not None else Path.cwd()
-    return root.resolve() / DEFAULT_PRODUCTS_DIRNAME
+    return root.resolve() / DEFAULT_WAREHOUSE_DIRNAME
 
 
 class WarehouseManager:
@@ -72,8 +75,15 @@ class WarehouseManager:
         )
         self.registry_path = self.root / WAREHOUSE_REGISTRY
 
+    @property
+    def products_dir(self) -> Path:
+        """Directory that contains Git-backed product repositories."""
+
+        return self.root / DEFAULT_PRODUCTS_DIRNAME
+
     def init(self) -> dict[str, Any]:
         self.root.mkdir(parents=True, exist_ok=True)
+        self.products_dir.mkdir(parents=True, exist_ok=True)
         (self.root / ".aider" / "coo").mkdir(parents=True, exist_ok=True)
         if not self.registry_path.exists():
             self._write_registry(
@@ -99,6 +109,7 @@ class WarehouseManager:
             "products": len(products),
             "existing_products": len(existing),
             "missing_products": len(missing),
+            "products_dir": str(self.products_dir),
             "coo_memory": str(self.root / ".aider" / "coo"),
         }
 
@@ -111,9 +122,16 @@ class WarehouseManager:
     ) -> ProductRecord:
         self.init()
         slug = slugify_product_name(name)
-        product_path = self.root / slug
+        product_path = self.products_dir / slug
         product_path.mkdir(parents=True, exist_ok=True)
         self._ensure_git_repo(product_path)
+        self._write_starter_files(
+            product_path=product_path,
+            name=name,
+            slug=slug,
+            idea=idea,
+            template=template,
+        )
 
         registry = self._read_registry()
         products = registry.setdefault("products", {})
@@ -161,6 +179,28 @@ class WarehouseManager:
             json.dumps(registry, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+
+    @staticmethod
+    def _write_starter_files(
+        *,
+        product_path: Path,
+        name: str,
+        slug: str,
+        idea: str,
+        template: str | None,
+    ) -> None:
+        files = render_template_starter_files(
+            idea=idea,
+            template_key=template,
+            project_name=name,
+            project_slug=slug,
+        )
+        for relative_path, content in files.items():
+            target = product_path / relative_path
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
 
     @staticmethod
     def _ensure_git_repo(path: Path) -> None:

@@ -668,6 +668,10 @@ SETTINGS_FIELD_GUIDE = (
     ("Anthropic API key", "Repo-local ANTHROPIC_API_KEY value saved to .env."),
     ("OpenRouter API key", "Repo-local OPENROUTER_API_KEY value saved to .env."),
     (
+        "Discord bot token",
+        "Repo-local DISCORD_BOT_TOKEN value for the optional Discord chat adapter.",
+    ),
+    (
         "Other provider keys/env",
         "Additional KEY=value lines saved to .env, such as GEMINI_API_KEY or local provider settings.",
     ),
@@ -813,7 +817,9 @@ class AiderPlusDesktop:
 
         header = ttk.Frame(outer)
         header.pack(fill="x", pady=(0, 8))
-        ttk.Label(header, text=APP_TITLE, style="Header.TLabel").pack(side="left")
+        ttk.Label(
+            header, text=f"{APP_TITLE} · Product Studio", style="Header.TLabel"
+        ).pack(side="left")
         ttk.Button(header, text="⚙ Settings", command=self.open_settings).pack(
             side="left", padx=(12, 0)
         )
@@ -830,12 +836,12 @@ class AiderPlusDesktop:
         self.settings_frame = ttk.Frame(self.notebook, padding=8)
         self.guide_frame = ttk.Frame(self.notebook, padding=8)
 
-        self.notebook.add(self.chat_frame, text="Chat")
-        self.notebook.add(self.settings_frame, text="Settings")
-        self.notebook.add(self.dashboard_frame, text="Company Dashboard")
-        self.notebook.add(self.approvals_frame, text="Approvals")
-        self.notebook.add(self.audit_frame, text="Audit")
-        self.notebook.add(self.guide_frame, text="Guide")
+        self.notebook.add(self.chat_frame, text="💬 Chat")
+        self.notebook.add(self.settings_frame, text="⚙ Settings")
+        self.notebook.add(self.dashboard_frame, text="📊 Company Dashboard")
+        self.notebook.add(self.approvals_frame, text="✅ Approvals")
+        self.notebook.add(self.audit_frame, text="🧾 Audit")
+        self.notebook.add(self.guide_frame, text="📚 Guide")
 
         self._build_chat_tab()
         self._build_settings_tab()
@@ -955,7 +961,7 @@ class AiderPlusDesktop:
             self.settings_frame,
             text=(
                 "Shared settings experience: Global Aider, Per-Agent Overrides, "
-                "Provider Keys, and Advanced files. Preview validates changes before apply."
+                "provider/integration secrets, and Advanced files. Preview validates changes before apply."
             ),
             wraplength=980,
             justify="left",
@@ -1056,7 +1062,7 @@ class AiderPlusDesktop:
         api_frame = section_frames["Provider Keys"]
         ttk.Label(
             api_frame,
-            text="Provider credentials saved to repo-local .env. Secrets are masked in previews.",
+            text="Provider and integration secrets saved to repo-local .env. Secrets are masked in previews.",
             wraplength=820,
             justify="left",
         ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
@@ -1065,6 +1071,7 @@ class AiderPlusDesktop:
                 ("OPENAI_API_KEY", "OpenAI API key"),
                 ("ANTHROPIC_API_KEY", "Anthropic API key"),
                 ("OPENROUTER_API_KEY", "OpenRouter API key"),
+                ("DISCORD_BOT_TOKEN", "Discord bot token"),
             ),
             start=1,
         ):

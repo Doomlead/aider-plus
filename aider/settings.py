@@ -15,10 +15,14 @@ COMPANY_AGENT_NAMES = (
     "qa",
     "devops",
 )
-PROVIDER_API_KEYS = (
+PRIMARY_PROVIDER_API_KEYS = (
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY",
+)
+PROVIDER_API_KEYS = (
+    *PRIMARY_PROVIDER_API_KEYS,
+    "DISCORD_BOT_TOKEN",
 )
 
 
@@ -70,12 +74,14 @@ def collect_provider_key_updates(
     anthropic_key: str,
     openrouter_key: str,
     provider_keys: str,
+    discord_bot_token: str = "",
 ) -> dict[str, str]:
     updates: dict[str, str] = {}
     for key, value in (
         ("OPENAI_API_KEY", openai_key),
         ("ANTHROPIC_API_KEY", anthropic_key),
         ("OPENROUTER_API_KEY", openrouter_key),
+        ("DISCORD_BOT_TOKEN", discord_bot_token),
     ):
         if value:
             updates[key] = value.strip()

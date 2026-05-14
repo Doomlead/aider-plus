@@ -310,7 +310,8 @@ into:
 1. **Global Aider** — main, weak, and editor model defaults for direct chat.
 2. **Per-Agent Overrides** — model, prompt caching, API key override, and local
    endpoint/setting for COO, Product, UX, Engineering, Reviewer, QA, and DevOps.
-3. **Provider Keys** — OpenAI, Anthropic, OpenRouter, and other provider credentials.
+3. **Provider & integration secrets** — OpenAI, Anthropic, OpenRouter,
+   Discord bot token, and other credentials.
 4. **Advanced (`.env` + `.aider.conf`)** — extra environment lines and raw
    `.aider.conf.yml` editing.
 
@@ -322,6 +323,7 @@ AIDER_COMPANY_MODEL_COO=gpt-5.5
 AIDER_COMPANY_CACHING_COO=true
 AIDER_COMPANY_CACHING_ENGINEERING=true
 AIDER_MCP_ENABLED=true
+DISCORD_BOT_TOKEN=your-discord-bot-token
 ```
 
 Use **Preview changes** before saving, then **Apply & Restart Company Session** so

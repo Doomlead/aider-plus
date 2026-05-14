@@ -35,20 +35,15 @@ from aider.io import InputOutput
 from aider.main import main as cli_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
 from aider.scrape import Scraper, has_playwright
-from aider.settings import (
-    COMPANY_AGENT_NAMES,
-    agent_api_key_env_name,
-    agent_caching_env_name,
-    agent_local_env_name,
-    agent_model_env_name,
-    apply_env_updates,
-    collect_agent_env_updates,
-    collect_provider_key_updates,
-    parse_conf_text,
-    read_env_values,
-    write_conf_text,
-    write_env_updates,
+from aider.gui_settings_manager import (
+    SETTINGS_SECTIONS,
+    SettingsAgentForm,
+    SettingsForm,
+    build_settings_preview,
+    load_settings_form,
+    save_settings,
 )
+from aider.settings import COMPANY_AGENT_NAMES
 
 logger = logging.getLogger(__name__)
 _COMPANY_SESSIONS = {}
@@ -72,6 +67,18 @@ AGENT_CHAT_TARGETS = [
     "Company Workflow",
     *[company_agent_display_name(name) for name in COMPANY_AGENT_NAMES],
 ]
+
+AGENT_ICONS = {
+    "Direct Aider": "💬",
+    "Company Workflow": "🏢",
+    "COO": "🧭",
+    "Product": "📋",
+    "UX": "🎨",
+    "Engineering": "🛠️",
+    "Reviewer": "🔎",
+    "QA": "✅",
+    "DevOps": "🚀",
+}
 
 
 COMPANY_PHASES = [
@@ -538,6 +545,45 @@ class DesktopCompanySession:
             agent_config = config.get_department_config(role)
             states.append(f"{role}:{'on' if agent_config.enable_caching else 'off'}")
         return ", ".join(states) or "none"
+
+    def coo_status(self) -> dict:
+        if self.coo is None:
+            return {}
+        session_id = f"desktop:{self.repo_path}"
+        future = asyncio.run_coroutine_threadsafe(
+            self.coo.get_session_status(session_id), self.loop
+        )
+        return future.result(timeout=5)
+
+    def system_overview(self) -> dict:
+        pending = [
+            approval
+            for approval in self.pending_approvals()
+            if approval.get("status") == "pending"
+        ]
+        try:
+            coo_status = self.coo_status()
+        except Exception as err:
+            coo_status = {"status": f"unavailable: {err}"}
+        mcp_config = getattr(self.orchestrator.company_config, "mcp", None)
+        warehouse_registry = Path(self.repo_path) / "products" / "warehouse.json"
+        active_products = "None"
+        if warehouse_registry.exists():
+            active_products = str(warehouse_registry)
+        return {
+            "caching": self.caching_status(),
+            "coo_status": coo_status.get("status", "unknown"),
+            "coo_last_action": (coo_status.get("last_coo_action") or {}).get(
+                "action", "—"
+            ),
+            "pending_escalations": len(pending),
+            "active_warehouse_products": active_products,
+            "mcp_status": (
+                f"enabled ({len(getattr(mcp_config, 'servers', {}) or {})} servers)"
+                if getattr(mcp_config, "enabled", False)
+                else "disabled"
+            ),
+        }
 
     def audit_records(self, limit: int = 10) -> list[dict]:
         records = self.coder.project_memory.data.get("audit_log", [])
@@ -1042,6 +1088,7 @@ class GUI:
                 "Approvals",
                 "Audit Log",
                 "Project Memory",
+                "Guide",
             ]
         )
         with tabs[0]:
@@ -1056,13 +1103,62 @@ class GUI:
             self.do_company_audit_log_page()
         with tabs[5]:
             self.do_project_memory_page()
+        with tabs[6]:
+            self.do_guide_page()
+
+    def do_guide_page(self):
+        st.header("Aider Plus Guide")
+        st.caption("Short, task-oriented help for the browser and desktop UI.")
+        with st.expander("1. Choose the right chat target", expanded=True):
+            st.markdown(
+                "- **Direct Aider** for normal pair-programming.\n"
+                "- **Company Workflow** for COO-led Product → UX → Engineering → QA → DevOps work.\n"
+                "- **Agent tabs** when you want one role's focused opinion or output.\n"
+                "- Use the **Quick Agent Switcher** or bottom target selector to jump quickly."
+            )
+        with st.expander("2. Settings safely", expanded=True):
+            st.markdown(
+                "Use **Preview changes** first. Fix validation errors, then click "
+                "**Apply & Restart Company Session** so new agent loops pick up models, keys, "
+                "caching, `.env`, and `.aider.conf.yml` changes."
+            )
+        with st.expander("3. Watch the system", expanded=False):
+            st.markdown(
+                "The Dashboard shows caching by agent, COO status/last action, human "
+                "escalations, warehouse products, MCP status, deliverables, and COO activity. "
+                "Errors include recovery suggestions when the COO records them."
+            )
+        with st.expander("4. Keyboard and recovery tips", expanded=False):
+            st.markdown(
+                "- Ctrl/Cmd+Enter sends in desktop. Streamlit uses the chat input submit action.\n"
+                "- If an agent fails, check Settings preview, Provider Keys, MCP status, and Approvals.\n"
+                "- Persist Project Memory before closing if you want the Company context saved immediately."
+            )
 
     def do_chat_tab(self):
         st.caption(
             "Use the tabs below to chat with classic Aider, the full Company workflow, "
-            "or any dedicated Company agent."
+            "or any dedicated Company agent. Ctrl/Cmd+Enter sends from the main input."
         )
-        chat_tabs = st.tabs(AGENT_CHAT_TARGETS)
+        active_target = (
+            self.state.agent_chat_target
+            if self.state.agent_chat_target in AGENT_CHAT_TARGETS
+            else "Direct Aider"
+        )
+        quick_target = st.selectbox(
+            "Quick Agent Switcher",
+            AGENT_CHAT_TARGETS,
+            index=AGENT_CHAT_TARGETS.index(active_target),
+            format_func=lambda target: f"{AGENT_ICONS.get(target, '🤖')} {target}",
+            key="quick_agent_switcher",
+        )
+        self.state.agent_chat_target = quick_target
+        chat_tabs = st.tabs(
+            [
+                f"{AGENT_ICONS.get(target, '🤖')} {target}"
+                for target in AGENT_CHAT_TARGETS
+            ]
+        )
         for target, tab in zip(AGENT_CHAT_TARGETS, chat_tabs):
             with tab:
                 self.do_agent_chat_tab(target)
@@ -1105,21 +1201,62 @@ class GUI:
             st.caption("No messages in this agent tab yet.")
         for msg in messages:
             role = msg.get("role", "assistant")
-            with st.chat_message("user" if role == "user" else "assistant"):
-                st.write(msg.get("content", ""))
+            avatar = "🧑" if role == "user" else AGENT_ICONS.get(target, "🤖")
+            with st.chat_message(
+                "user" if role == "user" else "assistant", avatar=avatar
+            ):
+                st.markdown(msg.get("content", ""))
 
     def do_agent_chat_box(self, target: str = "Direct Aider"):
         with st.container(border=True):
-            st.subheader(f"Chat with {target}")
-            st.caption(
-                "Each tab keeps its own chat history. Agent tabs use per-agent settings "
-                "from the Settings page."
-            )
+            st.subheader(f"{AGENT_ICONS.get(target, '🤖')} Chat with {target}")
+            if target not in {"Direct Aider", "Company Workflow"}:
+                try:
+                    status = self.get_company().coo_status()
+                    last_action = (status.get("last_coo_action") or {}).get(
+                        "action", "No COO action yet"
+                    )
+                    memory_count = len(status.get("coo_memory") or [])
+                    st.caption(
+                        f"COO last action: {last_action} · memory notes: {memory_count}"
+                    )
+                except Exception:
+                    st.caption("COO summary will appear after Company Mode starts.")
+            else:
+                st.caption(
+                    "Each target keeps its own chat history. Agent tabs use per-agent settings "
+                    "from the Settings page."
+                )
             prompt = st.text_area(
                 "Agent prompt",
                 key=f"agent_prompt_{target}_{len(self.state.agent_messages.get(target, []))}_{len(self.state.messages)}",
                 placeholder="Ask this agent to explain, edit, test, or implement something...",
                 disabled=self.prompt_pending(),
+                help="Ctrl/Cmd+Enter clicks this tab's Send button when your browser permits the shortcut.",
+            )
+            components.html(
+                f"""
+                <script>
+                const doc = window.parent.document;
+                if (!doc.__aiderCtrlEnterBound) {{
+                  doc.__aiderCtrlEnterBound = true;
+                  doc.addEventListener('keydown', (event) => {{
+                    if (!(event.ctrlKey || event.metaKey) || event.key !== 'Enter') return;
+                    const active = doc.activeElement;
+                    if (!active || active.tagName !== 'TEXTAREA') return;
+                    const buttons = Array.from(doc.querySelectorAll('button'));
+                    const sendButton = buttons.find((button) =>
+                      (button.innerText || '').includes('Send to')
+                    );
+                    if (sendButton) {{
+                      event.preventDefault();
+                      sendButton.click();
+                    }}
+                  }});
+                }}
+                </script>
+                """,
+                height=0,
             )
             if st.button(
                 f"Send to {target}",
@@ -1154,11 +1291,23 @@ class GUI:
             return
 
         metrics = company.dashboard_metrics(turns_this_session=self.count_user_turns())
+        overview = company.system_overview()
+        st.subheader("System Overview")
+        o1, o2, o3 = st.columns(3)
+        o1.metric("COO status", overview["coo_status"])
+        o2.metric("Last COO action", overview["coo_last_action"])
+        o3.metric("Pending escalations", overview["pending_escalations"])
+        with st.container(border=True):
+            st.write(f"**Caching enabled:** {overview['caching']}")
+            st.write(
+                f"**Active warehouse products:** {overview['active_warehouse_products']}"
+            )
+            st.write(f"**MCP status:** {overview['mcp_status']}")
+
         m1, m2, m3 = st.columns(3)
         m1.metric("Turns this session", metrics["turns_this_session"])
         m2.metric("Approvals pending", metrics["approvals_pending"])
         m3.metric("Last activity", metrics["last_activity"])
-        st.caption(f"Prompt caching: {company.caching_status()}")
 
         phase = str(metrics["current_phase"])
         st.subheader("Current Phase")
@@ -1199,6 +1348,22 @@ class GUI:
                     or "No preview available."
                 )
 
+        with st.expander(
+            "COO Activity (collapsible events, errors, escalations)", expanded=False
+        ):
+            try:
+                coo_status = company.coo_status()
+                if coo_status.get("error_count"):
+                    st.error(f"Errors: {coo_status.get('error_count')}")
+                    st.json(coo_status.get("recent_errors", []))
+                if coo_status.get("pending_human_escalations"):
+                    st.warning("Pending human escalations")
+                    st.json(coo_status.get("pending_human_escalations"))
+                st.write("**Recent events**")
+                for event in (coo_status.get("recent_events") or [])[-20:]:
+                    st.info(str(event))
+            except Exception as err:
+                st.error(f"COO activity unavailable: {err}")
         with st.expander("Raw company status", expanded=False):
             st.code(company.company_status())
 
@@ -1260,156 +1425,179 @@ class GUI:
     def do_settings_tab(self, location="sidebar"):
         st.subheader("Settings")
         st.caption(
-            "Add API keys, tune Aider model settings, and configure per-agent Company Mode "
-            "models/caching. Settings are saved in this repo for future launches."
+            "The browser and desktop apps share this clean settings flow: Global Aider, "
+            "Per-Agent Overrides, Provider Keys, and Advanced files. Preview validates "
+            "changes before save."
         )
 
-        env_values = read_env_values(self.env_path)
-        conf_text = (
-            self.conf_path.read_text(encoding="utf-8")
-            if self.conf_path.exists()
-            else ""
-        )
-        conf_values = parse_conf_text(conf_text)
-        current_model = self.coder.main_model
         form_key = f"settings_form_{location}"
+        loaded = load_settings_form(
+            self.env_path, self.conf_path, self.coder.main_model
+        )
 
         with st.form(form_key, clear_on_submit=False):
-            st.write("**Aider model selection**")
-            model = st.text_input(
-                "Main model",
-                value=conf_values.get("model") or current_model.name,
-                help="The primary model that will answer and edit code.",
-            )
-            weak_model = st.text_input(
-                "Weak model",
-                value=conf_values.get("weak-model") or current_model.weak_model.name,
-                help="Optional cheaper/faster model for lightweight tasks.",
-            )
-            editor_model = st.text_input(
-                "Editor model",
-                value=conf_values.get("editor-model")
-                or current_model.editor_model.name,
-                help="Optional model for editor-mode edits.",
-            )
-            apply_now = st.checkbox(
-                "Use this model for the current session now",
-                value=True,
-                help="Applies the selected Aider model immediately without restarting the browser UI.",
-            )
+            section_tabs = st.tabs(list(SETTINGS_SECTIONS))
+            with section_tabs[0]:
+                st.write("**Global Aider**")
+                st.caption("Defaults for direct Aider chat and code edits.")
+                model = st.text_input(
+                    "Main model",
+                    value=loaded.model,
+                    help="The primary model that will answer and edit code.",
+                )
+                weak_model = st.text_input(
+                    "Weak model",
+                    value=loaded.weak_model,
+                    help="Optional cheaper/faster model for lightweight tasks.",
+                )
+                editor_model = st.text_input(
+                    "Editor model",
+                    value=loaded.editor_model,
+                    help="Optional model for editor-mode edits.",
+                )
+                apply_now = st.checkbox(
+                    "Use this model for the current session now",
+                    value=True,
+                    help="Applies the selected Aider model immediately after save.",
+                )
 
-            st.write("**Company agent models**")
-            st.caption(
-                "Each agent can use its own model via AIDER_COMPANY_MODEL_<AGENT>. "
-                "Leave blank to use the default/main model. Changes apply to new Company sessions."
-            )
             agent_models = {}
             agent_caching = {}
             agent_api_keys = {}
             agent_local_settings = {}
-            for agent_name in COMPANY_AGENT_NAMES:
-                agent_label = company_agent_display_name(agent_name)
-                with st.expander(f"{agent_label} agent", expanded=False):
-                    cols = st.columns([3, 2])
-                    agent_models[agent_name] = cols[0].text_input(
-                        f"{agent_label} model",
-                        value=env_values.get(agent_model_env_name(agent_name), ""),
-                        key=f"{form_key}_{agent_name}_model",
-                    )
-                    cache_default = env_values.get(
-                        agent_caching_env_name(agent_name), "true"
-                    )
-                    agent_caching[agent_name] = cols[1].selectbox(
-                        f"{agent_label} caching",
-                        ["true", "false", "default"],
-                        index=["true", "false", "default"].index(
-                            cache_default
-                            if cache_default in {"true", "false", "default"}
-                            else "true"
-                        ),
-                        key=f"{form_key}_{agent_name}_caching",
-                        help="Prompt caching override for this agent.",
-                    )
-                    agent_api_keys[agent_name] = st.text_input(
-                        f"{agent_label} API key override",
-                        value=env_values.get(agent_api_key_env_name(agent_name), ""),
-                        type="password",
-                        key=f"{form_key}_{agent_name}_api_key",
-                        help="Optional per-agent credential saved as AIDER_COMPANY_API_KEY_<AGENT>.",
-                    )
-                    agent_local_settings[agent_name] = st.text_input(
-                        f"{agent_label} local endpoint/setting",
-                        value=env_values.get(agent_local_env_name(agent_name), ""),
-                        key=f"{form_key}_{agent_name}_local",
-                        help="Optional local model endpoint or note saved as AIDER_COMPANY_LOCAL_<AGENT>.",
-                    )
+            with section_tabs[1]:
+                st.write("**Per-Agent Overrides**")
+                st.caption(
+                    "Optional model, credential, local endpoint, and prompt-caching overrides "
+                    "for COO/Product/UX/Engineering/Reviewer/QA/DevOps."
+                )
+                for agent_name in COMPANY_AGENT_NAMES:
+                    agent_label = company_agent_display_name(agent_name)
+                    defaults = loaded.agents.get(agent_name, SettingsAgentForm())
+                    with st.expander(f"{agent_label} agent", expanded=False):
+                        cols = st.columns([3, 2])
+                        agent_models[agent_name] = cols[0].text_input(
+                            f"{agent_label} model",
+                            value=defaults.model,
+                            key=f"{form_key}_{agent_name}_model",
+                            placeholder="Use global model",
+                        )
+                        cache_default = str(defaults.caching or "default").lower()
+                        if cache_default not in {"true", "false", "default"}:
+                            cache_default = "default"
+                        agent_caching[agent_name] = cols[1].selectbox(
+                            f"{agent_label} caching",
+                            ["default", "true", "false"],
+                            index=["default", "true", "false"].index(cache_default),
+                            key=f"{form_key}_{agent_name}_caching",
+                            help="Prompt caching override for this agent.",
+                        )
+                        agent_api_keys[agent_name] = st.text_input(
+                            f"{agent_label} API key override",
+                            value=defaults.api_key,
+                            type="password",
+                            key=f"{form_key}_{agent_name}_api_key",
+                            help="Optional role-specific credential.",
+                        )
+                        agent_local_settings[agent_name] = st.text_input(
+                            f"{agent_label} local endpoint/setting",
+                            value=defaults.local,
+                            key=f"{form_key}_{agent_name}_local",
+                            help="Optional local model endpoint or runtime note.",
+                        )
 
-            st.write("**API keys**")
-            st.caption("Leave a saved key blank only if you do not want to change it.")
-            openai_key = st.text_input(
-                "OpenAI API key",
-                value=env_values.get("OPENAI_API_KEY", ""),
-                type="password",
+            with section_tabs[2]:
+                st.write("**Provider Keys**")
+                st.caption(
+                    "Saved to repo-local .env. Secrets are masked in the preview."
+                )
+                openai_key = st.text_input(
+                    "OpenAI API key",
+                    value=loaded.provider_keys.get("OPENAI_API_KEY", ""),
+                    type="password",
+                )
+                anthropic_key = st.text_input(
+                    "Anthropic API key",
+                    value=loaded.provider_keys.get("ANTHROPIC_API_KEY", ""),
+                    type="password",
+                )
+                openrouter_key = st.text_input(
+                    "OpenRouter API key",
+                    value=loaded.provider_keys.get("OPENROUTER_API_KEY", ""),
+                    type="password",
+                )
+
+            with section_tabs[3]:
+                st.write("**Advanced (.env + .aider.conf)**")
+                provider_keys = st.text_area(
+                    "Extra .env settings (one KEY=value per line)",
+                    value="",
+                    help="Examples: GEMINI_API_KEY=..., AIDER_MODEL_SETTINGS_FILE=...",
+                )
+                conf_editor = st.text_area(
+                    ".aider.conf.yml",
+                    value=loaded.conf_text,
+                    height=220,
+                    help="Raw Aider YAML configuration. Model fields are merged on save.",
+                )
+
+            st.write("**Preview before save**")
+            st.caption(
+                "Click Preview to validate syntax and review exactly what will be written."
             )
-            anthropic_key = st.text_input(
-                "Anthropic API key",
-                value=env_values.get("ANTHROPIC_API_KEY", ""),
-                type="password",
+            preview_clicked = st.form_submit_button(
+                "Preview changes", use_container_width=True
             )
-            openrouter_key = st.text_input(
-                "OpenRouter API key",
-                value=env_values.get("OPENROUTER_API_KEY", ""),
-                type="password",
-            )
-            provider_keys = st.text_area(
-                "Other provider keys or environment settings (one per line, eg GEMINI_API_KEY=...)",
-                value="",
+            submitted = st.form_submit_button(
+                "🚀 Apply & Restart Company Session",
+                type="primary",
+                use_container_width=True,
             )
 
-            st.write("**Advanced Aider configuration**")
-            conf_editor = st.text_area(
-                ".aider.conf.yml",
-                value=conf_text,
-                height=220,
-                help="Edit any other Aider YAML configuration. Model fields above are merged into this file on save.",
-            )
-            submitted = st.form_submit_button("Save settings")
+        form = SettingsForm(
+            model=model,
+            weak_model=weak_model,
+            editor_model=editor_model,
+            apply_now=apply_now,
+            provider_keys={
+                "OPENAI_API_KEY": openai_key,
+                "ANTHROPIC_API_KEY": anthropic_key,
+                "OPENROUTER_API_KEY": openrouter_key,
+            },
+            extra_env=provider_keys,
+            agents={
+                name: SettingsAgentForm(
+                    model=agent_models.get(name, ""),
+                    caching=agent_caching.get(name, "default"),
+                    api_key=agent_api_keys.get(name, ""),
+                    local=agent_local_settings.get(name, ""),
+                )
+                for name in COMPANY_AGENT_NAMES
+            },
+            conf_text=conf_editor,
+        )
+        preview = build_settings_preview(form)
+        if preview_clicked or submitted:
+            if preview.valid:
+                st.success("Settings validation passed.")
+            else:
+                st.error("Fix validation errors before applying settings.")
+            st.code(preview.render(), language="yaml")
 
         if submitted:
-            updates = collect_provider_key_updates(
-                openai_key, anthropic_key, openrouter_key, provider_keys
-            )
-            updates.update(
-                collect_agent_env_updates(
-                    agent_models, agent_caching, agent_api_keys, agent_local_settings
-                )
-            )
-            write_env_updates(self.env_path, updates)
-            apply_env_updates(updates)
-            model_updates = {
-                "model": model.strip(),
-                "weak-model": weak_model.strip(),
-                "editor-model": editor_model.strip(),
-            }
-            write_conf_text(self.conf_path, conf_editor, model_updates)
-            if apply_now:
-                self._apply_model_settings(model_updates)
+            if not preview.valid:
+                return
+            saved = save_settings(self.env_path, self.conf_path, form)
+            if saved.valid and apply_now:
+                self._apply_model_settings(saved.model_updates)
             shutdown_desktop_company_session(self.coder)
             self.company = None
-            self.info(f"Saved settings to `{self.env_path}` and `{self.conf_path}`.")
             st.success(
-                "Settings saved. New chats and new Company agent sessions will use the updated configuration."
+                "Applied settings and restarted the Company session. New chats use the updated configuration."
             )
-
-    def _collect_api_key_updates(
-        self, openai_key, anthropic_key, openrouter_key, provider_keys
-    ):
-        return collect_provider_key_updates(
-            openai_key, anthropic_key, openrouter_key, provider_keys
-        )
-
-    def _apply_env_updates(self, updates: dict):
-        apply_env_updates(updates)
+            self.info(
+                f"Settings saved to `{self.env_path}` and `{self.conf_path}`. Company session restarted."
+            )
 
     def _apply_model_settings(self, model_updates: dict):
         current_model = self.coder.main_model
@@ -1684,6 +1872,7 @@ class GUI:
                 else 0
             ),
             key="global_chat_input_target",
+            format_func=lambda target: f"{AGENT_ICONS.get(target, '🤖')} {target}",
             label_visibility="collapsed",
             disabled=self.prompt_pending(),
         )

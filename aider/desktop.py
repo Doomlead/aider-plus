@@ -39,20 +39,15 @@ from aider.company.project import Project
 from aider.company.schemas import CompanyTask
 from aider.main import main as cli_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
-from aider.settings import (
-    COMPANY_AGENT_NAMES,
-    agent_api_key_env_name,
-    agent_caching_env_name,
-    agent_local_env_name,
-    agent_model_env_name,
-    apply_env_updates,
-    collect_agent_env_updates,
-    collect_provider_key_updates,
-    parse_conf_text,
-    read_env_values,
-    write_conf_text,
-    write_env_updates,
+from aider.gui_settings_manager import (
+    SETTINGS_SECTIONS,
+    SettingsAgentForm,
+    SettingsForm,
+    build_settings_preview,
+    load_settings_form,
+    save_settings as persist_settings,
 )
+from aider.settings import COMPANY_AGENT_NAMES
 
 logger = logging.getLogger(__name__)
 _COMPANY_SESSIONS: dict[str, "DesktopCompanySession"] = {}
@@ -462,6 +457,36 @@ class DesktopCompanySession:
         )
         return future.result(timeout=5)
 
+    def system_overview(self) -> dict[str, Any]:
+        pending = [
+            approval
+            for approval in self.pending_approvals()
+            if approval.get("status") == "pending"
+        ]
+        try:
+            coo_status = self.coo_status()
+        except Exception as err:
+            coo_status = {"status": f"unavailable: {err}"}
+        mcp_config = getattr(self.orchestrator.company_config, "mcp", None)
+        warehouse_registry = Path(self.repo_path) / "products" / "warehouse.json"
+        active_products = "None"
+        if warehouse_registry.exists():
+            active_products = str(warehouse_registry)
+        return {
+            "caching": self.caching_status(),
+            "coo_status": coo_status.get("status", "unknown"),
+            "coo_last_action": (coo_status.get("last_coo_action") or {}).get(
+                "action", "—"
+            ),
+            "pending_escalations": len(pending),
+            "active_warehouse_products": active_products,
+            "mcp_status": (
+                f"enabled ({len(getattr(mcp_config, 'servers', {}) or {})} servers)"
+                if getattr(mcp_config, "enabled", False)
+                else "disabled"
+            ),
+        }
+
     def audit_records(self, limit: int = 10) -> list[dict]:
         records = self.coder.project_memory.data.get("audit_log", [])
         if not isinstance(records, list):
@@ -745,7 +770,9 @@ class AiderPlusDesktop:
         self.company: DesktopCompanySession | None = None
         self.turns_this_session = 0
         self.selected_approval_id: str | None = None
-        self._future_labels: dict[concurrent.futures.Future, str] = {}
+        self._future_labels: dict[concurrent.futures.Future, tuple[str, str | None]] = (
+            {}
+        )
         self._ui_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._closing = False
         self.env_path: Path | None = None
@@ -753,7 +780,7 @@ class AiderPlusDesktop:
         self.model_vars: dict[str, tk.StringVar] = {}
         self.api_key_vars: dict[str, tk.StringVar] = {}
         self.agent_model_vars: dict[str, tk.StringVar] = {}
-        self.agent_caching_vars: dict[str, tk.BooleanVar] = {}
+        self.agent_caching_vars: dict[str, tk.StringVar] = {}
         self.agent_api_key_vars: dict[str, tk.StringVar] = {}
         self.agent_local_vars: dict[str, tk.StringVar] = {}
         self.chat_transcripts: dict[str, scrolledtext.ScrolledText] = {}
@@ -841,13 +868,33 @@ class AiderPlusDesktop:
         return frame
 
     def _build_chat_tab(self):
-        self.chat_notebook = ttk.Notebook(self.chat_frame)
-        self.chat_notebook.pack(fill="both", expand=True)
         self.chat_targets = [
             "Direct Aider",
             "Company Workflow",
             *[company_agent_display_name(name) for name in COMPANY_AGENT_NAMES],
         ]
+        toolbar = ttk.Frame(self.chat_frame)
+        toolbar.pack(fill="x", pady=(0, 8))
+        ttk.Label(toolbar, text="Quick Agent Switcher:").pack(side="left")
+        self.quick_agent_var = tk.StringVar(value="Company Workflow")
+        self.quick_agent_switcher = ttk.Combobox(
+            toolbar,
+            textvariable=self.quick_agent_var,
+            values=self.chat_targets,
+            state="readonly",
+            width=28,
+        )
+        self.quick_agent_switcher.pack(side="left", padx=(8, 0))
+        self.quick_agent_switcher.bind(
+            "<<ComboboxSelected>>", self._on_quick_agent_selected
+        )
+        ttk.Label(
+            toolbar,
+            text="Ctrl/Cmd+Enter sends. Direct Aider, Workflow, and each agent keep separate transcripts.",
+        ).pack(side="left", padx=(12, 0))
+
+        self.chat_notebook = ttk.Notebook(self.chat_frame)
+        self.chat_notebook.pack(fill="both", expand=True)
         for target in self.chat_targets:
             frame = ttk.Frame(self.chat_notebook, padding=4)
             text = scrolledtext.ScrolledText(
@@ -877,6 +924,12 @@ class AiderPlusDesktop:
         self.chat_entry = ttk.Entry(input_frame)
         self.chat_entry.pack(side="left", fill="x", expand=True)
         self.chat_entry.bind("<Return>", lambda _event: self.send_chat_message())
+        self.chat_entry.bind(
+            "<Control-Return>", lambda _event: self.send_chat_message()
+        )
+        self.chat_entry.bind(
+            "<Command-Return>", lambda _event: self.send_chat_message()
+        )
 
         self.send_button = ttk.Button(
             input_frame,
@@ -895,71 +948,115 @@ class AiderPlusDesktop:
             )
 
     def _build_settings_tab(self):
-        canvas = tk.Canvas(self.settings_frame, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(
-            self.settings_frame, orient="vertical", command=canvas.yview
-        )
-        content = ttk.Frame(canvas)
-        content.bind(
-            "<Configure>",
-            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
-        )
-        canvas.create_window((0, 0), window=content, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        ttk.Label(
+            self.settings_frame,
+            text=(
+                "Shared settings experience: Global Aider, Per-Agent Overrides, "
+                "Provider Keys, and Advanced files. Preview validates changes before apply."
+            ),
+            wraplength=980,
+            justify="left",
+        ).pack(fill="x", pady=(0, 8))
 
-        model_frame = ttk.LabelFrame(content, text="Aider Models", padding=8)
-        model_frame.pack(fill="x", pady=(0, 8))
+        settings_tabs = ttk.Notebook(self.settings_frame)
+        settings_tabs.pack(fill="both", expand=True)
+        section_frames = {
+            name: ttk.Frame(settings_tabs, padding=8) for name in SETTINGS_SECTIONS
+        }
+        for name, frame in section_frames.items():
+            settings_tabs.add(frame, text=name)
+
+        model_frame = section_frames["Global Aider"]
         ttk.Label(
             model_frame,
-            text="These fields control the default direct Aider model stack.",
+            text="Defaults for direct Aider chat and code edits.",
             wraplength=820,
             justify="left",
-        ).grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 6))
+        ).grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
         for row, (key, label, help_text) in enumerate(
             (
                 ("model", "Main model", "Primary model for answers and edits."),
-                (
-                    "weak-model",
-                    "Weak model",
-                    "Optional cheaper/faster model for lightweight tasks.",
-                ),
-                (
-                    "editor-model",
-                    "Editor model",
-                    "Optional model for editor-mode edits.",
-                ),
+                ("weak-model", "Weak model", "Optional cheaper/faster model."),
+                ("editor-model", "Editor model", "Optional editor-mode model."),
             ),
             start=1,
         ):
             ttk.Label(model_frame, text=label).grid(
-                row=row, column=0, sticky="w", pady=2
+                row=row, column=0, sticky="w", pady=4
             )
             var = tk.StringVar()
             self.model_vars[key] = var
-            ttk.Entry(model_frame, textvariable=var, width=45).grid(
-                row=row, column=1, sticky="ew", padx=8, pady=2
+            ttk.Entry(model_frame, textvariable=var, width=48).grid(
+                row=row, column=1, sticky="ew", padx=8, pady=4
             )
             ttk.Label(model_frame, text=help_text).grid(
-                row=row, column=2, sticky="w", pady=2
+                row=row, column=2, sticky="w", pady=4
             )
         self.apply_model_now_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             model_frame,
-            text="Apply model to the current desktop session now",
+            text="Use this model for the current desktop session now",
             variable=self.apply_model_now_var,
-        ).grid(row=4, column=1, sticky="w", pady=(6, 0))
+        ).grid(row=4, column=1, sticky="w", pady=(8, 0))
         model_frame.columnconfigure(1, weight=1)
 
-        api_frame = ttk.LabelFrame(content, text="API Keys and Environment", padding=8)
-        api_frame.pack(fill="x", pady=(0, 8))
+        agents_frame = section_frames["Per-Agent Overrides"]
+        ttk.Label(
+            agents_frame,
+            text="Optional per-role model, prompt caching, credential, and local endpoint overrides.",
+            wraplength=980,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=5, sticky="ew", pady=(0, 8))
+        for col, heading in enumerate(
+            (
+                "Agent",
+                "Model override",
+                "Prompt caching",
+                "API key override",
+                "Local endpoint/setting",
+            )
+        ):
+            ttk.Label(agents_frame, text=heading, style="Metric.TLabel").grid(
+                row=1, column=col, sticky="w", pady=2
+            )
+        for row, agent_name in enumerate(COMPANY_AGENT_NAMES, start=2):
+            ttk.Label(agents_frame, text=company_agent_display_name(agent_name)).grid(
+                row=row, column=0, sticky="w", pady=3
+            )
+            model_var = tk.StringVar()
+            self.agent_model_vars[agent_name] = model_var
+            ttk.Entry(agents_frame, textvariable=model_var, width=34).grid(
+                row=row, column=1, sticky="ew", padx=8, pady=3
+            )
+            caching_var = tk.StringVar(value="default")
+            self.agent_caching_vars[agent_name] = caching_var
+            ttk.Combobox(
+                agents_frame,
+                textvariable=caching_var,
+                values=("default", "true", "false"),
+                width=10,
+                state="readonly",
+            ).grid(row=row, column=2, sticky="w", padx=8, pady=3)
+            api_var = tk.StringVar()
+            self.agent_api_key_vars[agent_name] = api_var
+            ttk.Entry(agents_frame, textvariable=api_var, show="•", width=26).grid(
+                row=row, column=3, sticky="ew", padx=8, pady=3
+            )
+            local_var = tk.StringVar()
+            self.agent_local_vars[agent_name] = local_var
+            ttk.Entry(agents_frame, textvariable=local_var, width=26).grid(
+                row=row, column=4, sticky="ew", padx=8, pady=3
+            )
+        for col in (1, 3, 4):
+            agents_frame.columnconfigure(col, weight=1)
+
+        api_frame = section_frames["Provider Keys"]
         ttk.Label(
             api_frame,
-            text="Provider credentials and extra KEY=value environment settings saved to .env.",
+            text="Provider credentials saved to repo-local .env. Secrets are masked in previews.",
             wraplength=820,
             justify="left",
-        ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         for row, (key, label) in enumerate(
             (
                 ("OPENAI_API_KEY", "OpenAI API key"),
@@ -968,87 +1065,51 @@ class AiderPlusDesktop:
             ),
             start=1,
         ):
-            ttk.Label(api_frame, text=label).grid(row=row, column=0, sticky="w", pady=2)
+            ttk.Label(api_frame, text=label).grid(row=row, column=0, sticky="w", pady=4)
             var = tk.StringVar()
             self.api_key_vars[key] = var
             ttk.Entry(api_frame, textvariable=var, show="•", width=58).grid(
-                row=row, column=1, sticky="ew", padx=8, pady=2
+                row=row, column=1, sticky="ew", padx=8, pady=4
             )
-        ttk.Label(
-            api_frame, text="Other provider keys/env (KEY=value, one per line)"
-        ).grid(row=4, column=0, sticky="nw", pady=2)
-        self.provider_keys_text = scrolledtext.ScrolledText(
-            api_frame, wrap=tk.WORD, height=4
-        )
-        self.provider_keys_text.grid(row=4, column=1, sticky="ew", padx=8, pady=2)
         api_frame.columnconfigure(1, weight=1)
 
-        agents_frame = ttk.LabelFrame(
-            content, text="Company Agent Models and Caching", padding=8
-        )
-        agents_frame.pack(fill="x", pady=(0, 8))
+        advanced_frame = section_frames["Advanced (.env + .aider.conf)"]
         ttk.Label(
-            agents_frame,
-            text="Each row configures one Company agent. Blank overrides fall back to shared defaults.",
-            wraplength=980,
-            justify="left",
-        ).grid(row=0, column=0, columnspan=5, sticky="ew", pady=(0, 6))
-        ttk.Label(agents_frame, text="Agent").grid(row=1, column=0, sticky="w")
-        ttk.Label(agents_frame, text="Model override").grid(row=1, column=1, sticky="w")
-        ttk.Label(agents_frame, text="Prompt caching").grid(row=1, column=2, sticky="w")
-        for row, agent_name in enumerate(COMPANY_AGENT_NAMES, start=2):
-            ttk.Label(agents_frame, text=company_agent_display_name(agent_name)).grid(
-                row=row, column=0, sticky="w", pady=2
-            )
-            model_var = tk.StringVar()
-            self.agent_model_vars[agent_name] = model_var
-            ttk.Entry(agents_frame, textvariable=model_var, width=40).grid(
-                row=row, column=1, sticky="ew", padx=8, pady=2
-            )
-            caching_var = tk.BooleanVar(value=True)
-            self.agent_caching_vars[agent_name] = caching_var
-            ttk.Checkbutton(agents_frame, text="Enabled", variable=caching_var).grid(
-                row=row, column=2, sticky="w", pady=2
-            )
-            api_var = tk.StringVar()
-            self.agent_api_key_vars[agent_name] = api_var
-            ttk.Entry(agents_frame, textvariable=api_var, show="•", width=28).grid(
-                row=row, column=3, sticky="ew", padx=8, pady=2
-            )
-            local_var = tk.StringVar()
-            self.agent_local_vars[agent_name] = local_var
-            ttk.Entry(agents_frame, textvariable=local_var, width=28).grid(
-                row=row, column=4, sticky="ew", padx=8, pady=2
-            )
-        ttk.Label(agents_frame, text="API key override").grid(
-            row=0, column=3, sticky="w"
+            advanced_frame, text="Extra .env settings (KEY=value, one per line)"
+        ).pack(anchor="w")
+        self.provider_keys_text = scrolledtext.ScrolledText(
+            advanced_frame, wrap=tk.WORD, height=5
         )
-        ttk.Label(agents_frame, text="Local endpoint/setting").grid(
-            row=0, column=4, sticky="w"
-        )
-        agents_frame.columnconfigure(1, weight=1)
-        agents_frame.columnconfigure(3, weight=1)
-        agents_frame.columnconfigure(4, weight=1)
-
-        conf_frame = ttk.LabelFrame(content, text="Advanced .aider.conf.yml", padding=8)
-        conf_frame.pack(fill="both", expand=True, pady=(0, 8))
+        self.provider_keys_text.pack(fill="x", pady=(2, 8))
         ttk.Label(
-            conf_frame,
-            text="Edit raw Aider YAML. Saving merges the model fields above into this text.",
-            wraplength=820,
-            justify="left",
-        ).pack(fill="x", pady=(0, 4))
-        self.conf_text = scrolledtext.ScrolledText(conf_frame, wrap=tk.WORD, height=10)
-        self.conf_text.pack(fill="both", expand=True)
+            advanced_frame,
+            text="Raw .aider.conf.yml (model fields above are merged on save)",
+        ).pack(anchor="w")
+        self.conf_text = scrolledtext.ScrolledText(
+            advanced_frame, wrap=tk.WORD, height=12
+        )
+        self.conf_text.pack(fill="both", expand=True, pady=(2, 0))
 
-        actions = ttk.Frame(content)
-        actions.pack(fill="x")
+        preview_frame = ttk.LabelFrame(
+            self.settings_frame, text="Validation and Preview", padding=6
+        )
+        preview_frame.pack(fill="x", pady=(8, 0))
+        self.settings_preview_text = scrolledtext.ScrolledText(
+            preview_frame, wrap=tk.WORD, height=7
+        )
+        self.settings_preview_text.pack(fill="x")
+
+        actions = ttk.Frame(self.settings_frame)
+        actions.pack(fill="x", pady=(8, 0))
         ttk.Button(
             actions, text="Reload Settings", command=self.refresh_settings_fields
         ).pack(side="left")
+        ttk.Button(actions, text="Preview changes", command=self.preview_settings).pack(
+            side="left", padx=(8, 0)
+        )
         ttk.Button(
             actions,
-            text="Save Settings",
+            text="🚀 Apply & Restart Company Session",
             command=self.save_settings,
             style="Accent.TButton",
         ).pack(side="right")
@@ -1083,6 +1144,13 @@ class AiderPlusDesktop:
 
         panes = ttk.PanedWindow(self.dashboard_frame, orient=tk.VERTICAL)
         panes.pack(fill="both", expand=True)
+
+        overview_frame = ttk.LabelFrame(panes, text="System Overview", padding=4)
+        self.system_overview_text = scrolledtext.ScrolledText(
+            overview_frame, wrap=tk.WORD, height=6
+        )
+        self.system_overview_text.pack(fill="both", expand=True)
+        panes.add(overview_frame, weight=1)
 
         status_frame = ttk.LabelFrame(panes, text="Company Status", padding=4)
         self.dashboard_text = scrolledtext.ScrolledText(
@@ -1205,37 +1273,61 @@ class AiderPlusDesktop:
         root = Path(self.coder.root)
         self.env_path = root / ".env"
         self.conf_path = root / ".aider.conf.yml"
-        env_values = read_env_values(self.env_path)
-        conf_text = (
-            self.conf_path.read_text(encoding="utf-8")
-            if self.conf_path.exists()
-            else ""
-        )
-        conf_values = parse_conf_text(conf_text)
-        current_model = self.coder.main_model
-        defaults = {
-            "model": current_model.name,
-            "weak-model": current_model.weak_model.name,
-            "editor-model": current_model.editor_model.name,
-        }
-        for key, var in self.model_vars.items():
-            var.set(conf_values.get(key) or defaults.get(key, ""))
+        form = load_settings_form(self.env_path, self.conf_path, self.coder.main_model)
+        self.model_vars["model"].set(form.model)
+        self.model_vars["weak-model"].set(form.weak_model)
+        self.model_vars["editor-model"].set(form.editor_model)
         for key, var in self.api_key_vars.items():
-            var.set(env_values.get(key, ""))
-        for agent_name, var in self.agent_model_vars.items():
-            var.set(env_values.get(agent_model_env_name(agent_name), ""))
-        for agent_name, var in self.agent_caching_vars.items():
-            var.set(
-                env_values.get(agent_caching_env_name(agent_name), "true").lower()
-                != "false"
-            )
-        for agent_name, var in self.agent_api_key_vars.items():
-            var.set(env_values.get(agent_api_key_env_name(agent_name), ""))
-        for agent_name, var in self.agent_local_vars.items():
-            var.set(env_values.get(agent_local_env_name(agent_name), ""))
+            var.set(form.provider_keys.get(key, ""))
+        for agent_name in COMPANY_AGENT_NAMES:
+            values = form.agents.get(agent_name, SettingsAgentForm())
+            self.agent_model_vars[agent_name].set(values.model)
+            cache_value = str(values.caching or "default").lower()
+            if cache_value not in {"default", "true", "false"}:
+                cache_value = "default"
+            self.agent_caching_vars[agent_name].set(cache_value)
+            self.agent_api_key_vars[agent_name].set(values.api_key)
+            self.agent_local_vars[agent_name].set(values.local)
         self.provider_keys_text.delete("1.0", tk.END)
         self.conf_text.delete("1.0", tk.END)
-        self.conf_text.insert(tk.END, conf_text)
+        self.conf_text.insert(tk.END, form.conf_text)
+        self.preview_settings(show_message=False)
+
+    def _collect_settings_form(self) -> SettingsForm:
+        return SettingsForm(
+            model=self.model_vars["model"].get(),
+            weak_model=self.model_vars["weak-model"].get(),
+            editor_model=self.model_vars["editor-model"].get(),
+            apply_now=self.apply_model_now_var.get(),
+            provider_keys={key: var.get() for key, var in self.api_key_vars.items()},
+            extra_env=self.provider_keys_text.get("1.0", tk.END),
+            agents={
+                name: SettingsAgentForm(
+                    model=self.agent_model_vars[name].get(),
+                    caching=self.agent_caching_vars[name].get(),
+                    api_key=self.agent_api_key_vars[name].get(),
+                    local=self.agent_local_vars[name].get(),
+                )
+                for name in COMPANY_AGENT_NAMES
+            },
+            conf_text=self.conf_text.get("1.0", tk.END),
+        )
+
+    def preview_settings(self, show_message: bool = True):
+        preview = build_settings_preview(self._collect_settings_form())
+        self._write_text(self.settings_preview_text, preview.render())
+        if show_message:
+            if preview.valid:
+                messagebox.showinfo(
+                    "Settings preview",
+                    "Settings validation passed. Review the preview before applying.",
+                )
+            else:
+                messagebox.showerror(
+                    "Settings preview",
+                    "Fix validation errors before applying settings.",
+                )
+        return preview
 
     def save_settings(self):
         if not self.coder:
@@ -1244,43 +1336,28 @@ class AiderPlusDesktop:
         root = Path(self.coder.root)
         self.env_path = root / ".env"
         self.conf_path = root / ".aider.conf.yml"
-        provider_updates = collect_provider_key_updates(
-            self.api_key_vars["OPENAI_API_KEY"].get(),
-            self.api_key_vars["ANTHROPIC_API_KEY"].get(),
-            self.api_key_vars["OPENROUTER_API_KEY"].get(),
-            self.provider_keys_text.get("1.0", tk.END),
-        )
-        agent_models = {name: var.get() for name, var in self.agent_model_vars.items()}
-        agent_caching = {
-            name: var.get() for name, var in self.agent_caching_vars.items()
-        }
-        agent_api_keys = {
-            name: var.get() for name, var in self.agent_api_key_vars.items()
-        }
-        agent_local_settings = {
-            name: var.get() for name, var in self.agent_local_vars.items()
-        }
-        env_updates = provider_updates | collect_agent_env_updates(
-            agent_models, agent_caching, agent_api_keys, agent_local_settings
-        )
-        write_env_updates(self.env_path, env_updates)
-        apply_env_updates(env_updates)
-
-        model_updates = {key: var.get().strip() for key, var in self.model_vars.items()}
-        write_conf_text(
-            self.conf_path, self.conf_text.get("1.0", tk.END), model_updates
-        )
-        if self.apply_model_now_var.get():
-            self._apply_model_settings(model_updates)
+        form = self._collect_settings_form()
+        preview = build_settings_preview(form)
+        self._write_text(self.settings_preview_text, preview.render())
+        if not preview.valid:
+            messagebox.showerror(
+                "Settings", "Fix validation errors before applying settings."
+            )
+            return
+        saved = persist_settings(self.env_path, self.conf_path, form)
+        if saved.valid and form.apply_now:
+            self._apply_model_settings(saved.model_updates)
         self._restart_company_session()
         self.refresh_settings_fields()
         self._append_chat(
             "System",
-            f"Settings saved to {self.env_path} and {self.conf_path}. New Company agent sessions will use the updated configuration.",
+            f"Settings applied to {self.env_path} and {self.conf_path}. Company session restarted.",
             tag="system",
         )
+        self._set_busy(False, "Settings applied; Company session restarted")
         messagebox.showinfo(
-            "Settings saved", "Aider and Company agent settings were saved."
+            "Settings applied",
+            "Settings were saved and the Company session was restarted. New chats use the updated configuration.",
         )
 
     def _apply_model_settings(self, model_updates: dict[str, str]):
@@ -1377,11 +1454,21 @@ class AiderPlusDesktop:
                 target=target,
             )
 
+    def _on_quick_agent_selected(self, _event=None):
+        target = self.quick_agent_var.get()
+        for tab_id in self.chat_notebook.tabs():
+            if self.chat_notebook.tab(tab_id, "text") == target:
+                self.chat_notebook.select(tab_id)
+                break
+
     def _current_chat_target(self) -> str:
         if not hasattr(self, "chat_notebook"):
             return "Company Workflow"
         selected = self.chat_notebook.select()
-        return self.chat_notebook.tab(selected, "text") or "Company Workflow"
+        target = self.chat_notebook.tab(selected, "text") or "Company Workflow"
+        if hasattr(self, "quick_agent_var") and self.quick_agent_var.get() != target:
+            self.quick_agent_var.set(target)
+        return target
 
     def _append_chat(
         self, sender: str, message: str, tag: str = "aider", target: str | None = None
@@ -1400,12 +1487,30 @@ class AiderPlusDesktop:
         if not self.company:
             self._write_text(self.dashboard_text, "Company backend is not ready yet.")
             self._write_text(self.coo_status_text, "Company backend is not ready yet.")
+            if hasattr(self, "system_overview_text"):
+                self._write_text(
+                    self.system_overview_text, "Company backend is not ready yet."
+                )
             return
         metrics = self.company.dashboard_metrics(
             turns_this_session=self.turns_this_session
         )
         for key, label in self.metric_labels.items():
             label.config(text=str(metrics.get(key, "—")))
+        overview = self.company.system_overview()
+        self._write_text(
+            self.system_overview_text,
+            "\n".join(
+                [
+                    f"Caching enabled: {overview['caching']}",
+                    f"COO status: {overview['coo_status']}",
+                    f"Last COO action: {overview['coo_last_action']}",
+                    f"Pending human escalations: {overview['pending_escalations']}",
+                    f"Active warehouse products: {overview['active_warehouse_products']}",
+                    f"MCP status: {overview['mcp_status']}",
+                ]
+            ),
+        )
         status = self.company.company_status()
         self._write_text(self.dashboard_text, status)
         self._write_text(self.deliverables_text, self._format_deliverables())

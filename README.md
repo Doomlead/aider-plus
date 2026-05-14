@@ -1,62 +1,84 @@
 # Aider Plus
 
-Aider Plus is an agent-first fork of Aider that keeps the git-aware pair-programming workflow and adds a polished browser GUI, a zero-dependency Tkinter desktop app, and an internal software-company runtime led by a Nanobot-style COO.
+Aider Plus is a hackable, agent-first coding workspace built around a deliberately small and readable core. It keeps Aider's git-aware pair-programming loop, then adds a Nanobot-inspired COO, browser and desktop GUIs, project memory, MCP/tool paths, approvals, deployment handoffs, and research-friendly agent-loop boundaries.
 
-The current focus is making both GUIs feel like the same product: shared settings, clearer agent chat, stronger observability, safer previews before saving configuration, and prominent restart/apply feedback for Company sessions.
+The product goal is simple: messages can arrive from any chat app, GUI, CLI, API, or MCP surface; the COO and machine-learning agent loop decide whether a direct answer, memory recall, tool call, or company handoff is needed; memory and skills are pulled in as context; and product-building or iteration requests are forwarded to the orchestrator instead of being reimplemented in each surface.
 
 ---
 
-## What is new
+## Feature list
 
-### Identical settings in browser and desktop
+### Small, readable core
 
-Both Streamlit and Tkinter now use the same shared settings manager, so validation, previews, and persistence behave consistently.
+- **Chat surfaces stay thin.** Browser, desktop, CLI, API, MCP, and Discord normalize user messages and session identity, then hand off to shared runtime code.
+- **One COO path.** `NanobotCOO` owns CEO-facing action decisions, durable sessions, memory, status inspection, and handoff into Company Mode.
+- **One orchestrator path.** `CompanyOrchestrator` remains the canonical workflow engine for Product → UX → Engineering → Reviewer → QA → DevOps.
+- **Composable departments.** Each department has a focused Aider agent loop, schema/context expectations, and audit-friendly deliverables.
+- **Hackable files.** The main implementation lives in ordinary Python modules under `aider/company/`, `aider/memory/`, `aider/mcp/`, `aider/gui.py`, and `aider/desktop.py`.
 
-Settings are organized into four clean sections:
+### Research-readiness
 
-1. **Global Aider** — main, weak, and editor model defaults for direct Aider chat.
-2. **Per-Agent Overrides** — model, prompt caching, API key override, and local endpoint/setting for COO, Product, UX, Engineering, Reviewer, QA, and DevOps.
-3. **Provider Keys** — OpenAI, Anthropic, OpenRouter, and other provider credentials.
-4. **Advanced (.env + .aider.conf)** — extra `KEY=value` environment lines and raw `.aider.conf.yml` editing.
+- **Explicit decision objects.** `COOActionDecision` and `COORouteDecision` make routing, confidence, reasoning, escalation, and target selection inspectable.
+- **Deterministic fallback.** The COO can answer common personal-assistant requests locally and fall back to deterministic department routing when LLM routing is disabled or unavailable.
+- **LLM-routing switch.** `CompanyConfig.enable_coo_llm_routing` can enable richer COO decisions using history, memory, status, and available departments.
+- **Audit and lifecycle events.** The dashboard, audit log, and lifecycle formatter expose what happened, who handled it, and which gate or deliverable changed.
+- **Prompt-caching controls.** Per-agent model and caching settings can be configured consistently across the browser and desktop GUIs.
 
-Before saving, use **Preview changes** to validate required fields, malformed `.env` lines, caching values, masked secret updates, and the merged `.aider.conf.yml` output. Use the prominent **Apply & Restart Company Session** button to persist settings, apply environment updates, and restart Company agent loops so new chats pick up the updated configuration.
+### Built-in chat, API, memory, MCP, and deployment paths
 
-### Better per-agent chat
+- **Browser GUI.** Streamlit interface with chat targets, settings, dashboard, approvals, audit log, project memory, and guide pages.
+- **Desktop GUI.** Zero-dependency Tkinter app with the same Company workflow, settings, approvals, audit, dashboard, and per-agent chat targets.
+- **Classic chat.** Direct Aider chat remains available for focused pair-programming outside Company Mode.
+- **Headless/API use.** `--headless`/`--bot-mode` can be used by scripts, queues, service wrappers, and API shells.
+- **MCP support.** MCP configuration, server status, and approval-gated tools plug into the same Company approval model.
+- **Deployment handoff.** DevOps receives release/deployment tasks from the orchestrator instead of chat adapters owning deployment behavior.
+- **Project memory.** Conversation memory, project memory, pattern extraction, COO memory, and audit history persist repo-local context.
+- **Discord as chat only.** Discord is intentionally stripped back to a chat adapter; status, approvals, dashboards, audit, lifecycle, and product workflow live in the shared GUI/Company layers.
 
-Aider Plus exposes these chat targets in both GUIs:
+### Hackability
 
-- **Direct Aider** — classic Aider pair-programming.
-- **Company Workflow** — COO-led Product → UX → Engineering → Reviewer → QA → DevOps orchestration.
-- **COO** — status, memory, routing, delegation, and CEO-facing assistance.
-- **Product** — requirements, clarification, PRDs, and product risk.
-- **UX** — designs, states, accessibility, and interaction details.
-- **Engineering** — implementation plans and code changes.
-- **Reviewer** — implementation review and quality checks.
-- **QA** — test plans, validation, and release confidence.
-- **DevOps** — release, deployment, MCP/ops, and recovery guidance.
+- Start from `aider/company/coo.py` when changing COO decisions, memory, status, and delegation.
+- Start from `aider/company/orchestrator.py` when changing workflow handoffs, approvals, routing, and lifecycle behavior.
+- Start from `aider/company/departments/` when changing Product, UX, Engineering, Reviewer, QA, or DevOps behavior.
+- Start from `aider/gui.py` and `aider/desktop.py` for browser and desktop presentation.
+- Start from `aider/integrations/discord.py` for the intentionally thin Discord chat adapter.
 
-The browser GUI adds agent icons, clearer user-vs-agent message styling, code-block rendering, COO last-action/memory summaries, and a global **Quick Agent Switcher**. The desktop GUI adds a **Quick Agent Switcher**, cleaner chat navigation, separate transcripts per target, code-block styling, and Ctrl/Cmd+Enter send shortcuts.
+---
 
-### Dashboard and observability polish
+## Architecture
 
-The Company Dashboard now starts with a **System Overview** panel showing:
+```text
+User / CEO
+  |
+  v
+Chat app, Browser GUI, Desktop GUI, CLI, API, or MCP surface
+  |
+  v
+Message envelope + session identity
+  |
+  v
+NanobotCOO personal assistant loop
+  |  - reads durable COO session history
+  |  - pulls COO profile, project memory, and skills into context
+  |  - decides whether tools/MCP/status/memory are needed
+  |  - answers, clarifies, remembers, recalls, inspects, or delegates
+  |
+  +--> direct CEO response / clarification / memory update / status brief
+  |
+  v
+Company bridge: delegate_company_task
+  |
+  v
+CompanyOrchestrator
+  |
+  v
+Product -> UX -> Engineering -> Reviewer -> QA -> DevOps
+  |
+  v
+Deliverables, audit log, approvals, memory, deployment output
+```
 
-- Which agents have prompt caching enabled.
-- Current COO status and last action.
-- Pending human escalations/approvals.
-- Active warehouse product registry, when present.
-- MCP status and server count when MCP is enabled.
-
-The COO Activity area is more readable, with collapsible Streamlit sections and desktop highlighting for COO errors/escalations. Recent deliverables, project phase, active runs, audit log entries, and raw company status remain available for deeper debugging.
-
-### Quick UX wins
-
-- Shared validation and recovery suggestions in settings.
-- Better error display in chat and dashboard paths.
-- Useful, short guide content instead of overwhelming reference dumps.
-- Dark/light-compatible Streamlit defaults and cleaner Tkinter theme styling.
-- Keyboard send shortcuts in desktop.
-- Session/warehouse visibility in dashboards when multi-product support is active.
+The orchestrator is the only place that builds or iterates products. Chat surfaces should not implement their own Product, QA, approval, audit, status, or deployment logic. They send messages in and render shared results out.
 
 ---
 
@@ -66,7 +88,7 @@ The COO Activity area is more readable, with collapsible Streamlit sections and 
 python -m pip install -e '.[browser]'
 ```
 
-For headless or desktop-only work, the core package can run without Streamlit, but the browser GUI requires the `browser` extra.
+For headless or desktop-only work, the core package can run without Streamlit. The browser GUI requires the `browser` extra; the desktop GUI uses Tkinter from the Python standard library.
 
 ---
 
@@ -84,7 +106,7 @@ aider --model gpt-5.5
 aider --headless --model gpt-5.5 --msg "Refactor the parser and add tests"
 ```
 
-`--headless` also works as `--bot-mode` and is intended for scripts, queues, service wrappers, Discord workers, and CI jobs.
+`--headless` also works as `--bot-mode` for scripts, queues, service wrappers, chat workers, and CI jobs.
 
 ### Start the browser GUI
 
@@ -92,7 +114,7 @@ aider --headless --model gpt-5.5 --msg "Refactor the parser and add tests"
 aider --browser
 ```
 
-Use the main tabs for Chat, Settings, Company Dashboard, Approvals, Audit Log, Project Memory, and Guide.
+Open the Chat, Settings, Company Dashboard, Approvals, Audit Log, Project Memory, and Guide tabs. The browser GUI exposes the shared Company workflow and all approval/status/audit functionality that used to be scattered across integration layers.
 
 ### Start the native desktop app
 
@@ -100,7 +122,7 @@ Use the main tabs for Chat, Settings, Company Dashboard, Approvals, Audit Log, P
 aider --desktop
 ```
 
-The desktop app uses Tkinter only. It does not require Streamlit, pywebview, WebView2, or a browser.
+The desktop app uses Tkinter only. It does not require Streamlit, pywebview, WebView2, or a browser. It exposes the same Company workflow, approvals, audit log, dashboard, settings, and per-agent chat paths as the browser GUI.
 
 ### Start onboarding
 
@@ -112,100 +134,98 @@ aider init
 
 ---
 
-## Company Mode workflow
+## Chat targets in both GUIs
 
-Company Mode turns a request into a managed product-building workflow:
+- **Direct Aider** — classic git-aware pair-programming.
+- **Company Workflow** — COO-led Product → UX → Engineering → Reviewer → QA → DevOps orchestration.
+- **COO** — CEO briefing, status, memory, clarifications, routing, and delegation.
+- **Product** — requirements, ambiguity checks, PRDs, and launch criteria.
+- **UX** — flows, states, accessibility, interaction details, and design specs.
+- **Engineering** — implementation plans and code changes.
+- **Reviewer** — implementation review and quality checks.
+- **QA** — test plans, validation, release confidence, and regression guidance.
+- **DevOps** — release, deployment, MCP/ops, rollback, and recovery guidance.
 
-```text
-CEO/User
-  ↓
-Nanobot COO
-  ↓
-Product → UX → Engineering → Reviewer → QA → DevOps
-  ↓
-Audit log + Project Memory + Playbook learning
-```
-
-The COO can answer directly, ask for clarification, remember preferences, inspect status, delegate to a department, recover from route errors, or raise human escalations. Approval gates can be handled in the browser GUI, desktop GUI, or CLI.
+The Quick Agent Switcher and target selector let you jump between these roles without changing code paths.
 
 ---
 
-## Configuration files
+## Settings and configuration
 
-Aider Plus uses repo-local configuration by default:
+Both browser and desktop use the shared settings manager. Settings are organized into:
 
-- `.env` stores provider keys and Company agent overrides.
-- `.aider.conf.yml` stores Aider model/configuration defaults.
-- Project memory and audit data are stored through Aider Plus memory helpers.
-- Warehouse product registries live under `products/warehouse.json` by default.
+1. **Global Aider** — main, weak, and editor model defaults for direct chat.
+2. **Per-Agent Overrides** — model, prompt caching, API key override, and local endpoint/setting for COO, Product, UX, Engineering, Reviewer, QA, and DevOps.
+3. **Provider Keys** — OpenAI, Anthropic, OpenRouter, and other provider credentials.
+4. **Advanced (.env + .aider.conf)** — extra `KEY=value` environment lines and raw `.aider.conf.yml` editing.
 
-Common environment keys include:
+Use **Preview changes** before saving. Then use **Apply & Restart Company Session** so new agent loops pick up model, key, caching, `.env`, and `.aider.conf.yml` updates.
 
-```env
-OPENAI_API_KEY=...
-ANTHROPIC_API_KEY=...
-OPENROUTER_API_KEY=...
+Example environment overrides:
+
+```bash
+AIDER_COMPANY_AGENT_MODELS="coo=gpt-5.5,product=gpt-5.5,engineering=gpt-5.5"
 AIDER_COMPANY_MODEL_COO=gpt-5.5
+AIDER_COMPANY_CACHING_COO=true
 AIDER_COMPANY_CACHING_ENGINEERING=true
-AIDER_COMPANY_API_KEY_QA=...
-AIDER_COMPANY_LOCAL_DEVOPS=http://localhost:11434
 AIDER_MCP_ENABLED=true
 ```
 
-Prefer the GUI Settings screen for day-to-day edits because it validates and previews changes before saving.
+---
+
+## Memory, skills, and context
+
+Aider Plus keeps memory local and inspectable:
+
+- Conversation memory consolidates chat context into project memory.
+- Project memory stores workflow state, audit data, playbook patterns, and recent outcomes.
+- COO memory stores durable CEO preferences and notes under `.aider/coo/`.
+- Skills and playbook guidance can be pulled into department context before a task is executed.
+- MCP tool requests can be approval-gated and surfaced in the GUI approval flows.
+
+This keeps the machine-learning loop research-friendly: inputs, memory, tool decisions, routes, and outputs are all observable.
+
+---
+
+## Discord integration
+
+Discord is now only a chat app adapter. It can accept chat text and forward it to headless Aider, but it no longer owns Company Mode dashboards, approvals, audit logs, COO status commands, lifecycle buttons, or product workflow behavior. Use the browser GUI, desktop GUI, CLI, API, or MCP surfaces for those capabilities.
+
+This makes Discord easy to replace with Slack, Matrix, webhooks, or custom chat apps: implement message normalization and session identity, then hand the message to the shared runtime.
 
 ---
 
 ## MCP support
 
-MCP can be enabled for external tools and context. When enabled, the dashboard reports MCP status and configured server count. MCP tool approvals are routed through Company approval gates so human review remains visible in the GUI.
+MCP can be enabled for external tools and context. When enabled, dashboards report MCP status and configured server count. MCP tool approvals route through Company approval gates so human review remains visible in the GUI.
 
 ---
 
-## Warehouse and multi-product support
+## Development
 
-Aider Plus includes a thin warehouse registry for managing multiple Git-backed product repositories.
+Useful checks:
 
 ```bash
-aider warehouse init
-aider warehouse list
-aider warehouse status
-aider company new "Build a status page product" --name "Status Studio"
+python -m py_compile aider/gui.py aider/desktop.py aider/integrations/discord.py aider/company/coo.py
+python -m pytest tests/company/test_coo_agent_framework.py tests/company/test_discord_lifecycle.py tests/company/test_product_department.py
 ```
 
-When a warehouse registry is present, dashboard System Overview surfaces active warehouse product information.
+Architecture map:
 
----
-
-## Architecture map
-
-Important runtime areas:
-
+- `aider/company/coo.py` — Nanobot-style COO sessions, action decisions, memory, status, bus, and delegation.
+- `aider/company/orchestrator.py` — workflow, approvals, lifecycle, context, handoffs, and audit coordination.
+- `aider/company/departments/` — Product, UX, Engineering, Reviewer, QA, and DevOps implementations.
+- `aider/company/surface_messages.py` — shared lifecycle/status/approval/audit message formatting for surfaces.
+- `aider/memory/` — conversation memory, project memory, retrieval, consolidation, and pattern extraction.
+- `aider/mcp/` — MCP configuration, manager, adapters, and server helpers.
 - `aider/gui.py` — Streamlit browser GUI.
 - `aider/desktop.py` — Tkinter desktop GUI.
-- `aider/gui_settings_manager.py` — shared GUI settings form, validation, preview, and save helpers.
-- `aider/settings.py` — lower-level `.env` and `.aider.conf.yml` helpers.
-- `aider/agent/` — tool-calling agent loop and tool registry.
-- `aider/company/` — COO, orchestrator, departments, approvals, lifecycle, warehouse, playbook, audit, and config.
-- `aider/memory/` — conversation memory, project memory, retrieval, consolidation, and patterns.
-- `aider/mcp/` — MCP configuration, manager, adapters, and server helpers.
-- `aider/integrations/` — Discord integration.
-- `tests/company/` — focused coverage for settings, prompt caching, Company workflow, approvals, UX schemas, COO behavior, warehouse CLI, Discord lifecycle, and desktop behavior.
+- `aider/integrations/discord.py` — thin Discord chat adapter.
+- `docs/company/nanobot_coo_architecture.md` — COO architecture details.
+- `tests/company/` and `tests/mcp/` — focused coverage for Company workflow, COO behavior, GUI settings, approvals, lifecycle formatting, and MCP.
 
 ---
 
-## Developer checks
+## Safety note
 
-Useful local checks:
-
-```bash
-python -m py_compile aider/gui.py aider/desktop.py aider/gui_settings_manager.py
-python -m pytest tests/company/test_settings_helpers.py
-python -m pytest tests/company
-```
-
----
-
-## Notes
-
-Aider Plus is experimental software. The browser GUI, desktop GUI, Company Mode, MCP integrations, and warehouse flows are evolving quickly. Use git branches, review generated changes, and keep approval gates enabled for important work.
+Aider Plus is experimental software. Use git branches, review generated changes, keep approval gates enabled for important work, and treat MCP/deployment actions as operations that need human oversight.

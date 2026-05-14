@@ -1,32 +1,26 @@
-"""Discord front-end helpers for running Aider in headless scripting mode.
+"""Discord chat-app adapter for Aider Plus.
 
-This module keeps discord.py optional so core aider installs do not require it.
+Discord intentionally stays a thin chat surface. Company workflow, approvals,
+audit logs, COO status, lifecycle formatting, memory, MCP, and deployment logic
+live in the shared Company/browser/desktop layers instead of this integration.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, Optional, Set
 
-from aider.company.audit import AuditLogViewer
-from aider.agent.loop import AgentLoopConfig
-from aider.company.agent_factory import build_company_agent_loops
-from aider.company.approval import ApprovalManager
-from aider.company.orchestrator import CompanyOrchestrator
-from aider.company.project import Project
-from aider.company.config import apply_agent_model_overrides_from_env
-from aider.company.coo import NanobotCOO
-from aider.company.departments.devops import DevOpsDepartment
-from aider.company.departments.engineering import EngineeringDepartment
-from aider.company.departments.product import ProductDepartment
-from aider.company.departments.qa import QADepartment
-from aider.company.departments.ux import UXDepartment
-from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
 from aider.coders import Coder
+from aider.company.surface_messages import (
+    format_approval_required_message,
+    format_audit_log_message,
+    format_company_status_message,
+    format_coo_status_message,
+    format_lifecycle_event_message,
+)
 from aider.main import main as aider_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
 
@@ -68,134 +62,8 @@ class DiscordAiderConfig:
     editor_model: Optional[str] = None
 
 
-def format_approval_required_message(event: EventMessage) -> str:
-    payload = event.payload
-    project_name = payload.get("project_name") or "unknown-project"
-    gate_name = payload.get("gate_name", "prd_approval")
-    gate_label = (
-        gate_name.replace("prd", "PRD").replace("_", " ").title().replace("Prd", "PRD")
-    )
-    handoff_to = payload.get("handoff_to") or "engineering"
-    handoff_label = str(handoff_to).replace("_", " ").title()
-    if gate_name == "prd_approval":
-        title = "📋 **Product Department Deliverable Ready**"
-    elif gate_name == "clarification_approval":
-        title = "❓ **Product Clarification Required**"
-    elif gate_name == "coo_human_escalation":
-        title = "🚨 **COO Human Escalation Required**"
-    else:
-        title = "🧪 **QA Release Approval Required**"
-    preview = str(payload.get("artifact_preview", "")).strip()
-    quoted_preview = "\n".join(
-        f"> {line}" if line else ">" for line in preview.splitlines()
-    )
-    return (
-        f"{title}\n"
-        f"Project: `{project_name}`\n"
-        f"Gate: {gate_label} → {handoff_label}\n\n"
-        "**Preview:**\n"
-        f"{quoted_preview}"
-    )
-
-
-def format_lifecycle_event_message(event: EventMessage) -> str:
-    payload = event.payload or {}
-    event_name = payload.get("name") or str(event.event)
-    lifecycle_labels = {
-        "product_revision_start": "Product is revising PRD based on feedback…",
-        "product_prd_revised": "Product revised PRD",
-    }
-    label = lifecycle_labels.get(event_name, str(event_name).replace("_", " ").title())
-    icon = "⚠️" if payload.get("severity") == "warning" else "🔄"
-    iteration = payload.get("iteration")
-    suffix = f" (iteration {iteration})" if iteration is not None else ""
-    details = []
-    formatted = payload.get("formatted")
-    if formatted:
-        details.append(str(formatted))
-    warning = payload.get("warning")
-    if warning:
-        details.append("Warning: " + str(warning))
-    files = payload.get("files") or []
-    if files:
-        details.append("Files: " + ", ".join(str(path) for path in files[:8]))
-    feedback = payload.get("feedback") or {}
-    if isinstance(feedback, dict) and feedback.get("summary"):
-        details.append("Review: " + str(feedback.get("summary")))
-    checks = payload.get("checks") or []
-    if checks:
-        passed = sum(1 for check in checks if check.get("status") == "passed")
-        details.append(f"Checks: {passed}/{len(checks)} passed")
-    body = "\n".join(details)
-    if body:
-        body = "\n" + body
-    return f"{icon} **{label}**{suffix}\nTask: `{event.task_id}`{body}"
-
-
-def format_audit_log_message(project_memory: ProjectMemory, limit: int = 10) -> str:
-    viewer = AuditLogViewer.from_project_memory(project_memory)
-    rendered = viewer.render_text(limit=limit)
-    return f"🧾 **Recent Audit Events**\n```\n{rendered[:1800]}\n```"
-
-
-def format_company_status_message(orchestrator: CompanyOrchestrator) -> str:
-    rendered = orchestrator.company_status()
-    return f"🏢 **Company Dashboard**\n```\n{rendered[:1800]}\n```"
-
-
-def format_coo_status_message(status: dict) -> str:
-    if not status:
-        return "🤖 **CEO/COO Briefing**\nNo COO session is active yet."
-    current_route = status.get("current_route") or {}
-    last_action = status.get("last_coo_action") or {}
-    lines = [
-        "🤖 **CEO/COO Briefing**",
-        f"Session: `{status.get('session_id')}`",
-        f"Status: `{status.get('status')}`",
-        f"COO action: `{last_action.get('action', '—')}`",
-        f"Active department: `{status.get('active_department') or '—'}`",
-        (
-            "Current route: "
-            f"`{current_route.get('strategy', '—')} → "
-            f"{current_route.get('target', '—')}`"
-        ),
-    ]
-    error_count = int(status.get("error_count", 0) or 0)
-    if error_count > 0:
-        last_error = status.get("last_error") or {}
-        lines.extend(
-            [
-                "",
-                "🚨 **Recent COO errors**",
-                f"• Count: `{error_count}`",
-                (
-                    "• Last: "
-                    f"`{last_error.get('error_type', 'unknown_error')}` "
-                    f"after `{last_error.get('retries', 0)}` retries — "
-                    f"{last_error.get('message', '')}"
-                ),
-                f"• Recovery: {last_error.get('recovery_suggestion', 'review COO activity')}",
-            ]
-        )
-        if last_error.get("escalate_to_human"):
-            lines.append(
-                "• Human escalation pending"
-                f" — approval `{last_error.get('approval_task_id', 'pending')}`"
-            )
-    lines.extend(["", "**Recent activity**"])
-    events = status.get("recent_events") or []
-    if events:
-        lines.extend(f"• {event}" for event in events[-10:])
-    else:
-        lines.append("• No COO bus events yet.")
-    summary = status.get("last_deliverable_summary")
-    if summary:
-        lines.extend(["", "**Last deliverable**", str(summary)[:800]])
-    return "\n".join(lines)[:1900]
-
-
 class DiscordSessionManager:
-    """In-memory session store keyed by channel/user/repo for easy future persistence."""
+    """In-memory coder sessions keyed by Discord channel/user/repo."""
 
     def __init__(self):
         self._sessions: Dict[DiscordSessionKey, Coder] = {}
@@ -237,22 +105,17 @@ class DiscordSessionManager:
 
 
 class DiscordAiderBot:
-    """Async-friendly façade around Coder for Discord handlers.
+    """Thin async façade for Discord chat messages.
 
-    You can wire `run_instruction` into slash commands or mention handlers.
+    This adapter only turns Discord text into a headless Aider chat request and
+    returns text back to Discord. Product workflow, COO routing, approval gates,
+    dashboards, audit views, and deployment controls should be used through the
+    browser GUI, desktop GUI, CLI, API, or MCP layers.
     """
 
     def __init__(self, config: Optional[DiscordAiderConfig] = None):
         self.config = config or DiscordAiderConfig()
         self.sessions = DiscordSessionManager()
-        self.orchestrator: Optional[CompanyOrchestrator] = None
-        self.coo: Optional[NanobotCOO] = None
-        self.engineering: Optional[EngineeringDepartment] = None
-        self.product: Optional[ProductDepartment] = None
-        self.ux: Optional[UXDepartment] = None
-        self.qa: Optional[QADepartment] = None
-        self.devops: Optional[DevOpsDepartment] = None
-        self.active_project: Optional[Project] = None
 
     def check_access(self, user_id: int):
         if user_id in self.config.deny_users:
@@ -299,100 +162,6 @@ class DiscordAiderBot:
         self.sessions.put(key, coder)
         return coder
 
-    def _init_company_session(
-        self,
-        coder: Coder,
-        callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
-        company_event_callback: Optional[Callable[[object], Awaitable[None]]] = None,
-    ) -> EngineeringDepartment:
-        company_config = apply_agent_model_overrides_from_env()
-        agent_loops = build_company_agent_loops(
-            coder=coder,
-            company_config=company_config,
-            callback=callback,
-            base_config=AgentLoopConfig(
-                use_architect_mode=self.config.use_architect_mode,
-                architect_model=self.config.architect_model,
-                editor_model=self.config.editor_model,
-            ),
-        )
-        self.engineering = EngineeringDepartment(
-            project_memory=coder.project_memory,
-            agent_loop=agent_loops["engineering"],
-            conversation_memory=coder.conversation_memory,
-        )
-        self.product = ProductDepartment(
-            project_memory=coder.project_memory,
-            agent_loop=agent_loops["product"],
-            conversation_memory=coder.conversation_memory,
-        )
-        self.ux = UXDepartment(
-            project_memory=coder.project_memory,
-            agent_loop=agent_loops["ux"],
-            conversation_memory=coder.conversation_memory,
-        )
-        self.qa = QADepartment(
-            project_memory=coder.project_memory,
-            agent_loop=agent_loops["qa"],
-            conversation_memory=None,
-        )
-        self.devops = DevOpsDepartment(
-            project_memory=coder.project_memory,
-            agent_loop=agent_loops["devops"],
-            conversation_memory=None,
-        )
-        self.orchestrator = CompanyOrchestrator(
-            project_memory=coder.project_memory,
-            company_config=company_config,
-        )
-        self.orchestrator.active_project = self.active_project
-        self.orchestrator.register(self.product)
-        self.orchestrator.register(self.ux)
-        self.orchestrator.register(self.engineering)
-        self.orchestrator.register(self.qa)
-        self.orchestrator.register(self.devops)
-        self.coo = NanobotCOO(
-            orchestrator=self.orchestrator,
-            agent_loop=agent_loops["coo"],
-        )
-        if company_event_callback:
-            self.orchestrator.on_deliverable(company_event_callback)
-
-            async def forward_coo_bus_event(event):
-                message_metadata = event.metadata.get("message_metadata", {})
-                formatted = self.coo.bus.get_formatted_events(limit=1)[-1]
-                if event.event_type == "coo_error":
-                    formatted = (
-                        "🚨 COO warning "
-                        f"`{message_metadata.get('error_type', 'unknown_error')}` "
-                        f"after `{message_metadata.get('retries', 0)}` retries: "
-                        f"{message_metadata.get('message', '')}\n"
-                        f"Recovery: {message_metadata.get('recovery_suggestion', 'review COO status')}"
-                    )
-                    if message_metadata.get("escalate_to_human"):
-                        formatted += (
-                            "\nHuman escalation pending — use the approval "
-                            "buttons on the COO escalation request."
-                        )
-                await company_event_callback(
-                    EventMessage(
-                        event=CompanyEvent.LIFECYCLE,
-                        task_id=(message_metadata.get("task_id") or event.session_key),
-                        payload={
-                            "name": (
-                                "coo_error"
-                                if event.event_type == "coo_error"
-                                else "coo_bus_event"
-                            ),
-                            "details": event.as_dict(),
-                            "formatted": formatted,
-                        },
-                    )
-                )
-
-            self.coo.bus.on_event(forward_coo_bus_event)
-        return self.engineering
-
     async def receive_human_input(
         self,
         *,
@@ -403,22 +172,6 @@ class DiscordAiderBot:
         model: Optional[str] = None,
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
     ):
-        """Unified human entry point: bootstrap via Product, then iterate in Engineering."""
-        if not self.active_project:
-            self.active_project = Project(
-                project_id=str(uuid.uuid4()),
-                name=Path(repo_path).name,
-                phase="prototyping",
-            )
-            return await self.run_prototype(
-                key=key,
-                repo_path=repo_path,
-                user_id=user_id,
-                prompt=prompt,
-                model=model,
-                callback=callback,
-            )
-
         return await self.run_instruction(
             key=key,
             repo_path=repo_path,
@@ -427,71 +180,6 @@ class DiscordAiderBot:
             model=model,
             callback=callback,
         )
-
-    async def run_prototype(
-        self,
-        *,
-        key: DiscordSessionKey,
-        repo_path: str,
-        user_id: int,
-        prompt: str,
-        model: Optional[str] = None,
-        callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
-        company_event_callback: Optional[Callable[[object], Awaitable[None]]] = None,
-    ):
-        """Start a new project by routing the prompt through Product before Engineering."""
-        self.check_access(user_id)
-        if len(prompt) > self.config.max_prompt_chars:
-            raise ValueError("Prompt too large")
-
-        coder = await self.get_or_create_session(key, repo_path, model=model)
-        self.on_reconnect_or_ping(key)
-        self._init_company_session(
-            coder,
-            callback=callback,
-            company_event_callback=company_event_callback,
-        )
-        if self.orchestrator and isinstance(self.orchestrator.memory, ProjectMemory):
-            await self.orchestrator.recover_pending_approvals()
-
-        if not self.active_project:
-            self.active_project = Project(
-                project_id=str(uuid.uuid4()),
-                name=Path(repo_path).name,
-                phase="prototyping",
-            )
-        if self.orchestrator:
-            self.orchestrator.active_project = self.active_project
-
-        task = CompanyTask(
-            task_id=str(uuid.uuid4()),
-            origin="ceo",
-            target="product",
-            artifact_type="raw_prompt",
-            payload=prompt,
-            blocking=False,
-            context={"project_name": Path(repo_path).name},
-        )
-
-        coo_result = await self.coo.receive_user_message(
-            message=prompt,
-            session_id=f"discord:{key}",
-            surface="discord",
-            target="product",
-            context={"project_name": Path(repo_path).name},
-            task_id=task.task_id,
-            origin=task.origin,
-        )
-        deliverable = coo_result["deliverable"]
-
-        return {
-            "task_id": task.task_id,
-            "summary": deliverable.payload,
-            "content": deliverable.payload,
-            "artifact_type": deliverable.artifact_type,
-            "status": deliverable.status,
-            "metadata": deliverable.metadata,
-        }
 
     async def run_instruction(
         self,
@@ -504,7 +192,7 @@ class DiscordAiderBot:
         include_diff: bool = False,
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
     ):
-        """Run an existing-project instruction directly in Engineering without PRD generation."""
+        """Run one Discord chat message through classic headless Aider."""
         self.check_access(user_id)
         if len(prompt) > self.config.max_prompt_chars:
             raise ValueError("Prompt too large")
@@ -512,81 +200,42 @@ class DiscordAiderBot:
         coder = await self.get_or_create_session(key, repo_path, model=model)
         self.on_reconnect_or_ping(key)
 
-        self._init_company_session(coder, callback=callback)
-        if self.orchestrator and isinstance(self.orchestrator.memory, ProjectMemory):
-            await self.orchestrator.recover_pending_approvals()
-        task = CompanyTask(
-            task_id=str(uuid.uuid4()),
-            origin="ceo",
-            target="engineering",
-            artifact_type="raw_prompt",
-            payload=prompt,
-            blocking=False,
-        )
-
-        run_task = asyncio.create_task(
-            self.coo.receive_user_message(
-                message=prompt,
-                session_id=f"discord:{key}",
-                surface="discord",
-                target="engineering",
-                task_id=task.task_id,
-                origin=task.origin,
-            )
-        )
+        async def run_coder():
+            return await asyncio.to_thread(coder.run, prompt)
 
         try:
-            coo_result = await asyncio.wait_for(
-                run_task, timeout=self.config.max_runtime_seconds
+            content = await asyncio.wait_for(
+                run_coder(), timeout=self.config.max_runtime_seconds
             )
-            deliverable = coo_result["deliverable"]
         except asyncio.TimeoutError as err:
             raise TimeoutError("Aider request timed out") from err
 
-        result_content = deliverable.payload
-        files = deliverable.metadata.get("files", [])
-        commits = deliverable.metadata.get("commits", [])
-        diffs = deliverable.metadata.get("diffs", [])
-        result = {
-            "summary": result_content,
-            "content": result_content,
-            "files_changed": files,
-            "files": files,
-            "commits": commits,
-            "diffs": diffs,
-            "status": deliverable.status,
-        }
-
+        result_content = content if isinstance(content, str) else str(content or "")
         project_memory = getattr(coder, "project_memory", None)
         if isinstance(project_memory, ProjectMemory):
             project_memory.update(
                 {"last_prompt": prompt, "last_result": result_content}
             )
 
+        result = {
+            "summary": result_content,
+            "content": result_content,
+            "files_changed": [],
+            "files": [],
+            "commits": [],
+            "diffs": [],
+            "status": "success",
+        }
+        if callback:
+            await callback(result_content, result)
         return result
 
-    async def _run_engineering_task(
-        self,
-        engineering: EngineeringDepartment,
-        task: CompanyTask,
-    ):
-        if self.coo is not None:
-            return await self.coo.run_department_task(task)
-        deliverable = await engineering.process(task)
-        if self.orchestrator:
-            for handler in self.orchestrator._handlers:
-                try:
-                    await handler(deliverable)
-                except Exception:
-                    pass
-        return deliverable
-
     def on_disconnect(self, key: DiscordSessionKey):
-        """Persist project memory when a Discord session disconnects."""
+        """Persist project memory when a Discord chat session disconnects."""
         self.sessions.persist_project_memory(key)
 
     def on_reconnect_or_ping(self, key: DiscordSessionKey):
-        """Refresh project memory so new runs receive persisted context."""
+        """Refresh project memory so new chat messages receive persisted context."""
         coder = self.sessions.get(key)
         if not coder:
             return
@@ -595,11 +244,15 @@ class DiscordAiderBot:
             project_memory.load()
 
 
-def build_discord_client(*args, **kwargs):
-    """Factory that imports discord.py lazily.
+async def _maybe_send_response(ctx, text: str):
+    if hasattr(ctx, "send"):
+        await ctx.send(text[:1900] or "Done.")
+    else:
+        await ctx.response.send_message(text[:1900] or "Done.")
 
-    This keeps aider importable without discord.py installed.
-    """
+
+def build_discord_client(*args, **kwargs):
+    """Build a discord.py client that only forwards chat text to Aider."""
 
     try:
         import discord
@@ -619,268 +272,47 @@ def build_discord_client(*args, **kwargs):
 
     bot = commands.Bot(*args, intents=intents, **kwargs)
 
-    class ApprovalFeedbackModal(discord.ui.Modal):
-        def __init__(
-            self, approval_manager: ApprovalManager, task_id: str, gate_name: str
-        ):
-            if gate_name == "release_approval":
-                title = "Request Release Changes"
-                label = "Feedback for Engineering"
-            elif gate_name == "clarification_approval":
-                title = "Answer Clarification Questions"
-                label = "Your answers for Product"
-            elif gate_name == "coo_human_escalation":
-                title = "Resolve COO Escalation"
-                label = "Routing or recovery instructions"
-            else:
-                title = "Request PRD Changes"
-                label = "Feedback for Product"
-            super().__init__(title=title)
-            self.approval_manager = approval_manager
-            self.task_id = task_id
-            self.gate_name = gate_name
-            self.feedback = discord.ui.TextInput(
-                label=label,
-                style=discord.TextStyle.paragraph,
-                required=True,
-                max_length=1500,
-            )
-            self.add_item(self.feedback)
-
-        async def on_submit(self, interaction):
-            answer = str(self.feedback.value)
-            if self.gate_name == "clarification_approval":
-                # CEO answered the questions — approve with answers as context.
-                await self.approval_manager.handle_approval_response(
-                    self.task_id,
-                    True,
-                    source="discord",
-                    reason=answer,
-                    metadata={"action": "answered", "feedback": answer},
-                )
-                await interaction.response.send_message(
-                    "✅ Answers submitted. Product will generate the PRD now.",
-                    ephemeral=True,
-                )
-            else:
-                await self.approval_manager.handle_approval_response(
-                    self.task_id,
-                    False,
-                    source="discord",
-                    reason=answer,
-                    metadata={"action": "revise", "feedback": answer},
-                )
-                destination = (
-                    "Engineering"
-                    if self.gate_name == "release_approval"
-                    else (
-                        "COO" if self.gate_name == "coo_human_escalation" else "Product"
-                    )
-                )
-                await interaction.response.send_message(
-                    f"📝 Change request sent back to {destination}.",
-                    ephemeral=True,
-                )
-
-    class ApprovalView(discord.ui.View):
-        def __init__(
-            self, approval_manager: ApprovalManager, task_id: str, gate_name: str
-        ):
-            super().__init__(timeout=None)
-            self.approval_manager = approval_manager
-            self.task_id = task_id
-            self.gate_name = gate_name
-
-        @discord.ui.button(
-            label="Approve", emoji="✅", style=discord.ButtonStyle.success
-        )
-        async def approve_button(self, interaction, button):
-            resolved = await self.approval_manager.handle_approval_response(
-                self.task_id, True, source="discord"
-            )
-            for child in self.children:
-                child.disabled = True
-            if not resolved:
-                content = "This approval was already resolved from another message."
-            elif self.gate_name == "release_approval":
-                content = "✅ Release approved. DevOps deployment has started."
-            elif self.gate_name == "clarification_approval":
-                content = (
-                    "✅ Clarification skipped. Product will proceed with the "
-                    "original request."
-                )
-            elif self.gate_name == "coo_human_escalation":
-                content = "✅ COO escalation acknowledged. Human recovery can proceed."
-            else:
-                content = "✅ PRD approved. Engineering handoff has started."
-            await interaction.response.edit_message(content=content, view=self)
-
-        @discord.ui.button(label="Reject", emoji="❌", style=discord.ButtonStyle.danger)
-        async def reject_button(self, interaction, button):
-            resolved = await self.approval_manager.handle_approval_response(
-                self.task_id, False, source="discord"
-            )
-            for child in self.children:
-                child.disabled = True
-            if not resolved:
-                content = "This approval was already resolved from another message."
-            elif self.gate_name == "release_approval":
-                content = "❌ Release rejected and routed back to Engineering."
-            elif self.gate_name == "clarification_approval":
-                content = (
-                    "❌ Clarification cancelled. The project request will not "
-                    "proceed."
-                )
-            elif self.gate_name == "coo_human_escalation":
-                content = (
-                    "❌ COO escalation rejected. Review the session before retrying."
-                )
-            else:
-                content = "❌ PRD rejected and routed back to Product."
-            await interaction.response.edit_message(content=content, view=self)
-
-        @discord.ui.button(
-            label="Request Changes", emoji="📝", style=discord.ButtonStyle.secondary
-        )
-        async def request_changes_button(self, interaction, button):
-            await interaction.response.send_modal(
-                ApprovalFeedbackModal(
-                    self.approval_manager, self.task_id, self.gate_name
-                )
-            )
-
-    async def send_company_event(ctx, event):
-        if not isinstance(event, EventMessage):
-            return
-        if event.event == CompanyEvent.LIFECYCLE:
-            await ctx.send(format_lifecycle_event_message(event))
-            return
-        if event.event != CompanyEvent.APPROVAL_REQUIRED:
-            return
-        orchestrator = aider_bot.orchestrator
-        if orchestrator is None:
-            return
-        approval_manager = orchestrator.approval_manager
-        await ctx.send(
-            format_approval_required_message(event),
-            view=ApprovalView(
-                approval_manager,
-                event.task_id,
-                event.payload.get("gate_name", "prd_approval"),
-            ),
-        )
-
     if aider_bot is not None:
 
-        @bot.command(name="audit")
-        async def audit(ctx, limit: int = 10):
-            repo_path = (
-                repo_path_resolver(ctx)
-                if repo_path_resolver
-                else getattr(ctx, "repo_path", None)
-            )
-            key = DiscordSessionKey(
-                guild_id=getattr(getattr(ctx, "guild", None), "id", 0) or 0,
-                channel_id=ctx.channel.id,
-                user_id=getattr(getattr(ctx, "author", None), "id", None),
-                repo_path=repo_path,
-            )
-            project_memory = aider_bot.sessions._project_memories.get(key)
-            if project_memory is None and aider_bot.orchestrator is not None:
-                project_memory = aider_bot.orchestrator.memory
-            if project_memory is None:
-                await ctx.send("No project memory is available for audit logs yet.")
-                return
-            await ctx.send(
-                format_audit_log_message(project_memory, limit=max(1, min(limit, 25)))
-            )
-
-        @bot.command(name="company_status")
-        async def company_status(ctx):
-            if aider_bot.orchestrator is None:
-                await ctx.send("No company session is active yet.")
-                return
-            await ctx.send(format_company_status_message(aider_bot.orchestrator))
-
-        @bot.command(name="dashboard")
-        async def dashboard(ctx):
-            if aider_bot.orchestrator is None:
-                await ctx.send("No company session is active yet.")
-                return
-            await ctx.send(format_company_status_message(aider_bot.orchestrator))
-
-        async def build_coo_status_for_context(ctx):
-            if aider_bot.coo is None:
-                return None
-            repo_path = (
-                repo_path_resolver(ctx)
-                if repo_path_resolver
-                else getattr(ctx, "repo_path", None)
-            )
-            channel = getattr(ctx, "channel", None)
-            author = getattr(ctx, "author", None) or getattr(ctx, "user", None)
-            key = DiscordSessionKey(
-                guild_id=getattr(getattr(ctx, "guild", None), "id", 0) or 0,
-                channel_id=(
-                    getattr(channel, "id", None) or getattr(ctx, "channel_id", 0) or 0
-                ),
-                user_id=getattr(author, "id", None),
-                repo_path=repo_path,
-            )
-            return await aider_bot.coo.get_session_status(f"discord:{key}")
-
-        @bot.command(name="coo_status")
-        async def coo_status(ctx):
-            status = await build_coo_status_for_context(ctx)
-            if status is None:
-                await ctx.send("No COO session is active yet.")
-                return
-            await ctx.send(format_coo_status_message(status))
-
-        @bot.command(name="session")
-        async def session(ctx):
-            await coo_status(ctx)
-
-        @bot.tree.command(name="coo_status", description="Show COO session activity")
-        async def coo_status_slash(interaction):
-            status = await build_coo_status_for_context(interaction)
-            if status is None:
-                await interaction.response.send_message(
-                    "No COO session is active yet.", ephemeral=True
-                )
-                return
-            await interaction.response.send_message(format_coo_status_message(status))
-
-        @bot.tree.command(name="session", description="Show COO session activity")
-        async def session_slash(interaction):
-            await coo_status_slash(interaction)
-
-        @bot.command(name="prototype")
-        async def prototype(ctx, *, prompt: str):
+        async def run_chat(ctx, prompt: str):
             repo_path = (
                 repo_path_resolver(ctx)
                 if repo_path_resolver
                 else getattr(ctx, "repo_path", None)
             )
             if not repo_path:
-                await ctx.send("Repository path is required for /prototype.")
+                await _maybe_send_response(
+                    ctx, "Repository path is required for Discord chat."
+                )
                 return
-
             model = model_resolver(ctx) if model_resolver else None
+            channel = getattr(ctx, "channel", None)
+            author = getattr(ctx, "author", None) or getattr(ctx, "user", None)
             key = DiscordSessionKey(
                 guild_id=getattr(getattr(ctx, "guild", None), "id", 0) or 0,
-                channel_id=ctx.channel.id,
-                user_id=getattr(getattr(ctx, "author", None), "id", None),
+                channel_id=getattr(channel, "id", None)
+                or getattr(ctx, "channel_id", 0)
+                or 0,
+                user_id=getattr(author, "id", None),
                 repo_path=repo_path,
             )
-            await aider_bot.run_prototype(
+            result = await aider_bot.run_instruction(
                 key=key,
                 repo_path=repo_path,
-                user_id=getattr(getattr(ctx, "author", None), "id", 0) or 0,
+                user_id=getattr(author, "id", 0) or 0,
                 prompt=prompt,
                 model=model,
-                company_event_callback=lambda event: send_company_event(ctx, event),
             )
-            await ctx.send("📋 Product is drafting requirements...")
+            await _maybe_send_response(
+                ctx, result.get("content") or result.get("summary") or "Done."
+            )
+
+        @bot.command(name="chat")
+        async def chat(ctx, *, prompt: str):
+            await run_chat(ctx, prompt)
+
+        @bot.tree.command(name="chat", description="Send a chat message to Aider")
+        async def chat_slash(interaction, prompt: str):
+            await run_chat(interaction, prompt)
 
     return bot

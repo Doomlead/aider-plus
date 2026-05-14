@@ -613,7 +613,7 @@ DESKTOP_TAB_GUIDE = {
     ),
     "Guide": (
         "Explains every desktop tab, chat target, settings field, dashboard field, approval "
-        "field, and audit field."
+        "field, audit field, and the small Nanobot-style COO core shared with chat/API/MCP surfaces."
     ),
 }
 
@@ -622,7 +622,10 @@ CHAT_TARGET_GUIDE = {
     "Company Workflow": (
         "Routes the prompt through COO-led Product → UX → Engineering → QA → DevOps orchestration."
     ),
-    "COO": "Ask the COO personal assistant to brief the CEO, remember preferences, or delegate work.",
+    "COO": (
+        "Ask the Nanobot-style COO to brief the CEO, remember preferences, inspect status, "
+        "decide whether tools are needed, pull memory/skills into context, or delegate work to the orchestrator."
+    ),
     "Product": "Talks directly with the Product agent for requirements, PRDs, and ambiguity checks.",
     "UX": "Talks directly with the UX agent for design specs, screens, states, and accessibility.",
     "Engineering": "Talks directly with the Engineering agent for implementation plans and code changes.",

@@ -1113,22 +1113,30 @@ class GUI:
             st.markdown(
                 "- **Direct Aider** for normal pair-programming.\n"
                 "- **Company Workflow** for COO-led Product → UX → Engineering → QA → DevOps work.\n"
+                "- **COO** for Nanobot-style CEO briefings, memory, status, tool decisions, and delegation.\n"
                 "- **Agent tabs** when you want one role's focused opinion or output.\n"
                 "- Use the **Quick Agent Switcher** or bottom target selector to jump quickly."
             )
-        with st.expander("2. Settings safely", expanded=True):
+        with st.expander("2. Understand the COO core", expanded=True):
+            st.markdown(
+                "The COO path is intentionally small, readable, and research-ready: chat/API/MCP "
+                "surfaces send messages in, the agent loop decides whether tools are needed, "
+                "memory and skills are pulled into context, and product-building or iteration "
+                "requests are forwarded to the orchestrator instead of being reimplemented in a chat app."
+            )
+        with st.expander("3. Settings safely", expanded=True):
             st.markdown(
                 "Use **Preview changes** first. Fix validation errors, then click "
                 "**Apply & Restart Company Session** so new agent loops pick up models, keys, "
                 "caching, `.env`, and `.aider.conf.yml` changes."
             )
-        with st.expander("3. Watch the system", expanded=False):
+        with st.expander("4. Watch the system", expanded=False):
             st.markdown(
                 "The Dashboard shows caching by agent, COO status/last action, human "
                 "escalations, warehouse products, MCP status, deliverables, and COO activity. "
                 "Errors include recovery suggestions when the COO records them."
             )
-        with st.expander("4. Keyboard and recovery tips", expanded=False):
+        with st.expander("5. Keyboard and recovery tips", expanded=False):
             st.markdown(
                 "- Ctrl/Cmd+Enter sends in desktop. Streamlit uses the chat input submit action.\n"
                 "- If an agent fails, check Settings preview, Provider Keys, MCP status, and Approvals.\n"

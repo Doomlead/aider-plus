@@ -144,7 +144,7 @@ convert MCP tools into `ToolRegistry` tools with allowlists and approval gates.
 ## Observability and session status APIs
 
 The COO message bus is the shared observability spine for CLI, Desktop, Browser,
-and Discord surfaces. `COOMessageBus.get_formatted_events(limit=20)` returns
+API/MCP, and chat-app surfaces. `COOMessageBus.get_formatted_events(limit=20)` returns
 recent human-readable event strings that include timestamps, session keys, queue
 state, action/delegation metadata, routing decisions, task IDs, and department
 handoffs. Raw events remain available through
@@ -158,8 +158,8 @@ snapshot with bus metrics, `last_coo_action`, `ceo_profile`, recent COO memory,
 route history, errors, pending escalations, and queue counters into a dashboard
 payload.
 
-Desktop's Company Dashboard includes a COO Activity section that refreshes from
-`get_session_status()`. Discord exposes the same payload via the `coo_status`
-command, with `session` as an alias. Bus event handlers also forward live COO
-activity into the existing Desktop event queue and Discord lifecycle stream when
-a Discord company event callback is registered.
+Desktop and Browser Company Dashboards include COO Activity sections that refresh
+from `get_session_status()`. Chat apps such as Discord are intentionally thin:
+they forward messages into the shared runtime and should not own status, audit,
+approval, lifecycle, product-building, or deployment behavior. Bus event handlers
+feed GUI event queues and any future API/MCP event streams from the same source.

@@ -205,6 +205,15 @@ aider reject <gate-id> "Needs a smaller scope before release"
 
 Run those approval commands from the repository root that contains `.aider/project_memory.json`.
 
+### Run the optional MCP server façade
+
+```bash
+python -m pip install -e '.[mcp]'
+aider-plus-mcp
+```
+
+The MCP server entry point exposes safe status, memory/context, Company-task, headless-task, and approval actions to MCP-aware clients while keeping normal model routing in LiteLLM/Aider.
+
 ---
 
 ## Installation
@@ -230,6 +239,7 @@ python -m pip install -e '.[dev,browser]'
 Optional integration dependencies depend on the surface you use:
 
 - Discord bot support requires the Discord Python dependencies expected by `aider/integrations/discord.py`.
+- MCP support is optional; install it with `python -m pip install -e '.[mcp]'` and use the `aider-plus-mcp` console script when you want Aider Plus to expose its safe MCP server façade.
 - Desktop mode uses Tkinter and the Python standard library for its windowing layer; install your OS package for Tkinter if your Python distribution omits it.
 - Browser mode uses Streamlit and browser extras.
 - Model providers require the relevant API keys in environment variables, `.env`, `.aider.conf.yml`, onboarding output, or GUI settings.
@@ -321,7 +331,7 @@ Use `company create` inside the current repo, or use `company new` to create/sel
 
 ### 6) Company prototype flow
 
-Use `CompanyOrchestrator`, Discord `/prototype`, or Company Mode in the GUI/desktop to route a raw product idea through Product ambiguity detection, optional CEO clarification, typed PRD creation, PRD approval, UX/design, Engineering implementation, reviewer revisions, QA, release approval, DevOps, and post-mortem learning.
+Use `CompanyOrchestrator`, Discord `/prototype`, direct CLI Company commands, or Company Mode in the GUI/desktop to route a raw product idea through Product ambiguity detection, optional CEO clarification, typed PRD creation, PRD approval, UX/design, Engineering implementation, reviewer revisions, QA, release approval, DevOps, and post-mortem learning.
 
 ### 7) Retrieval-aware playbook learning
 
@@ -537,6 +547,7 @@ python -m pip install -e '.[dev,browser]'
 python -m pytest tests/company
 python -m pytest tests/company/test_coo_agent_framework.py tests/company/test_settings_helpers.py
 python -m pytest tests/company/test_schema_gate.py tests/company/test_ux_department.py
+python -m pytest tests/company/test_zero_to_mvp_cli.py tests/company/test_warehouse_cli.py tests/mcp/test_mcp_integration.py
 ```
 
 When modifying this fork, keep these expectations in mind:
@@ -586,10 +597,22 @@ Because Aider Plus is a fork, upstream Aider documentation remains useful for th
 
 ### Aider Plus commit additions summary
 
-The table below summarizes the visible non-merge Aider Plus commits in this branch that did **not** modify `README.md`, in chronological order. README-only or README-touching documentation refreshes are intentionally omitted.
+The table below summarizes the visible non-merge commits that materially added, fixed, or hardened Aider Plus behavior in this branch. Documentation-only README refreshes and copied upstream website/sample-asset updates are intentionally omitted, so this is a product/engineering changelog rather than a list of every time `README.md` changed.
 
 | Commit | What it added or changed |
 | --- | --- |
+| `c41ef3b` | Bootstrapped this fork on top of upstream Aider and introduced GPT-5.3/GPT-5.4 model variants in the bundled metadata. |
+| `f09d706` | Enabled overeager prompting for Claude Sonnet 4.5 model settings. |
+| `f939d0a` | Added Claude Sonnet 4.6 and Claude Opus 4.7 model support. |
+| `9ce34d1` | Simplified model-name conditional logic in provider/model handling. |
+| `b9d8774` | Mapped generic `opus` and `sonnet` aliases to the latest Claude model family entries. |
+| `79c45c3` | Disabled deprecated temperature handling for Claude 4 models. |
+| `39023f9` | Extended Claude temperature disabling to Opus 4 and gated `thinking_tokens` to models that support it. |
+| `93dfacc` | Added Claude Opus 4.7 settings for Bedrock, Vertex, and OpenRouter. |
+| `65cb4d3` | Reformatted the `thinking_tokens` model check for clearer maintenance. |
+| `cd24a3a` | Updated model-alias test expectations for the refreshed Sonnet and Opus aliases. |
+| `308b154` | Added GPT-5.5 model settings across providers and updated model tests. |
+| `3ec8ec5` | Refreshed bundled FAQ/history model references and sample token percentages around GPT-5.5. |
 | `e56bd79` | Added the first headless-mode and Discord integration scaffolding for non-interactive Aider tasks. |
 | `22f3b87` | Split agent-loop context construction into an explicit, testable build step. |
 | `79219d2` | Shifted agent context caching toward coder-native message formatting. |
@@ -639,6 +662,8 @@ The table below summarizes the visible non-merge Aider Plus commits in this bran
 | `f45c349` | Added TF-IDF memory retrieval, retrieval-aware context injection, memory/observability metrics, and dashboard/status wiring. |
 | `a95cc75` | Added retrieval-aware playbook pattern extraction, bounded deduplicated playbook querying, post-mortem learning integration, and tests. |
 | `c6ac28c` | Added Company prompt-caching controls, per-department cache configuration, preferred model hooks, and cache observability. |
+| `1403bd0` | Refined Company prompt-caching controls and README-described defaults for agent-heavy workflows. |
+| `f1219c2` | Added structured Product clarification workflow support for ambiguous product requests. |
 | `e451dc2` | Handled clarification approval responses so Product can resume PRD generation from human answers. |
 | `c0d1e8a` | Added structured UX design specs with Markdown/JSON handoffs for Engineering. |
 | `6f9a4e8` | Integrated structured PRD and design-spec context into Engineering prompts. |
@@ -666,3 +691,8 @@ The table below summarizes the visible non-merge Aider Plus commits in this bran
 | `0832ccc` | Added per-agent chat tabs and settings-aware routing in the UI. |
 | `fbc97b3` | Documented desktop GUI tabs and settings fields in the in-app guide/help text. |
 | `7e3d44b` | Polished desktop guide placement and acronym-correct agent labels. |
+| `9595966` | Added the optional MCP integration layer, including client config, tool adapters, server façade, optional dependency wiring, docs, and tests. |
+| `e2d6d2e` | Repositioned Nanobot COO as a CEO-assistant layer that can answer, ask clarifying questions, inspect status, use memory, or delegate to the internal company. |
+| `be2873e` | Added the zero-to-MVP `aider company create` flow, template catalog, dry-plan mode, docs, and CLI tests. |
+| `9983101` | Reworked the zero-to-MVP flow into the Company CLI/main entry points with template-grounded briefs and regression coverage. |
+| `c600ffe` | Added the products warehouse manager plus `company new`, `warehouse init/list/open/status`, per-product Git repo setup, registry persistence, and tests. |

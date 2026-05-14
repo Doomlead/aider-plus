@@ -11,10 +11,16 @@ internal Aider Plus company.
 This remains a local implementation: Aider Plus does not import or bridge to
 Nanobot at runtime. It borrows the lightweight pattern of a persistent session,
 small action loop, memory, tools, and channel adapters while preserving Aider
-Plus orchestration as the execution backend.
+Plus orchestration as the execution backend. The COO feature list is deliberately
+Nanobot-like: an intentionally small and readable core, research-ready decision
+objects, built-in chat/API/memory/MCP/deployment extension paths, and hackable
+adapters that make the runtime easy to inspect or replace.
 
 ```text
-CEO (CLI / Discord / Browser / Desktop)
+CEO (CLI / chat apps / Browser / Desktop / API)
+        |
+        v
+chat adapter normalizes message + session identity
         |
         v
 NanobotCOO personal assistant loop
@@ -22,12 +28,14 @@ NanobotCOO personal assistant loop
   - COOActionDecision
   - COO profile + repo-local memory
   - status and approval briefing
+  - memory/skills pulled into context
+  - agent loop decides whether tools are needed
   - optional tool/MCP adapter points
         |
         +--> answer CEO directly / ask clarification / remember / recall / inspect
         |
         v
-Company bridge: delegate_company_task
+Company bridge: delegate_company_task / product iteration request
         |
         v
 CompanyOrchestrator
@@ -51,8 +59,10 @@ Internal departments, each with a dedicated AiderAgentLoop
 
 The COO should not replace Product → UX → Engineering → QA → DevOps. The COO
 chooses whether the CEO needs a direct response, clarification, memory update,
-status briefing, tool use, or delegation. When delegation is needed, it calls
-into the existing company workflow instead of duplicating it.
+status briefing, tool use, or delegation. Incoming chat-app messages are just
+messages: the machine-learning agent loop decides whether tools are needed, pulls
+relevant memory/skills into context, and forwards product creation or iteration
+requests to `CompanyOrchestrator` instead of duplicating department workflow.
 
 ## COO action loop
 
@@ -74,7 +84,7 @@ retry/fallback behavior, and human escalation metadata.
 
 ## COO memory
 
-The first implementation keeps personal COO memory repo-local:
+The first implementation keeps personal COO memory repo-local, while warehouse mode can add a shared cross-product COO memory root under `products/.aider/coo/`:
 
 ```text
 .aider/coo/profile.json

@@ -542,11 +542,26 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         argv = sys.argv[1:]
 
     company_cli_command = None
+    if argv and argv[0] == "warehouse":
+        from aider.company.cli import (
+            CompanyCLIError,
+            handle_warehouse_cli,
+            parse_warehouse_cli,
+        )
+
+        try:
+            warehouse_cli_command, argv = parse_warehouse_cli(argv)
+        except CompanyCLIError as exc:
+            print(str(exc))
+            return 1
+        return handle_warehouse_cli(warehouse_cli_command)
+
     if argv and argv[0] == "company":
         from aider.company.cli import (
             CompanyCLIError,
             handle_company_cli_pre_coder,
             parse_company_cli,
+            prepare_company_workspace,
         )
 
         try:
@@ -558,6 +573,11 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         pre_coder_result = handle_company_cli_pre_coder(company_cli_command)
         if pre_coder_result is not None:
             return pre_coder_result
+        try:
+            prepare_company_workspace(company_cli_command)
+        except CompanyCLIError as exc:
+            print(str(exc))
+            return 1
 
     if argv and argv[0] in {"onboard", "init"}:
         io = InputOutput(pretty=True, yes=False, input=input, output=output)

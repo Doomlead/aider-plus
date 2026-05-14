@@ -84,7 +84,7 @@ retry/fallback behavior, and human escalation metadata.
 
 ## COO memory
 
-The first implementation keeps personal COO memory repo-local, while warehouse mode can add a shared cross-product COO memory root under `products/.aider/coo/`:
+The first implementation keeps personal COO memory repo-local, while warehouse mode can add a shared cross-product COO memory root under `<warehouse>/.aider/coo/`:
 
 ```text
 .aider/coo/profile.json

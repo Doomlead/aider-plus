@@ -8,8 +8,9 @@ Aider Plus is designed around one product promise:
 
 The `aider company create` command keeps the current-repo path for existing
 projects. The `aider company new` command adds a thin warehouse manager for new
-product work: it creates or reuses a Git-backed repo under `products/`, records
-it in `warehouse.json`, then runs the same template-grounded Company brief
+product work: it creates or reuses a Git-backed repo under the warehouse
+`products/` directory, records it in `warehouse.json`, scaffolds a coherent MVP
+starter structure from `aider/company/templates.py`, then runs the same template-grounded Company brief
 through Aider's repo-aware implementation loop so the result remains reviewable,
 testable, and ready for future iteration.
 
@@ -17,8 +18,9 @@ testable, and ready for future iteration.
 
 ```bash
 aider company create "Build a simple habit tracker web app with login, dashboard, and streaks"
-# or create a product repo under ./products first
-aider company new "Build a simple habit tracker web app with login, dashboard, and streaks" --name habit-tracker
+# or create a product repo under a warehouse first
+aider warehouse init ~/AiderPlusWarehouse
+aider company new "Build a simple habit tracker web app with login, dashboard, and streaks" --name habit-tracker --warehouse ~/AiderPlusWarehouse
 ```
 
 Choose a product shape with `--template`:
@@ -51,14 +53,15 @@ The warehouse is a registry of normal Git repositories, not a replacement for
 Git repos:
 
 ```bash
-aider warehouse init ./products
-aider warehouse list
-aider warehouse open habit-tracker
-aider warehouse status
+aider warehouse init ~/AiderPlusWarehouse
+aider warehouse list --warehouse ~/AiderPlusWarehouse
+aider warehouse open habit-tracker --warehouse ~/AiderPlusWarehouse
+aider warehouse status --warehouse ~/AiderPlusWarehouse
 ```
 
-Each product directory remains independently editable with classic Aider, Company
-Mode, desktop, browser, CI, and normal Git tooling.
+Each product lives under `<warehouse>/products/<slug>/` as an independently
+editable Git repo for classic Aider, Company Mode, desktop, browser, CI, and
+normal Git tooling.
 
 ## Templates
 

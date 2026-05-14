@@ -1433,9 +1433,13 @@ class GUI:
     def do_settings_tab(self, location="sidebar"):
         st.subheader("Settings")
         st.caption(
-            "The browser and desktop apps share this clean settings flow: Global Aider, "
-            "Per-Agent Overrides, Provider Keys, and Advanced files. Preview validates "
-            "changes before save."
+            "Tune models, credentials, agent routing, Discord access, and advanced files "
+            "from one shared browser/desktop settings flow. Preview validates changes before save."
+        )
+        st.info(
+            "Settings are repo-local by default. Secrets are written to `.env`, masked in previews, "
+            "and applied after the Company session restarts.",
+            icon="🔐",
         )
 
         form_key = f"settings_form_{location}"
@@ -1515,24 +1519,32 @@ class GUI:
                         )
 
             with section_tabs[2]:
-                st.write("**Provider Keys**")
+                st.write("**Provider & integration secrets**")
                 st.caption(
-                    "Saved to repo-local .env. Secrets are masked in the preview."
+                    "Saved to repo-local .env. Model provider keys power Aider; the "
+                    "Discord token starts the optional chat adapter. Secrets are masked in previews."
                 )
-                openai_key = st.text_input(
+                key_cols = st.columns(2)
+                openai_key = key_cols[0].text_input(
                     "OpenAI API key",
                     value=loaded.provider_keys.get("OPENAI_API_KEY", ""),
                     type="password",
                 )
-                anthropic_key = st.text_input(
+                anthropic_key = key_cols[1].text_input(
                     "Anthropic API key",
                     value=loaded.provider_keys.get("ANTHROPIC_API_KEY", ""),
                     type="password",
                 )
-                openrouter_key = st.text_input(
+                openrouter_key = key_cols[0].text_input(
                     "OpenRouter API key",
                     value=loaded.provider_keys.get("OPENROUTER_API_KEY", ""),
                     type="password",
+                )
+                discord_bot_token = key_cols[1].text_input(
+                    "Discord bot token",
+                    value=loaded.provider_keys.get("DISCORD_BOT_TOKEN", ""),
+                    type="password",
+                    help="Saved as DISCORD_BOT_TOKEN for the optional Discord chat adapter.",
                 )
 
             with section_tabs[3]:
@@ -1571,6 +1583,7 @@ class GUI:
                 "OPENAI_API_KEY": openai_key,
                 "ANTHROPIC_API_KEY": anthropic_key,
                 "OPENROUTER_API_KEY": openrouter_key,
+                "DISCORD_BOT_TOKEN": discord_bot_token,
             },
             extra_env=provider_keys,
             agents={

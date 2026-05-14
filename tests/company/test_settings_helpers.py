@@ -16,6 +16,7 @@ def test_collect_provider_and_agent_settings_updates():
         "",
         "openrouter-key",
         "GEMINI_API_KEY=gemini-key\nIGNORED\nXAI_API_KEY=xai-key",
+        discord_bot_token="discord-token",
     )
     agent_updates = collect_agent_env_updates(
         {"product": "gpt-4o", "engineering": "claude-sonnet-4-5"},
@@ -27,6 +28,7 @@ def test_collect_provider_and_agent_settings_updates():
     assert provider_updates == {
         "OPENAI_API_KEY": "openai-key",
         "OPENROUTER_API_KEY": "openrouter-key",
+        "DISCORD_BOT_TOKEN": "discord-token",
         "GEMINI_API_KEY": "gemini-key",
         "XAI_API_KEY": "xai-key",
     }

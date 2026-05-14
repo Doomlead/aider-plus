@@ -13,6 +13,7 @@ from typing import Any
 
 from aider.settings import (
     COMPANY_AGENT_NAMES,
+    PRIMARY_PROVIDER_API_KEYS,
     PROVIDER_API_KEYS,
     agent_api_key_env_name,
     agent_caching_env_name,
@@ -164,6 +165,7 @@ def build_settings_preview(form: SettingsForm) -> SettingsPreview:
         form.provider_keys.get("ANTHROPIC_API_KEY", ""),
         form.provider_keys.get("OPENROUTER_API_KEY", ""),
         form.extra_env,
+        discord_bot_token=form.provider_keys.get("DISCORD_BOT_TOKEN", ""),
     )
     for line_number, line in enumerate(form.extra_env.splitlines(), start=1):
         stripped = line.strip()
@@ -202,7 +204,7 @@ def build_settings_preview(form: SettingsForm) -> SettingsPreview:
     env_updates = provider_updates | collect_agent_env_updates(
         agent_models, agent_caching, agent_api_keys, agent_local_settings
     )
-    if not any(key in provider_updates for key in PROVIDER_API_KEYS):
+    if not any(key in provider_updates for key in PRIMARY_PROVIDER_API_KEYS):
         warnings.append(
             "No primary provider API key is set here; direct Aider may rely on your shell environment."
         )

@@ -36,6 +36,7 @@ from aider.company.departments.qa import QADepartment
 from aider.company.departments.ux import UXDepartment
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
+from aider.company.skills import CompanySkillManager
 from aider.company.schemas import CompanyTask
 from aider.main import main as cli_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
@@ -456,6 +457,11 @@ class DesktopCompanySession:
             self.coo.get_session_status(session_id), self.loop
         )
         return future.result(timeout=5)
+
+    def skills_summary(self) -> dict:
+        return CompanySkillManager(
+            self.orchestrator.state, self.orchestrator.company_config.skill_learning
+        ).dashboard_summary()
 
     def system_overview(self) -> dict[str, Any]:
         pending = [
@@ -1508,6 +1514,28 @@ class AiderPlusDesktop:
         for key, label in self.metric_labels.items():
             label.config(text=str(metrics.get(key, "—")))
         overview = self.company.system_overview()
+        skills = self.company.skills_summary()
+        skill_lines = ["", "Skills:"]
+        recent_skills = skills.get("recently_used") or []
+        available_skills = skills.get("available") or []
+        if recent_skills:
+            skill_lines.append("Recently used:")
+            skill_lines.extend(
+                f"- {item.get('scope')}/{item.get('name')}: "
+                f"{item.get('title') or item.get('description') or 'Untitled skill'}"
+                for item in recent_skills[:5]
+            )
+        else:
+            skill_lines.append("Recently used: none yet")
+        if available_skills:
+            skill_lines.append("Available:")
+            skill_lines.extend(
+                f"- {item.get('scope')}/{item.get('name')}: "
+                f"{item.get('description') or item.get('title') or 'No summary'}"
+                for item in available_skills[:10]
+            )
+        else:
+            skill_lines.append("Available: none")
         self._write_text(
             self.system_overview_text,
             "\n".join(
@@ -1518,6 +1546,7 @@ class AiderPlusDesktop:
                     f"Pending human escalations: {overview['pending_escalations']}",
                     f"Active warehouse products: {overview['active_warehouse_products']}",
                     f"MCP status: {overview['mcp_status']}",
+                    *skill_lines,
                 ]
             ),
         )

@@ -559,9 +559,9 @@ class CompanyOrchestrator:
         if not self.company_config.skill_learning.enabled:
             return []
         manager = CompanySkillManager(self.state, self.company_config.skill_learning)
-        return manager.format_skill_guidance(
-            manager.query_for_task(task, role=task.target)
-        )
+        skills = manager.query_for_task(task, role=task.target)
+        manager.record_skill_usage(skills, role=task.target)
+        return manager.format_skill_guidance(skills)
 
     async def _dispatch(self, task: CompanyTask) -> None:
         department = self.departments[task.target]

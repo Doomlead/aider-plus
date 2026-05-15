@@ -11,7 +11,22 @@ from aider.memory.retrieval import MemoryRetriever
 
 SKILL_FILE = "SKILL.md"
 MAX_SKILLS_PER_SCOPE = 100
-DEFAULT_QUERY_K = 3
+DEFAULT_QUERY_K = 5
+_SKILL_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "before",
+    "for",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
 _ALLOWED_SCOPE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _ALLOWED_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,79}$")
 
@@ -72,15 +87,66 @@ class SkillManager:
         k: int = DEFAULT_QUERY_K,
         min_score: float = 0.05,
     ) -> list[SkillSummary]:
+        return [
+            skill
+            for skill, _score in self.score_skills(
+                query, scopes=scopes, k=k, min_score=min_score
+            )
+        ]
+
+    def score_skills(
+        self,
+        query: str,
+        *,
+        scopes: Iterable[str],
+        k: int = DEFAULT_QUERY_K,
+        min_score: float = 0.05,
+    ) -> list[tuple[SkillSummary, float]]:
+        """Return relevance-ranked skills using TF-IDF plus keyword/path signals.
+
+        The TF-IDF retriever works well for longer descriptions, while skill names
+        and path-like names are often the strongest signal for short user tasks
+        (for example, ``run-focused-tests`` matching "run tests").  This
+        lightweight hybrid scorer keeps retrieval dependency-free and avoids the
+        previous small-corpus behavior where all skills were returned unranked.
+        """
         skills = self.list_skills(scopes)
         if not skills:
             return []
-        if len(skills) <= k:
-            return skills
+
+        query_tokens = self._token_set(query)
         texts = [skill.injectable_text() for skill in skills]
-        top = MemoryRetriever(texts).top_k(query, k=k, min_score=min_score)
-        by_text = {text: skill for text, skill in zip(texts, skills)}
-        return [by_text[text] for text, _score in top if text in by_text]
+        tfidf_scores = {
+            text: score
+            for text, score in MemoryRetriever(texts).score(query)
+        }
+
+        ranked: list[tuple[SkillSummary, float]] = []
+        for skill, text in zip(skills, texts):
+            skill_tokens = self._token_set(
+                " ".join(
+                    [
+                        skill.name,
+                        skill.name.replace("-", " "),
+                        skill.title,
+                        skill.description,
+                    ]
+                )
+            )
+            overlap = query_tokens & skill_tokens
+            keyword_score = (len(overlap) / max(len(query_tokens), 1)) if query_tokens else 0.0
+
+            path_tokens = self._token_set(f"{skill.name} {skill.name.replace('-', ' ')}")
+            path_overlap = query_tokens & path_tokens
+            path_score = (len(path_overlap) / max(len(path_tokens), 1)) if path_tokens else 0.0
+
+            tfidf_score = tfidf_scores.get(text, 0.0)
+            score = tfidf_score + (0.35 * keyword_score) + (0.25 * path_score)
+            if score >= min_score and (overlap or path_overlap or tfidf_score >= 0.1):
+                ranked.append((skill, score))
+
+        ranked.sort(key=lambda item: (-item[1], item[0].scope, item[0].name))
+        return ranked[: max(1, k)]
 
     def read_skill(self, scope: str, name: str) -> SkillDocument:
         skill_dir = self._skill_dir(scope, name, create=False)
@@ -139,6 +205,14 @@ class SkillManager:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return target
+
+    @staticmethod
+    def _token_set(text: str) -> set[str]:
+        return {
+            tok
+            for tok in re.split(r"[^a-z0-9]+", str(text).lower())
+            if tok and tok not in _SKILL_STOP_WORDS
+        }
 
     def _discover_scopes(self) -> list[str]:
         if not self.root.exists():

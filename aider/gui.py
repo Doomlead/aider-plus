@@ -29,6 +29,7 @@ from aider.company.departments.qa import QADepartment
 from aider.company.departments.ux import UXDepartment
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
+from aider.company.skills import CompanySkillManager
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
 from aider.dump import dump  # noqa: F401
 from aider.io import InputOutput
@@ -554,6 +555,11 @@ class DesktopCompanySession:
             self.coo.get_session_status(session_id), self.loop
         )
         return future.result(timeout=5)
+
+    def skills_summary(self) -> dict:
+        return CompanySkillManager(
+            self.orchestrator.state, self.orchestrator.company_config.skill_learning
+        ).dashboard_summary()
 
     def system_overview(self) -> dict:
         pending = [
@@ -1316,6 +1322,29 @@ class GUI:
         m1.metric("Turns this session", metrics["turns_this_session"])
         m2.metric("Approvals pending", metrics["approvals_pending"])
         m3.metric("Last activity", metrics["last_activity"])
+
+        st.subheader("Skills")
+        skills = company.skills_summary()
+        recent_skills = skills.get("recently_used") or []
+        available_skills = skills.get("available") or []
+        if recent_skills:
+            st.write("**Recently used**")
+            for skill in recent_skills[:5]:
+                st.caption(
+                    f"{skill.get('scope')}/{skill.get('name')} · "
+                    f"{skill.get('title') or skill.get('description') or 'Untitled skill'}"
+                )
+        else:
+            st.caption("No skills have been used in this repo yet.")
+        if available_skills:
+            with st.expander("Available skills", expanded=False):
+                for skill in available_skills[:10]:
+                    st.write(
+                        f"- **{skill.get('scope')}/{skill.get('name')}** — "
+                        f"{skill.get('description') or skill.get('title') or 'No summary'}"
+                    )
+        else:
+            st.caption("No approved skills are available yet.")
 
         phase = str(metrics["current_phase"])
         st.subheader("Current Phase")

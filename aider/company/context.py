@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from aider.company.playbook import PlaybookManager
+from aider.company.skills import CompanySkillManager, SkillLearningConfig
 from aider.company.project import Project
 from aider.company.schemas import CompanyTask
 from aider.company.state import CompanyStateManager
@@ -27,8 +28,13 @@ class ContextBuilder:
     This keeps context small as project memory grows across sessions.
     """
 
-    def __init__(self, state: CompanyStateManager):
+    def __init__(
+        self,
+        state: CompanyStateManager,
+        skill_learning: SkillLearningConfig | None = None,
+    ):
         self.state = state
+        self.skill_learning = skill_learning or SkillLearningConfig()
 
     def build(
         self,
@@ -58,6 +64,14 @@ class ContextBuilder:
         if playbook:
             context["playbook"] = playbook
             context["playbook_guidance"] = self._format_playbook_guidance(playbook)
+
+        # --- Procedural skills (retrieval-filtered) ---
+        skills = self._requested_skills(requirements, task)
+        if skills:
+            context["skills"] = [skill.__dict__ for skill in skills]
+            context["skill_guidance"] = CompanySkillManager(
+                self.state, self.skill_learning
+            ).format_skill_guidance(skills)
 
         return context
 
@@ -120,6 +134,27 @@ class ContextBuilder:
             result_lines.append("")  # blank line between paragraphs
 
         return "\n".join(result_lines).strip()
+
+
+    # ------------------------------------------------------------------
+    # Procedural skill retrieval
+    # ------------------------------------------------------------------
+
+    def _requested_skills(self, requirements: list[str], task: CompanyTask):
+        want_all = "skills.*" in requirements
+        wants_role = f"skills.{task.target}" in requirements
+        wants_shared = "skills.shared" in requirements
+        if not (
+            want_all
+            or wants_role
+            or wants_shared
+            or any(r.startswith("skills.") for r in requirements)
+        ):
+            return []
+        if not self.skill_learning.enabled:
+            return []
+        manager = CompanySkillManager(self.state, self.skill_learning)
+        return manager.query_for_task(task, role=task.target)
 
     # ------------------------------------------------------------------
     # Playbook retrieval

@@ -163,3 +163,24 @@ from `get_session_status()`. Chat apps such as Discord are intentionally thin:
 they forward messages into the shared runtime and should not own status, audit,
 approval, lifecycle, product-building, or deployment behavior. Bus event handlers
 feed GUI event queues and any future API/MCP event streams from the same source.
+
+## Procedural skill memory
+
+Aider Plus now treats self-improvement as two complementary memory layers:
+
+- **Playbooks** remain declarative lessons extracted from audit logs, QA outcomes,
+  reviewer feedback, and post-mortems.
+- **Skills** are procedural workflows stored as inspectable `SKILL.md` files under
+  `.aider/skills/<scope>/<name>/`, where scope is `shared`, `coo`, `product`,
+  `ux`, `engineering`, `reviewer`, `qa`, or `devops`.
+
+Department context retrieval loads relevant shared and role-scoped skills next to
+playbook guidance. Skill learning is intentionally approval-gated by default:
+post-mortems create pending proposal JSON files under `.aider/skill_proposals/`
+instead of silently mutating long-lived skills. Operators can approve proposals
+or explicitly opt into automatic skill creation for trusted local repositories.
+
+Risk controls include scoped skill namespaces, path traversal validation for
+support files, per-scope skill caps, provenance metadata, and precedence rules
+that keep system/developer/user/project instructions above learned skills and
+playbook guidance.

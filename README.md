@@ -342,10 +342,16 @@ Aider Plus keeps memory local and inspectable:
 - Conversation memory consolidates chat context into project memory.
 - Skills and playbook guidance can be pulled into department context before a
   task is executed.
+- Procedural skills live under `.aider/skills/<scope>/<name>/` with
+  a required `SKILL.md`; scopes include `shared`, `coo`, `product`, `ux`,
+  `engineering`, `reviewer`, `qa`, and `devops`.
+- Self-improvement is additive: existing playbook/audit learning remains the
+  declarative memory layer, while learned procedural workflows are created as
+  approval-gated skill proposals under `.aider/skill_proposals/` by default.
 - MCP tool requests can be approval-gated and surfaced in GUI approval flows.
 
 This keeps the machine-learning loop research-friendly: inputs, memory, tool
-decisions, routes, and outputs are observable.
+decisions, skill proposals, routes, and outputs are observable.
 
 ---
 

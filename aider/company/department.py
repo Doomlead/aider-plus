@@ -43,7 +43,7 @@ class Department(ABC):
         return allowed
 
     def get_context_requirements(self) -> list[str]:
-        return ["playbook.*"]
+        return ["playbook.*", "skills.shared", f"skills.{self.name}"]
 
     def _get_caching_enabled(self) -> bool:
         return bool(self.agent_config.enable_caching)

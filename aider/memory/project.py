@@ -17,6 +17,7 @@ class ProjectMemory:
             "ux_preferences": [],
             "deployment_gotchas": [],
         },
+        "skill_proposals": [],
         "observability": {
             "turns_per_phase": {},
             "token_usage_per_department": {},

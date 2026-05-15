@@ -23,6 +23,8 @@ class UXDepartment(Department):
             "project.prd",
             "project.prd_structured",
             "playbook.ux_preferences",
+            "skills.shared",
+            "skills.ux",
         ]
 
     def __init__(

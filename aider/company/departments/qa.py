@@ -29,7 +29,14 @@ class QADepartment(Department):
         self.agent_loop = agent_loop
 
     def get_context_requirements(self) -> list[str]:
-        return ["playbook.*", "project.name", "project.phase", "project.prd"]
+        return [
+            "playbook.*",
+            "skills.shared",
+            "skills.qa",
+            "project.name",
+            "project.phase",
+            "project.prd",
+        ]
 
     async def process(self, task: CompanyTask) -> Deliverable:
         from aider.company.schemas import QAFeedback  # local import avoids circular

@@ -29,6 +29,8 @@ class EngineeringDepartment(Department):
             "project.design_spec",
             "playbook.coding_standards",
             "playbook.ux_preferences",
+            "skills.shared",
+            "skills.engineering",
         ]
 
     def __init__(
@@ -645,6 +647,7 @@ Address ALL reviewer feedback from the previous round if present.
             "design_spec": design_spec,
             "design_spec_summary": self._get_design_spec_summary(),
             "playbook_guidance": self._get_playbook_guidance(),
+            "skill_guidance": self._get_skill_guidance(),
             "design_spec_structured": design_spec_structured,
         }
 
@@ -700,6 +703,9 @@ Design Spec (if any):
 
 Coding Standards & Playbook:
 {context.get('playbook_guidance', 'None')}
+
+Procedural Skills:
+{context.get('skill_guidance', 'None')}
 
 Review the following code changes carefully and be critical.
 
@@ -957,7 +963,11 @@ Be specific and actionable."""
         """Extract relevant playbook patterns for reviewer."""
         guidance = None
         if self._active_task:
-            payload = self._active_task.payload if isinstance(self._active_task.payload, dict) else {}
+            payload = (
+                self._active_task.payload
+                if isinstance(self._active_task.payload, dict)
+                else {}
+            )
             context = (
                 self._active_task.context
                 if isinstance(getattr(self._active_task, "context", None), dict)
@@ -992,6 +1002,27 @@ Be specific and actionable."""
             else:
                 formatted.append(f"{index}. {str(item)[:200]}")
         return "\n".join(formatted)
+
+
+    def _get_skill_guidance(self) -> str:
+        """Extract relevant procedural skill guidance for reviewer prompts."""
+        guidance = None
+        if self._active_task:
+            payload = (
+                self._active_task.payload
+                if isinstance(self._active_task.payload, dict)
+                else {}
+            )
+            context = (
+                self._active_task.context
+                if isinstance(getattr(self._active_task, "context", None), dict)
+                else {}
+            )
+            guidance = context.get("skill_guidance") or payload.get("skill_guidance")
+        if not guidance:
+            return "No procedural skill guidance available"
+        items = guidance if isinstance(guidance, list) else [guidance]
+        return "\n".join(f"{index}. {str(item)[:240]}" for index, item in enumerate(items[:5], 1))
 
     def _record_reviewer_metrics(
         self, review_data: dict, review_iteration: Optional[int] = None
@@ -1169,6 +1200,8 @@ Be specific and actionable."""
 
         if context.get("playbook_guidance"):
             positives.append("Current playbook guidance was included in the review.")
+        if context.get("skill_guidance"):
+            positives.append("Current procedural skill guidance was included in the review.")
 
         if previous_deliverable.status == "failure":
             priority_issues.append(

@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, Literal, Optional
 
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.schemas import CompanyTask, Deliverable
+from aider.company.skills import CompanySkillManager
 from aider.memory import ProjectMemory
 
 
@@ -1013,6 +1014,7 @@ class NanobotCOO:
             "coo_memory": self.recall_ceo_memory(limit=8),
             "company_status": self.inspect_company_status(session),
             "departments": sorted(self.orchestrator.departments),
+            "skill_guidance": self._coo_skill_guidance(prompt),
         }
         surface = (
             session.messages[-1].get("surface") if session.messages else "coo"
@@ -1319,6 +1321,22 @@ class NanobotCOO:
             "}\n\n"
             f"Current company status: {json.dumps(self._company_status_payload(session), ensure_ascii=False)}"
         )
+
+
+    def _coo_skill_guidance(self, prompt: str) -> list[str]:
+        if not self.orchestrator.company_config.skill_learning.enabled:
+            return []
+        task = CompanyTask(
+            task_id="coo-skill-query",
+            origin="ceo",
+            target="coo",
+            artifact_type="general",
+            payload=prompt,
+        )
+        manager = CompanySkillManager(
+            self.orchestrator.state, self.orchestrator.company_config.skill_learning
+        )
+        return manager.format_skill_guidance(manager.query_for_task(task, role="coo"))
 
     async def get_session_status(self, session_id: str) -> dict[str, Any]:
         """Return a clean dashboard payload for COO observability surfaces."""

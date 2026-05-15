@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Literal, Optional
 
 from aider.mcp.config import MCPConfig
+from aider.company.skills import SkillLearningConfig
 
 
 @dataclass
@@ -73,6 +74,7 @@ class CompanyConfig:
     record_caching_stats: bool = True
     enable_coo_llm_routing: bool = False
     mcp: MCPConfig = field(default_factory=MCPConfig)
+    skill_learning: SkillLearningConfig = field(default_factory=SkillLearningConfig)
 
     def get_department_config(self, name: str) -> DepartmentConfig:
         """

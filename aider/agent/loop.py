@@ -12,7 +12,9 @@ from aider.onboarding import onboarding_paths
 from aider.llm import litellm
 from aider import models
 from aider.agent.tools import Tool, ToolPermissionError, ToolRegistry
-from aider.mcp import MCPClientManager, MCPConfig, mcp_tool_to_aider_tool
+from aider.mcp.adapters import mcp_tool_to_aider_tool
+from aider.mcp.config import MCPConfig
+from aider.mcp.manager import MCPClientManager
 
 
 @dataclass

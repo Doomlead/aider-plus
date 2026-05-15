@@ -15,6 +15,8 @@ from aider.company.context import ContextBuilder
 from aider.company.department import Department
 from aider.company.lifecycle import LifecycleEngine
 from aider.company.playbook import PlaybookManager
+from aider.company.self_improvement import SelfImprovementService
+from aider.company.skills import CompanySkillManager
 from aider.company.project import Project
 from aider.company.state import CompanyStateManager
 from aider.company.schemas import (
@@ -37,7 +39,9 @@ class CompanyOrchestrator:
     ):
         self.company_config = company_config or default_company_config()
         self.state = CompanyStateManager(project_memory)
-        self.context_builder = ContextBuilder(self.state)
+        self.context_builder = ContextBuilder(
+            self.state, self.company_config.skill_learning
+        )
         self.lifecycle = LifecycleEngine(self.state)
         self.approvals = ApprovalManager(self.state, audit_logger=self._log_event)
         self.approval_manager = self.approvals
@@ -503,6 +507,7 @@ class CompanyOrchestrator:
         task.context.setdefault("prd_summary", context.get("prd_summary"))
         task.context.setdefault("design_spec_structured", context.get("design_spec_structured"))
         task.context["playbook_guidance"] = self._get_relevant_playbooks(task)
+        task.context["skill_guidance"] = self._get_relevant_skills(task)
         return task
 
     def _synthesize_design_spec_summary(self, spec) -> str | None:
@@ -545,6 +550,18 @@ class CompanyOrchestrator:
             return existing if isinstance(existing, list) else [str(existing)]
         playbook = self.context_builder._requested_playbook(["playbook.*"], task)
         return self.context_builder._format_playbook_guidance(playbook)
+
+    def _get_relevant_skills(self, task: CompanyTask) -> list[str]:
+        """Return role-scoped procedural skill guidance relevant to a handoff."""
+        existing = task.context.get("skill_guidance") if task.context else None
+        if existing:
+            return existing if isinstance(existing, list) else [str(existing)]
+        if not self.company_config.skill_learning.enabled:
+            return []
+        manager = CompanySkillManager(self.state, self.company_config.skill_learning)
+        return manager.format_skill_guidance(
+            manager.query_for_task(task, role=task.target)
+        )
 
     async def _dispatch(self, task: CompanyTask) -> None:
         department = self.departments[task.target]
@@ -1155,12 +1172,18 @@ class CompanyOrchestrator:
         # --- Merge all extracted patterns (with dedup and size cap) ---
         playbook_manager.merge_patterns(patterns)
 
+        # --- Additive procedural-memory proposals (approval-gated by default) ---
+        skill_proposals = SelfImprovementService(
+            self.state, self.company_config.skill_learning
+        ).learn_from_post_mortem(project, d)
+
         self._log_event(
             "post_mortem_completed",
             {
                 "project_id": project.project_id,
                 "phase": project.phase,
                 "patterns_extracted": {cat: len(pats) for cat, pats in patterns.items()},
+                "skill_proposals_created": len(skill_proposals),
             },
             "orchestrator",
             {"task_id": d.task_id},

@@ -124,7 +124,7 @@ class ProductDepartment(Department):
         self.agent_loop = agent_loop
 
     def get_context_requirements(self) -> list[str]:
-        return ["playbook.*", "project.name", "project.phase"]
+        return ["playbook.*", "skills.shared", "skills.product", "project.name", "project.phase"]
 
     async def process(self, task: CompanyTask) -> Deliverable:
         if task.origin == "engineering" or task.artifact_type == "memo":

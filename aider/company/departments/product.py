@@ -79,6 +79,8 @@ exactly these keys:
 }
 
 Rules:
+- Consult any Procedural Skills included in the task context before drafting;
+  use them when their summaries match the request.
 - acceptance_criteria must be testable (Given/When/Then style preferred).
 - success_metrics must be measurable (include numbers or events).
 - out_of_scope must include at least one item to set expectations.
@@ -88,6 +90,9 @@ Rules:
 
 _REVIEW_SYSTEM = """\
 You are a senior Product Manager reviewing a PRD for quality.
+
+Before reviewing, consult any Procedural Skills included in the task context
+when their summaries match this PRD.
 
 Check for these problems only:
 1. acceptance_criteria items that are not testable (vague words: "works well",
@@ -190,6 +195,12 @@ class ProductDepartment(Department):
         playbook_text = self._format_playbook(context)
         if playbook_text:
             parts.append(f"Playbook guidance:\n{playbook_text}")
+        skill_text = self._format_skill_guidance(context)
+        if skill_text:
+            parts.append(
+                "Procedural skills available (consult when relevant):"
+                f"\n{skill_text}"
+            )
         clarification_answers = context.get("clarification_answers")
         if clarification_answers:
             parts.append(f"CEO clarification answers:\n{clarification_answers}")
@@ -527,6 +538,14 @@ class ProductDepartment(Department):
         return (
             bool(prompt_terms & design_terms) or "front-end" in original_request.lower()
         )
+
+    @staticmethod
+    def _format_skill_guidance(context: dict) -> str:
+        guidance = context.get("skill_guidance", [])
+        if not guidance:
+            return ""
+        items = guidance if isinstance(guidance, list) else [guidance]
+        return "\n".join(f"- {str(item)[:240]}" for item in items[:5])
 
     @staticmethod
     def _format_playbook(context: dict) -> str:

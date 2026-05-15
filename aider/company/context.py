@@ -11,6 +11,8 @@ from aider.memory.retrieval import MemoryRetriever
 
 # Maximum number of playbook items to inject per category after retrieval.
 _MAX_PLAYBOOK_ITEMS = 5
+# Maximum number of relevant procedural skills to inject.
+_MAX_SKILL_ITEMS = 5
 # Maximum number of PRD lines to inject when truncation is active.
 _MAX_PRD_LINES = 80
 # Minimum retrieval score to include a chunk. Below this it's noise.
@@ -66,12 +68,12 @@ class ContextBuilder:
             context["playbook_guidance"] = self._format_playbook_guidance(playbook)
 
         # --- Procedural skills (retrieval-filtered) ---
-        skills = self._requested_skills(requirements, task)
+        skills = self._get_relevant_skills(task, requirements)
         if skills:
+            manager = CompanySkillManager(self.state, self.skill_learning)
             context["skills"] = [skill.__dict__ for skill in skills]
-            context["skill_guidance"] = CompanySkillManager(
-                self.state, self.skill_learning
-            ).format_skill_guidance(skills)
+            context["skill_guidance"] = manager.format_skill_guidance(skills)
+            manager.record_skill_usage(skills, role=task.target)
 
         return context
 
@@ -140,7 +142,16 @@ class ContextBuilder:
     # Procedural skill retrieval
     # ------------------------------------------------------------------
 
-    def _requested_skills(self, requirements: list[str], task: CompanyTask):
+    def _get_relevant_skills(
+        self, task: CompanyTask, requirements: Iterable[str] | None = None
+    ):
+        """Return the top shared + role-specific skills for task prompt injection.
+
+        Skills are intentionally injected as short summaries instead of full
+        documents; agents can consult the named skill when the summary matches
+        the current work.
+        """
+        requirements = list(requirements or ["skills.*"])
         want_all = "skills.*" in requirements
         wants_role = f"skills.{task.target}" in requirements
         wants_shared = "skills.shared" in requirements
@@ -154,7 +165,15 @@ class ContextBuilder:
         if not self.skill_learning.enabled:
             return []
         manager = CompanySkillManager(self.state, self.skill_learning)
-        return manager.query_for_task(task, role=task.target)
+        original_k = manager.config.query_k
+        manager.config.query_k = min(max(original_k, 3), _MAX_SKILL_ITEMS)
+        try:
+            return manager.query_for_task(task, role=task.target)
+        finally:
+            manager.config.query_k = original_k
+
+    def _requested_skills(self, requirements: list[str], task: CompanyTask):
+        return self._get_relevant_skills(task, requirements)
 
     # ------------------------------------------------------------------
     # Playbook retrieval

@@ -125,11 +125,16 @@ class UXDepartment(Department):
         prd_context = self._get_prd_context(task)
         schema_name = DesignSpecV2.__name__
 
+        skill_guidance = self._format_skill_guidance(
+            task.context if isinstance(task.context, dict) else {}
+        )
         system_prompt = (
             "You are an expert UX Designer. Create a complete, structured design "
-            f"specification.\n\n"
+            "specification. Consult available Procedural Skills when their summaries "
+            f"match the UX task.\n\n"
 
             f"PRD / Requirements:\n{prd_context}\n\n"
+            f"Procedural Skills Available:\n{skill_guidance or 'None'}\n\n"
             f"{feedback or ''}\n\n"
             f"Return **only** valid JSON matching the {schema_name} schema. "
             "No extra text or markdown."

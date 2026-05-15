@@ -1299,6 +1299,9 @@ class NanobotCOO:
             "ask clarifying questions when the objective is unclear, remember durable "
             "CEO preferences, inspect company status, use approved tools, or delegate "
             "work into the existing Aider Plus CompanyOrchestrator.\n\n"
+            "Use available Procedural Skills from the task payload when they match "
+            "the CEO's request; they are lightweight operating procedures, not "
+            "extra departments. "
             "Do not replace Product, UX, Engineering, QA, DevOps, or the "
             "CompanyOrchestrator. When execution belongs to the internal company, choose "
             "action=delegate_company_task and select exactly one company_target from the "
@@ -1512,6 +1515,7 @@ class NanobotCOO:
             "recent_route_history": self._recent_route_history(session, limit=3),
             "active_department": session.metadata.get("last_target"),
             "departments": sorted(self.orchestrator.departments),
+            "skill_guidance": self._coo_skill_guidance(prompt),
         }
         surface = (
             session.messages[-1].get("surface") if session.messages else "coo"
@@ -1624,6 +1628,8 @@ class NanobotCOO:
             f"Active department: {session.metadata.get('last_target') or 'none'}\n"
             f"Available departments list: {', '.join(departments)}\n\n"
             "Decision rules:\n"
+            "- Review skill_guidance in the payload; if a skill summary clearly "
+            "matches, route to the department that can apply it.\n"
             "- Pick only a department from the available departments list.\n"
             "- Prefer continuity with the active department unless the prompt clearly "
             "belongs elsewhere.\n"

@@ -704,10 +704,10 @@ Design Spec (if any):
 Coding Standards & Playbook:
 {context.get('playbook_guidance', 'None')}
 
-Procedural Skills:
+Procedural Skills Available (consult when relevant to changed files, review checklist, or test strategy):
 {context.get('skill_guidance', 'None')}
 
-Review the following code changes carefully and be critical.
+Review the following code changes carefully and be critical. Explicitly apply any relevant procedural skill summaries above.
 
 Changed Files:
 {context.get('changed_files', [])}
@@ -1159,7 +1159,9 @@ Be specific and actionable."""
             "You are the Engineering Reviewer. Use a strong review model "
             "(Claude 3.7 Sonnet, GPT-5.5, or equivalent) when configured. "
             "Compare the implementation diff and changed files against the PRD, "
-            "design spec, current playbook items, and coding standards. Return "
+            "design spec, current playbook items, available procedural skills, "
+            "and coding standards. Consult a procedural skill when its summary "
+            "matches the review topic. Return "
             "structured feedback with positives, required fixes, priorities, and "
             "an approval decision."
         )

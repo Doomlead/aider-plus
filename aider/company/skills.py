@@ -12,7 +12,7 @@ from aider.company.state import CompanyStateManager
 from aider.skills import SkillManager, SkillSummary
 
 COMPANY_SKILL_SCOPES = ("shared", "coo", "product", "ux", "engineering", "reviewer", "qa", "devops")
-DEFAULT_SKILL_QUERY_K = 3
+DEFAULT_SKILL_QUERY_K = 5
 
 
 @dataclass
@@ -90,10 +90,68 @@ class CompanySkillManager:
     def format_skill_guidance(self, skills: Iterable[SkillSummary]) -> list[str]:
         guidance: list[str] = []
         for skill in skills:
+            summary = skill.description or skill.title or "No summary available"
             guidance.append(
-                f"{skill.scope}/{skill.name}: {skill.title} — {skill.description}".strip()
+                f"{skill.scope}/{skill.name}: {skill.title} — {summary}".strip()
             )
         return guidance
+
+    def record_skill_usage(
+        self, skills: Iterable[SkillSummary], *, role: str | None = None
+    ) -> None:
+        used = list(skills)
+        if not used:
+            return
+        data = self.state.memory.data
+        skill_data = data.setdefault("skills", {})
+        if not isinstance(skill_data, dict):
+            skill_data = {}
+        recent = skill_data.get("recently_used", [])
+        if not isinstance(recent, list):
+            recent = []
+        now = datetime.now(timezone.utc).isoformat()
+        existing = {
+            (item.get("scope"), item.get("name")): item
+            for item in recent
+            if isinstance(item, dict)
+        }
+        for skill in used:
+            existing[(skill.scope, skill.name)] = {
+                "scope": skill.scope,
+                "name": skill.name,
+                "title": skill.title,
+                "description": skill.description,
+                "role": role,
+                "last_used_at": now,
+            }
+        skill_data["recently_used"] = sorted(
+            existing.values(),
+            key=lambda item: item.get("last_used_at", ""),
+            reverse=True,
+        )[:25]
+        data["skills"] = skill_data
+        self.state.memory.update(data)
+        self.state.memory.persist()
+
+    def dashboard_summary(
+        self, *, available_limit: int = 10, recent_limit: int = 5
+    ) -> dict[str, list[dict[str, Any]]]:
+        available = [
+            {
+                "scope": skill.scope,
+                "name": skill.name,
+                "title": skill.title,
+                "description": skill.description,
+            }
+            for skill in self.manager.list_skills()[:available_limit]
+        ]
+        skill_data = self.state.memory.data.get("skills", {})
+        recent = []
+        if isinstance(skill_data, dict):
+            recent = [
+                item for item in skill_data.get("recently_used", []) if isinstance(item, dict)
+            ][:recent_limit]
+        return {"available": available, "recently_used": recent}
 
     def create_proposal(self, proposal: SkillProposal) -> Path:
         scope_dir = self.proposals_root / proposal.scope

@@ -61,6 +61,54 @@ def test_context_builder_injects_role_scoped_skill_guidance(tmp_path):
     assert "engineering/run-focused-tests" in context["skill_guidance"][0]
 
 
+
+def test_relevant_skill_retrieval_scores_and_injects_top_summaries(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    state = CompanyOrchestrator(memory).state
+    skill_manager = CompanySkillManager(state, SkillLearningConfig(query_k=5))
+    skill_manager.manager.create_skill(
+        scope="shared",
+        name="safe-rollout-checklist",
+        content="# Safe Rollout Checklist\nDescription: Verify migrations, feature flags, and rollback plans before release.\n",
+    )
+    skill_manager.manager.create_skill(
+        scope="engineering",
+        name="run-focused-tests",
+        content="# Run Focused Tests\nDescription: Run targeted pytest checks for edited Python modules.\n",
+    )
+    skill_manager.manager.create_skill(
+        scope="engineering",
+        name="css-polish",
+        content="# CSS Polish\nDescription: Tune spacing, typography, and visual hierarchy for frontend screens.\n",
+    )
+
+    task = CompanyTask(
+        task_id="skill-injection",
+        origin="ceo",
+        target="engineering",
+        artifact_type="code",
+        payload={
+            "instruction": "Edit the Python retry logic and run focused pytest tests.",
+            "changed_files": ["aider/retry.py", "tests/test_retry.py"],
+        },
+    )
+
+    direct_matches = skill_manager.manager.query_skills(
+        "focused pytest tests for Python retry logic",
+        scopes=skill_manager.scopes_for_role("engineering"),
+        k=2,
+    )
+    context = ContextBuilder(state, SkillLearningConfig(query_k=5)).build(
+        task, ["skills.engineering"]
+    )
+
+    assert [match.name for match in direct_matches] == ["run-focused-tests"]
+    assert context["skills"][0]["name"] == "run-focused-tests"
+    assert "engineering/run-focused-tests" in context["skill_guidance"][0]
+    assert all("css-polish" not in item for item in context["skill_guidance"])
+    assert memory.data["skills"]["recently_used"][0]["name"] == "run-focused-tests"
+
+
 def test_skill_proposals_are_approval_gated_and_can_be_approved(tmp_path):
     memory = ProjectMemory(str(tmp_path))
     state = CompanyOrchestrator(memory).state

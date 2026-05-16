@@ -144,7 +144,11 @@ class CompanyDaemon:
         """Process at most max_concurrent_agents currently eligible issues."""
 
         issues = self.tracker.list_candidate_issues(self.workflow.tracker.labels)
-        selected = issues[: self.workflow.agent.max_concurrent_agents]
+        active_workspaces = self._active_workspace_count()
+        available_slots = max(
+            0, self.workflow.agent.max_concurrent_agents - active_workspaces
+        )
+        selected = issues[:available_slots]
         proofs: list[ProofOfWork] = []
         for issue in selected:
             proofs.append(self.run_issue(issue, dry_run=dry_run))
@@ -153,6 +157,55 @@ class CompanyDaemon:
     def status(self) -> dict[str, Any]:
         """Return a compact daemon dashboard payload."""
 
+        return self.get_status()
+
+    def get_status(self) -> dict[str, Any]:
+        """Return a rich daemon dashboard payload for UIs and COO tools."""
+
+        runs = self._load_run_states()
+        active_statuses = {"running", "dry-run"}
+        active_runs = [run for run in runs if run.get("status") in active_statuses]
+        pending_pow = [
+            run
+            for run in runs
+            if run.get("status") in {"human_review", "failed"}
+            or (run.get("status") not in {"done"} and not run.get("proof_path"))
+        ]
+        last_run = max(
+            (str(run.get("updated_at") or run.get("created_at") or "") for run in runs),
+            default=None,
+        )
+        recent_proofs = self._recent_proofs(limit=5)
+        configured = self.workflow.path.exists()
+        running = bool(active_runs)
+        return {
+            "workflow": str(self.workflow.path),
+            "workflow_exists": configured,
+            "tracker": self.workflow.tracker.kind,
+            "workspace_root": str(self.workspace_manager.root),
+            "running": running,
+            "status": "running" if running else ("idle" if configured else "missing"),
+            "last_run": last_run,
+            "active_workflows": len(active_runs),
+            "active_runs": active_runs,
+            "pending_proof_of_work": len(pending_pow),
+            "pending_proof_runs": pending_pow,
+            "recent_proof_of_work": recent_proofs,
+            "max_concurrent_agents": self.workflow.agent.max_concurrent_agents,
+            "max_concurrent_workspaces": self.workflow.agent.max_concurrent_agents,
+            "available_workspace_slots": max(
+                0, self.workflow.agent.max_concurrent_agents - len(active_runs)
+            ),
+            "hook_timeout_seconds": self.workflow.hooks.timeout_seconds,
+            "hooks": self.workflow.hooks.names(),
+            "safety": {
+                "max_concurrent_workspaces": self.workflow.agent.max_concurrent_agents,
+                "hook_timeout_seconds": self.workflow.hooks.timeout_seconds,
+            },
+            "runs": runs,
+        }
+
+    def _load_run_states(self) -> list[dict[str, Any]]:
         runs: list[dict[str, Any]] = []
         if self.workspace_manager.root.exists():
             for state_path in sorted(
@@ -165,13 +218,30 @@ class CompanyDaemon:
                     runs.append(state.to_dict())
                 except Exception as exc:
                     runs.append({"state_path": str(state_path), "error": str(exc)})
-        return {
-            "workflow": str(self.workflow.path),
-            "tracker": self.workflow.tracker.kind,
-            "workspace_root": str(self.workspace_manager.root),
-            "max_concurrent_agents": self.workflow.agent.max_concurrent_agents,
-            "runs": runs,
-        }
+        return runs
+
+    def _active_workspace_count(self) -> int:
+        return sum(
+            1
+            for run in self._load_run_states()
+            if run.get("status") in {"running", "dry-run"}
+        )
+
+    def _recent_proofs(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        proofs: list[dict[str, Any]] = []
+        if self.workspace_manager.root.exists():
+            for proof_path in self.workspace_manager.root.glob(
+                "*/.aider/company/proof-of-work.json"
+            ):
+                try:
+                    payload = json.loads(proof_path.read_text(encoding="utf-8"))
+                    if isinstance(payload, dict):
+                        payload["path"] = str(proof_path)
+                        proofs.append(payload)
+                except Exception as exc:
+                    proofs.append({"path": str(proof_path), "error": str(exc)})
+        proofs.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        return proofs[: max(1, limit)]
 
     def run_issue(self, issue: TrackerIssue, *, dry_run: bool = False) -> ProofOfWork:
         workspace = self.workspace_manager.prepare(

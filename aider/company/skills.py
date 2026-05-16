@@ -142,6 +142,7 @@ class CompanySkillManager:
                 "name": skill.name,
                 "title": skill.title,
                 "description": skill.description,
+                "path": skill.path,
             }
             for skill in self.manager.list_skills()[:available_limit]
         ]
@@ -152,6 +153,26 @@ class CompanySkillManager:
                 item for item in skill_data.get("recently_used", []) if isinstance(item, dict)
             ][:recent_limit]
         return {"available": available, "recently_used": recent}
+
+
+    def inspect_skills(
+        self, *, available_limit: int = 25, recent_limit: int = 10
+    ) -> dict[str, Any]:
+        """Return UI/COO-friendly detail about approved and recently used skills."""
+
+        summary = self.dashboard_summary(
+            available_limit=available_limit, recent_limit=recent_limit
+        )
+        proposals = self.list_proposals(status="pending")
+        return {
+            "enabled": self.config.enabled,
+            "root": str(self.manager.root),
+            "available_count": len(self.manager.list_skills()),
+            "recently_used_count": len(summary["recently_used"]),
+            "available": summary["available"],
+            "recently_used": summary["recently_used"],
+            "pending_proposals": [proposal.to_dict() for proposal in proposals[:10]],
+        }
 
     def create_proposal(self, proposal: SkillProposal) -> Path:
         scope_dir = self.proposals_root / proposal.scope

@@ -11,6 +11,7 @@ import threading
 import uuid
 from collections import deque
 from pathlib import Path
+from typing import Any
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -22,12 +23,14 @@ from aider.company.agent_factory import build_company_agent_loops
 from aider.company.audit import AuditLogViewer
 from aider.company.config import apply_agent_model_overrides_from_env
 from aider.company.coo import NanobotCOO
+from aider.company.daemon import CompanyDaemonError, load_daemon
 from aider.company.departments.devops import DevOpsDepartment
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
 from aider.company.departments.qa import QADepartment
 from aider.company.departments.ux import UXDepartment
 from aider.company.orchestrator import CompanyOrchestrator
+from aider.company.workflow import WorkflowError
 from aider.company.project import Project
 from aider.company.skills import CompanySkillManager
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
@@ -561,6 +564,35 @@ class DesktopCompanySession:
             self.orchestrator.state, self.orchestrator.company_config.skill_learning
         ).dashboard_summary()
 
+    def daemon_status(self) -> dict[str, Any]:
+        workflow_path = Path(self.repo_path) / "AIDER_WORKFLOW.md"
+        if not workflow_path.exists():
+            return {
+                "configured": False,
+                "workflow": str(workflow_path),
+                "status": "not configured",
+                "running": False,
+                "last_run": None,
+                "active_workflows": 0,
+                "pending_proof_of_work": 0,
+                "recent_proof_of_work": [],
+            }
+        try:
+            status = load_daemon(workflow_path).get_status()
+        except (CompanyDaemonError, WorkflowError, OSError, ValueError) as err:
+            return {
+                "configured": True,
+                "workflow": str(workflow_path),
+                "status": f"unavailable: {err}",
+                "running": False,
+                "last_run": None,
+                "active_workflows": 0,
+                "pending_proof_of_work": 0,
+                "recent_proof_of_work": [],
+            }
+        status["configured"] = True
+        return status
+
     def system_overview(self) -> dict:
         pending = [
             approval
@@ -576,6 +608,7 @@ class DesktopCompanySession:
         active_products = "None"
         if warehouse_registry.exists():
             active_products = str(warehouse_registry)
+        daemon = self.daemon_status()
         return {
             "caching": self.caching_status(),
             "coo_status": coo_status.get("status", "unknown"),
@@ -583,6 +616,12 @@ class DesktopCompanySession:
                 "action", "—"
             ),
             "pending_escalations": len(pending),
+            "daemon": daemon,
+            "daemon_status": daemon.get("status", "unknown"),
+            "daemon_last_run": daemon.get("last_run") or "never",
+            "daemon_active_workflows": daemon.get("active_workflows", 0),
+            "daemon_pending_proof_of_work": daemon.get("pending_proof_of_work", 0),
+            "daemon_recent_proof_of_work": daemon.get("recent_proof_of_work", []),
             "active_warehouse_products": active_products,
             "mcp_status": (
                 f"enabled ({len(getattr(mcp_config, 'servers', {}) or {})} servers)"
@@ -1307,16 +1346,34 @@ class GUI:
         metrics = company.dashboard_metrics(turns_this_session=self.count_user_turns())
         overview = company.system_overview()
         st.subheader("System Overview")
-        o1, o2, o3 = st.columns(3)
+        o1, o2, o3, o4 = st.columns(4)
         o1.metric("COO status", overview["coo_status"])
         o2.metric("Last COO action", overview["coo_last_action"])
         o3.metric("Pending escalations", overview["pending_escalations"])
+        o4.metric("Daemon status", overview["daemon_status"])
         with st.container(border=True):
             st.write(f"**Caching enabled:** {overview['caching']}")
             st.write(
                 f"**Active warehouse products:** {overview['active_warehouse_products']}"
             )
             st.write(f"**MCP status:** {overview['mcp_status']}")
+            st.write(
+                "**Daemon:** "
+                f"running={overview['daemon'].get('running', False)}, "
+                f"last run={overview['daemon_last_run']}, "
+                f"active workflows={overview['daemon_active_workflows']}, "
+                f"pending proof-of-work={overview['daemon_pending_proof_of_work']}"
+            )
+            recent_proofs = overview.get("daemon_recent_proof_of_work") or []
+            if recent_proofs:
+                with st.expander("Recent proof-of-work artifacts", expanded=False):
+                    for proof in recent_proofs[:5]:
+                        st.write(
+                            f"- **{proof.get('issue', 'unknown')}** — "
+                            f"{proof.get('summary', 'No summary')}"
+                        )
+                        if proof.get("path"):
+                            st.caption(proof["path"])
 
         m1, m2, m3 = st.columns(3)
         m1.metric("Turns this session", metrics["turns_this_session"])
@@ -1334,6 +1391,8 @@ class GUI:
                     f"{skill.get('scope')}/{skill.get('name')} · "
                     f"{skill.get('title') or skill.get('description') or 'Untitled skill'}"
                 )
+                if skill.get("path"):
+                    st.caption(skill["path"])
         else:
             st.caption("No skills have been used in this repo yet.")
         if available_skills:
@@ -1343,6 +1402,8 @@ class GUI:
                         f"- **{skill.get('scope')}/{skill.get('name')}** — "
                         f"{skill.get('description') or skill.get('title') or 'No summary'}"
                     )
+                    if skill.get("path"):
+                        st.caption(skill["path"])
         else:
             st.caption("No approved skills are available yet.")
 

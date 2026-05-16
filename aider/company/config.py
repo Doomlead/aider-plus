@@ -40,6 +40,10 @@ class AgentConfig:
     preferred_model: Optional[str] = None
     max_review_iterations: Optional[int] = None
     enable_prompt_caching: Optional[bool] = None
+    devops_build_fallback_commands: list[str] = field(default_factory=list)
+    devops_retry_attempts: int = 3
+    devops_retry_base_delay: float = 0.25
+    devops_log_capture_dir: str = ".aider/company/build-logs"
 
     def __post_init__(self) -> None:
         if self.enable_prompt_caching is not None:
@@ -47,6 +51,8 @@ class AgentConfig:
         if self.cache_type == "none":
             self.enable_caching = False
         self.enable_prompt_caching = self.enable_caching
+        self.devops_retry_attempts = max(1, int(self.devops_retry_attempts or 1))
+        self.devops_retry_base_delay = max(0.0, float(self.devops_retry_base_delay or 0.0))
 
 
 class DepartmentConfig(AgentConfig):
@@ -142,6 +148,7 @@ def default_company_config() -> CompanyConfig:
             "devops": DepartmentConfig(
                 name="devops",
                 enable_caching=False,
+                devops_build_fallback_commands=["python -m build"],
             ),
         },
         default_enable_caching=True,
@@ -153,7 +160,16 @@ def default_company_config() -> CompanyConfig:
 DEFAULT_COMPANY_CONFIG = default_company_config()
 
 
-_COMPANY_AGENT_NAMES = ("coo", "product", "ux", "engineering", "reviewer", "qa", "delivery", "devops")
+_COMPANY_AGENT_NAMES = (
+    "coo",
+    "product",
+    "ux",
+    "engineering",
+    "reviewer",
+    "qa",
+    "delivery",
+    "devops",
+)
 
 
 def _parse_bool_env(value: str) -> bool | None:
@@ -205,6 +221,39 @@ def apply_agent_caching_overrides_from_env(config: CompanyConfig | None = None) 
     return resolved
 
 
+def apply_devops_overrides_from_env(config: CompanyConfig | None = None) -> CompanyConfig:
+    """Apply DevOps build/retry overrides from environment variables."""
+    resolved = config or default_company_config()
+    dept_config = resolved.get_department_config("devops")
+
+    commands = os.environ.get("AIDER_DEVOPS_BUILD_FALLBACK_COMMANDS")
+    if commands:
+        dept_config.devops_build_fallback_commands = [
+            chunk.strip() for chunk in commands.split(";;") if chunk.strip()
+        ]
+
+    attempts = os.environ.get("AIDER_DEVOPS_RETRY_ATTEMPTS")
+    if attempts:
+        try:
+            dept_config.devops_retry_attempts = max(1, int(attempts))
+        except ValueError:
+            pass
+
+    delay = os.environ.get("AIDER_DEVOPS_RETRY_BASE_DELAY")
+    if delay:
+        try:
+            dept_config.devops_retry_base_delay = max(0.0, float(delay))
+        except ValueError:
+            pass
+
+    log_dir = os.environ.get("AIDER_DEVOPS_LOG_CAPTURE_DIR")
+    if log_dir:
+        dept_config.devops_log_capture_dir = log_dir.strip() or dept_config.devops_log_capture_dir
+
+    resolved.departments["devops"] = dept_config
+    return resolved
+
+
 def apply_agent_model_overrides_from_env(config: CompanyConfig | None = None) -> CompanyConfig:
     """Apply user-provided per-agent model overrides from environment variables.
 
@@ -236,4 +285,4 @@ def apply_agent_model_overrides_from_env(config: CompanyConfig | None = None) ->
         dept_config.preferred_model = model
         resolved.departments[name] = dept_config
 
-    return apply_agent_caching_overrides_from_env(resolved)
+    return apply_devops_overrides_from_env(apply_agent_caching_overrides_from_env(resolved))

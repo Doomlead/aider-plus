@@ -1080,8 +1080,19 @@ class CompanyOrchestrator:
                             "  URL: "
                             f"{deploy.get('deployed_url') or project.deploy_result.metadata.get('deploy_url') or 'n/a'}"
                         ),
+                        (
+                            "  Logs: "
+                            f"{(project.deploy_result.payload.get('build_logs_summary') or build.get('build_logs_summary') or 'n/a')[:180]}"
+                        ),
                     ]
                 )
+                log_artifacts = (
+                    project.deploy_result.payload.get("log_artifacts")
+                    or project.deploy_result.metadata.get("log_artifacts")
+                    or []
+                )
+                if log_artifacts:
+                    lines.append("  Log artifacts: " + ", ".join(map(str, log_artifacts[:3])))
             if getattr(project, "delivery_plan", None):
                 delivery = project.delivery_plan.to_summary()
                 blockers = delivery.get("critical_blockers") or []

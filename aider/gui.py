@@ -235,9 +235,7 @@ class DesktopCompanySession:
             for task in pending:
                 task.cancel()
             if pending:
-                self.loop.run_until_complete(
-                    asyncio.gather(*pending, return_exceptions=True)
-                )
+                self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             self.loop.close()
 
     def _ensure_memories(self):
@@ -405,10 +403,7 @@ class DesktopCompanySession:
             future.cancel()
         if self.loop.is_running():
             self.loop.call_soon_threadsafe(self.loop.stop)
-        if (
-            self.loop_thread.is_alive()
-            and threading.current_thread() is not self.loop_thread
-        ):
+        if self.loop_thread.is_alive() and threading.current_thread() is not self.loop_thread:
             self.loop_thread.join(timeout=5)
         with _COMPANY_SESSIONS_LOCK:
             if _COMPANY_SESSIONS.get(self.repo_path) is self:
@@ -544,9 +539,9 @@ class DesktopCompanySession:
         return self.orchestrator.state.get_pending_approvals()
 
     def audit_log(self, limit: int = 10) -> str:
-        return AuditLogViewer.from_project_memory(
-            self.coder.project_memory
-        ).render_text(limit=limit)
+        return AuditLogViewer.from_project_memory(self.coder.project_memory).render_text(
+            limit=limit
+        )
 
     def company_status(self) -> str:
         return self.orchestrator.company_status()
@@ -605,9 +600,7 @@ class DesktopCompanySession:
 
     def system_overview(self) -> dict:
         pending = [
-            approval
-            for approval in self.pending_approvals()
-            if approval.get("status") == "pending"
+            approval for approval in self.pending_approvals() if approval.get("status") == "pending"
         ]
         try:
             coo_status = self.coo_status()
@@ -619,6 +612,33 @@ class DesktopCompanySession:
         if warehouse_registry.exists():
             active_products = str(warehouse_registry)
         daemon = self.daemon_status()
+        deploy_result = getattr(self.active_project, "deploy_result", None)
+        deploy_payload = (
+            getattr(deploy_result, "payload", {})
+            if deploy_result and isinstance(getattr(deploy_result, "payload", {}), dict)
+            else {}
+        )
+        build_artifact = deploy_payload.get("build_artifact") or {}
+        deployment_result = deploy_payload.get("deployment_result") or {}
+        log_artifacts = deploy_payload.get("log_artifacts") or (
+            getattr(deploy_result, "metadata", {}) or {}
+        ).get("log_artifacts", [])
+        last_build = {
+            "status": getattr(deploy_result, "status", "not run") if deploy_result else "not run",
+            "artifact": build_artifact.get("location") or deploy_payload.get("release_artifact"),
+            "artifact_type": build_artifact.get("artifact_type"),
+            "git_tag": build_artifact.get("tag") or deploy_payload.get("git_tag"),
+            "environment": (
+                deployment_result.get("environment") or deploy_payload.get("environment")
+            ),
+            "deploy_url": deployment_result.get("deployed_url") or deploy_payload.get("deploy_url"),
+            "logs_summary": (
+                deploy_payload.get("build_logs_summary")
+                or build_artifact.get("build_logs_summary")
+                or deployment_result.get("deployment_logs")
+            ),
+            "log_artifacts": log_artifacts if isinstance(log_artifacts, list) else [log_artifacts],
+        }
         delivery_plan = getattr(self.active_project, "delivery_plan", None)
         delivery_summary = (
             delivery_plan.to_summary()
@@ -635,9 +655,7 @@ class DesktopCompanySession:
         return {
             "caching": self.caching_status(),
             "coo_status": coo_status.get("status", "unknown"),
-            "coo_last_action": (coo_status.get("last_coo_action") or {}).get(
-                "action", "—"
-            ),
+            "coo_last_action": (coo_status.get("last_coo_action") or {}).get("action", "—"),
             "delivery_status": (
                 delivery_summary.get("overall_status")
                 or getattr(
@@ -658,6 +676,13 @@ class DesktopCompanySession:
             "daemon_active_workflows": daemon.get("active_workflows", 0),
             "daemon_pending_proof_of_work": daemon.get("pending_proof_of_work", 0),
             "daemon_recent_proof_of_work": daemon.get("recent_proof_of_work", []),
+            "last_build": last_build,
+            "last_build_status": last_build.get("status", "not run"),
+            "last_build_artifact": last_build.get("artifact") or "n/a",
+            "last_build_logs_summary": (
+                last_build.get("logs_summary") or "No build logs captured yet."
+            ),
+            "last_build_log_artifacts": last_build.get("log_artifacts", []),
             "active_warehouse_products": active_products,
             "mcp_status": (
                 f"enabled ({len(getattr(mcp_config, 'servers', {}) or {})} servers)"
@@ -717,23 +742,36 @@ class DesktopCompanySession:
             if not deliverable:
                 continue
             metadata = getattr(deliverable, "metadata", {}) or {}
+            payload = getattr(deliverable, "payload", "")
             files = metadata.get("files") or metadata.get("files_changed") or []
+            extras = {}
+            if label == "Deployment" and isinstance(payload, dict):
+                extras = {
+                    "artifact_links": (
+                        payload.get("artifact_links") or [payload.get("release_artifact")]
+                    ),
+                    "log_artifacts": (
+                        payload.get("log_artifacts") or metadata.get("log_artifacts", [])
+                    ),
+                    "logs_summary": (
+                        payload.get("build_logs_summary") or payload.get("deployment_logs_summary")
+                    ),
+                }
             deliverables.append(
                 {
                     "label": label,
                     "department": getattr(deliverable, "department", "company"),
                     "status": getattr(deliverable, "status", "unknown"),
-                    "summary": getattr(deliverable, "payload", ""),
+                    "summary": payload,
                     "files": files if isinstance(files, list) else [files],
+                    **extras,
                 }
             )
         return deliverables[-6:]
 
     def dashboard_metrics(self, turns_this_session: int = 0) -> dict:
         pending = [
-            approval
-            for approval in self.pending_approvals()
-            if approval.get("status") == "pending"
+            approval for approval in self.pending_approvals() if approval.get("status") == "pending"
         ]
         return {
             "turns_this_session": turns_this_session,
@@ -774,9 +812,7 @@ def get_desktop_company_session(_coder):
 
 def format_desktop_approval(approval: dict) -> str:
     gate_name = approval.get("gate_name", "prd_approval")
-    gate_label = (
-        gate_name.replace("prd", "PRD").replace("_", " ").title().replace("Prd", "PRD")
-    )
+    gate_label = gate_name.replace("prd", "PRD").replace("_", " ").title().replace("Prd", "PRD")
     preview = str(approval.get("artifact_preview", "")).strip()
     if len(preview) > 1200:
         preview = preview[:1200] + "…"
@@ -842,9 +878,7 @@ class GUI:
         undone = self.state.last_undone_commit_hash == commit_hash
         if not undone:
             with self.last_undo_empty:
-                if self.button(
-                    f"Undo commit `{commit_hash}`", key=f"undo_{commit_hash}"
-                ):
+                if self.button(f"Undo commit `{commit_hash}`", key=f"undo_{commit_hash}"):
                     self.do_undo(commit_hash)
 
     def do_sidebar(self):
@@ -897,9 +931,7 @@ class GUI:
             st.rerun()
 
         button_label = (
-            "⏸️ Stop Company Mode"
-            if self.state.company_enabled
-            else "▶️ Start Company Mode"
+            "⏸️ Stop Company Mode" if self.state.company_enabled else "▶️ Start Company Mode"
         )
         if st.button(
             button_label,
@@ -924,9 +956,7 @@ class GUI:
             self.state.company_route = st.selectbox(
                 "Company route",
                 ["Auto", "Prototype", "Engineering"],
-                index=["Auto", "Prototype", "Engineering"].index(
-                    self.state.company_route
-                ),
+                index=["Auto", "Prototype", "Engineering"].index(self.state.company_route),
                 disabled=self.prompt_pending(),
                 help=(
                     "Auto mirrors Discord's human entry point. Prototype starts with Product/PRD. "
@@ -1018,14 +1048,10 @@ class GUI:
                     self.info(f"{label} failed: {err}", echo=False)
                     st.error(f"{label} failed: {err}")
                 else:
-                    summary = (
-                        result.get("summary") if isinstance(result, dict) else result
-                    )
+                    summary = result.get("summary") if isinstance(result, dict) else result
                     if summary:
                         msg = f"{label} completed.\n\n{summary}"
-                        self.state.messages.append(
-                            {"role": "assistant", "content": msg}
-                        )
+                        self.state.messages.append({"role": "assistant", "content": msg})
                         st.success(f"{label} completed.")
             else:
                 remaining.append((label, future))
@@ -1055,9 +1081,7 @@ class GUI:
                 f"{humanize_company_label(department)} · {task_id}"
             )
             container = (
-                st.container(border=True)
-                if prominent
-                else st.expander(title, expanded=True)
+                st.container(border=True) if prominent else st.expander(title, expanded=True)
             )
             with container:
                 if prominent:
@@ -1083,9 +1107,7 @@ class GUI:
                 is_clarification = gate_name == "clarification_approval"
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    approve_label = (
-                        "✅ Submit Answers" if is_clarification else "✅ Approve"
-                    )
+                    approve_label = "✅ Submit Answers" if is_clarification else "✅ Approve"
                     if st.button(
                         approve_label,
                         key=f"approve_{task_id}",
@@ -1101,9 +1123,7 @@ class GUI:
                         st.rerun()
                 with col2:
                     changes_label = (
-                        "⏩ Skip Clarification"
-                        if is_clarification
-                        else "📝 Request Changes"
+                        "⏩ Skip Clarification" if is_clarification else "📝 Request Changes"
                     )
                     if st.button(
                         changes_label,
@@ -1121,9 +1141,7 @@ class GUI:
                         )
                         st.rerun()
                 with col3:
-                    if st.button(
-                        "❌ Reject", key=f"reject_{task_id}", use_container_width=True
-                    ):
+                    if st.button("❌ Reject", key=f"reject_{task_id}", use_container_width=True):
                         company.reject(task_id, feedback or "Rejected from desktop")
                         st.rerun()
 
@@ -1139,9 +1157,7 @@ class GUI:
                     "product_prd_revised": "Product revised PRD",
                 }
                 event_name = payload.get("name") or event.event
-                label = lifecycle_labels.get(
-                    event_name, humanize_company_label(event_name)
-                )
+                label = lifecycle_labels.get(event_name, humanize_company_label(event_name))
                 iteration = payload.get("iteration")
                 suffix = f" (iteration {iteration})" if iteration is not None else ""
                 if payload.get("severity") == "warning":
@@ -1244,10 +1260,7 @@ class GUI:
         )
         self.state.agent_chat_target = quick_target
         chat_tabs = st.tabs(
-            [
-                f"{AGENT_ICONS.get(target, '🤖')} {target}"
-                for target in AGENT_CHAT_TARGETS
-            ]
+            [f"{AGENT_ICONS.get(target, '🤖')} {target}" for target in AGENT_CHAT_TARGETS]
         )
         for target, tab in zip(AGENT_CHAT_TARGETS, chat_tabs):
             with tab:
@@ -1292,9 +1305,7 @@ class GUI:
         for msg in messages:
             role = msg.get("role", "assistant")
             avatar = "🧑" if role == "user" else AGENT_ICONS.get(target, "🤖")
-            with st.chat_message(
-                "user" if role == "user" else "assistant", avatar=avatar
-            ):
+            with st.chat_message("user" if role == "user" else "assistant", avatar=avatar):
                 st.markdown(msg.get("content", ""))
 
     def do_agent_chat_box(self, target: str = "Direct Aider"):
@@ -1307,9 +1318,7 @@ class GUI:
                         "action", "No COO action yet"
                     )
                     memory_count = len(status.get("coo_memory") or [])
-                    st.caption(
-                        f"COO last action: {last_action} · memory notes: {memory_count}"
-                    )
+                    st.caption(f"COO last action: {last_action} · memory notes: {memory_count}")
                 except Exception:
                     st.caption("COO summary will appear after Company Mode starts.")
             else:
@@ -1359,9 +1368,7 @@ class GUI:
 
     def get_company_for_page(self):
         if not self.state.company_enabled:
-            st.info(
-                "Company Mode is paused. Start it from the sidebar to activate this page."
-            )
+            st.info("Company Mode is paused. Start it from the sidebar to activate this page.")
             return None
         company = self.get_company()
         self.enable_company_polling(company)
@@ -1395,20 +1402,15 @@ class GUI:
         o5.metric("Daemon status", overview["daemon_status"])
         with st.container(border=True):
             st.write(f"**Caching enabled:** {overview['caching']}")
-            st.write(
-                f"**Active warehouse products:** {overview['active_warehouse_products']}"
-            )
+            st.write(f"**Active warehouse products:** {overview['active_warehouse_products']}")
             st.write(f"**MCP status:** {overview['mcp_status']}")
             blockers = overview.get("delivery_critical_blockers") or []
-            st.write(
-                f"**Delivery completion:** {overview.get('delivery_completion', 0)}%"
-            )
+            st.write(f"**Delivery completion:** {overview.get('delivery_completion', 0)}%")
             st.write(
                 f"**Delivery next milestone:** {overview.get('delivery_next_milestone', 'TBD')}"
             )
             st.write(
-                "**Delivery critical blockers:** "
-                + (", ".join(blockers) if blockers else "None")
+                "**Delivery critical blockers:** " + (", ".join(blockers) if blockers else "None")
             )
             st.write(
                 "**Daemon:** "
@@ -1417,6 +1419,14 @@ class GUI:
                 f"active workflows={overview['daemon_active_workflows']}, "
                 f"pending proof-of-work={overview['daemon_pending_proof_of_work']}"
             )
+            st.write(f"**Last build status:** {overview['last_build_status']}")
+            st.write(f"**Last build artifact:** {overview['last_build_artifact']}")
+            st.write(f"**Last build logs:** {str(overview['last_build_logs_summary'])[:500]}")
+            log_artifacts = overview.get("last_build_log_artifacts") or []
+            if log_artifacts:
+                with st.expander("Last build log artifacts", expanded=False):
+                    for path in log_artifacts[:8]:
+                        st.code(str(path), language=None)
             recent_proofs = overview.get("daemon_recent_proof_of_work") or []
             if recent_proofs:
                 with st.expander("Recent proof-of-work artifacts", expanded=False):
@@ -1469,11 +1479,7 @@ class GUI:
         )
         phase_cols = st.columns(len(COMPANY_PHASES))
         for index, phase_name in enumerate(COMPANY_PHASES):
-            marker = (
-                "✅"
-                if index < current_index
-                else "▶️" if index == current_index else "○"
-            )
+            marker = "✅" if index < current_index else "▶️" if index == current_index else "○"
             phase_cols[index].caption(f"{marker} {humanize_company_label(phase_name)}")
 
         st.subheader("Recent Deliverables")
@@ -1493,15 +1499,25 @@ class GUI:
                     st.write("**Files changed**")
                     for fname in files:
                         st.code(str(fname), language=None)
+                artifacts = [a for a in deliverable.get("artifact_links") or [] if a]
+                if artifacts:
+                    st.write("**Artifacts**")
+                    for artifact in artifacts:
+                        st.code(str(artifact), language=None)
+                logs = [a for a in deliverable.get("log_artifacts") or [] if a]
+                if logs:
+                    st.write("**Log artifacts**")
+                    for path in logs:
+                        st.code(str(path), language=None)
+                if deliverable.get("logs_summary"):
+                    st.write("**Logs summary**")
+                    st.code(str(deliverable["logs_summary"])[:1200], language=None)
                 st.write("**Preview**")
                 st.write(
-                    truncate_preview(deliverable.get("summary"), 1800)
-                    or "No preview available."
+                    truncate_preview(deliverable.get("summary"), 1800) or "No preview available."
                 )
 
-        with st.expander(
-            "COO Activity (collapsible events, errors, escalations)", expanded=False
-        ):
+        with st.expander("COO Activity (collapsible events, errors, escalations)", expanded=False):
             try:
                 coo_status = company.coo_status()
                 if coo_status.get("error_count"):
@@ -1586,9 +1602,7 @@ class GUI:
         )
 
         form_key = f"settings_form_{location}"
-        loaded = load_settings_form(
-            self.env_path, self.conf_path, self.coder.main_model
-        )
+        loaded = load_settings_form(self.env_path, self.conf_path, self.coder.main_model)
 
         with st.form(form_key, clear_on_submit=False):
             section_tabs = st.tabs(list(SETTINGS_SECTIONS))
@@ -1705,12 +1719,8 @@ class GUI:
                 )
 
             st.write("**Preview before save**")
-            st.caption(
-                "Click Preview to validate syntax and review exactly what will be written."
-            )
-            preview_clicked = st.form_submit_button(
-                "Preview changes", use_container_width=True
-            )
+            st.caption("Click Preview to validate syntax and review exactly what will be written.")
+            preview_clicked = st.form_submit_button("Preview changes", use_container_width=True)
             submitted = st.form_submit_button(
                 "🚀 Apply & Restart Company Session",
                 type="primary",
@@ -1766,12 +1776,8 @@ class GUI:
     def _apply_model_settings(self, model_updates: dict):
         current_model = self.coder.main_model
         model_name = model_updates.get("model") or current_model.name
-        weak_model_name = (
-            model_updates.get("weak-model") or current_model.weak_model.name
-        )
-        editor_model_name = (
-            model_updates.get("editor-model") or current_model.editor_model.name
-        )
+        weak_model_name = model_updates.get("weak-model") or current_model.weak_model.name
+        editor_model_name = model_updates.get("editor-model") or current_model.editor_model.name
         if (
             model_name == current_model.name
             and weak_model_name == current_model.weak_model.name
@@ -1810,12 +1816,8 @@ class GUI:
                 self.button("Create git repo", key=random.random(), help="?")
 
             with st.popover("Update your `.gitignore` file"):
-                st.write(
-                    "It's best to keep aider's internal files out of your git repo."
-                )
-                self.button(
-                    "Add `.aider*` to `.gitignore`", key=random.random(), help="?"
-                )
+                st.write("It's best to keep aider's internal files out of your git repo.")
+                self.button("Add `.aider*` to `.gitignore`", key=random.random(), help="?")
 
     def do_add_to_chat(self):
         # with st.expander("Add to the chat", expanded=True):
@@ -1890,9 +1892,7 @@ class GUI:
         if self.button("Clear chat history", help=text):
             self.coder.done_messages = []
             self.coder.cur_messages = []
-            self.info(
-                "Cleared chat history. Now the LLM can't see anything before this line."
-            )
+            self.info("Cleared chat history. Now the LLM can't see anything before this line.")
 
     def do_show_metrics(self):
         st.metric("Cost of last message send & reply", "$0.0019", help="foo")
@@ -2194,9 +2194,7 @@ class GUI:
                 {"role": "assistant", "content": response_message}
             )
         else:
-            self.state.messages.append(
-                {"role": "assistant", "content": response_message}
-            )
+            self.state.messages.append({"role": "assistant", "content": response_message})
         st.rerun()
 
     def info(self, message, echo=True):
@@ -2230,9 +2228,7 @@ class GUI:
         url = self.web_content
 
         if not self.state.scraper:
-            self.scraper = Scraper(
-                print_error=self.info, playwright_available=has_playwright()
-            )
+            self.scraper = Scraper(print_error=self.info, playwright_available=has_playwright())
 
         content = self.scraper.scrape(url) or ""
         if content.strip():

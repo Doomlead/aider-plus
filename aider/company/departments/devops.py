@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shlex
 from pathlib import Path
 from typing import Optional
@@ -34,6 +35,9 @@ class DevOpsDepartment(Department):
         ("npm", "ci"),
         ("npm", "install"),
         ("git", "tag"),
+        ("make", "build"),
+        ("cargo", "build"),
+        ("go", "build"),
     )
     HIGH_RISK_COMMAND_PREFIXES = (
         ("docker", "push"),
@@ -142,7 +146,14 @@ class DevOpsDepartment(Department):
                 "deploy_url": deployment.deployed_url,
                 "git_tag": build_artifact.tag,
                 "environment": deployment.environment,
+                "build_logs_summary": build_artifact.build_logs_summary,
+                "deployment_logs_summary": deployment.deployment_logs,
+                "log_artifacts": (
+                    list(build_artifact.log_artifacts) + list(deployment.log_artifacts)
+                ),
+                "artifact_links": [build_artifact.location],
                 "playbook_guidance": task.context.get("playbook_guidance", []),
+                "skill_guidance": task.context.get("skill_guidance", []),
             },
             status=status,
             metadata={
@@ -150,6 +161,9 @@ class DevOpsDepartment(Department):
                 "git_tag": build_artifact.tag,
                 "build_artifact": build_artifact.to_dict(),
                 "deployment_result": deployment.to_dict(),
+                "log_artifacts": (
+                    list(build_artifact.log_artifacts) + list(deployment.log_artifacts)
+                ),
                 "handoff_to": "ceo" if status == "success" else "engineering",
                 "blocking": status != "success",
                 "context": dict(task.context),
@@ -160,9 +174,7 @@ class DevOpsDepartment(Department):
     async def _perform_build(
         self, handover: DeliveryHandover | None, task: CompanyTask | None = None
     ) -> BuildArtifact:
-        task = task or CompanyTask(
-            "devops-build", "delivery", "devops", "deploy_request", {}
-        )
+        task = task or CompanyTask("devops-build", "delivery", "devops", "deploy_request", {})
         name = self._artifact_name(task, handover)
         version = self._version(task)
         tag = self._git_tag(task, version)
@@ -173,12 +185,18 @@ class DevOpsDepartment(Department):
             {
                 "formatted": f"DevOps build started for {name}:{tag}.",
                 "commands": commands,
+                "skill_guidance": task.context.get("skill_guidance", []),
             },
         )
         logs: list[str] = []
         for command in commands:
-            logs.append(await self._run_shell(command, high_risk_allowed=False))
-        if any("exit_code=0" not in log for log in logs):
+            logs.append(
+                await self._run_shell_with_retry(
+                    command, task=task, phase="build", high_risk_allowed=False
+                )
+            )
+        log_artifacts = self._capture_logs(task, "build", logs)
+        if any(not self._command_succeeded(log) for log in logs):
             raise RuntimeError(self._summarize_logs(logs) or "Build command failed.")
         artifact_type, location = self._artifact_location(task, commands, name, tag)
         artifact = BuildArtifact(
@@ -188,6 +206,8 @@ class DevOpsDepartment(Department):
             tag=tag,
             location=location,
             build_logs_summary=self._summarize_logs(logs),
+            log_artifacts=log_artifacts,
+            detected_command_source=self._build_command_source(task, commands),
         )
         await self._emit_lifecycle_event(
             task.task_id,
@@ -195,6 +215,8 @@ class DevOpsDepartment(Department):
             {
                 "formatted": f"DevOps build succeeded for {name}:{tag}.",
                 "artifact": artifact.to_dict(),
+                "log_artifacts": log_artifacts,
+                "logs_summary": artifact.build_logs_summary,
             },
         )
         return artifact
@@ -206,9 +228,7 @@ class DevOpsDepartment(Department):
         task: CompanyTask | None = None,
         handover: DeliveryHandover | None = None,
     ) -> DeploymentResult:
-        task = task or CompanyTask(
-            "devops-deploy", "delivery", "devops", "deploy_request", {}
-        )
+        task = task or CompanyTask("devops-deploy", "delivery", "devops", "deploy_request", {})
         await self._emit_lifecycle_event(
             task.task_id,
             "devops_deploy_started",
@@ -222,9 +242,15 @@ class DevOpsDepartment(Department):
         logs: list[str] = []
         for command in commands:
             logs.append(
-                await self._run_shell(command, high_risk_allowed=high_risk_allowed)
+                await self._run_shell_with_retry(
+                    command,
+                    task=task,
+                    phase="deploy",
+                    high_risk_allowed=high_risk_allowed,
+                )
             )
-        if commands and any("exit_code=0" not in log for log in logs):
+        log_artifacts = self._capture_logs(task, "deploy", logs)
+        if commands and any(not self._command_succeeded(log) for log in logs):
             result = DeploymentResult(
                 environment=environment,
                 status="failed",
@@ -232,6 +258,7 @@ class DevOpsDepartment(Department):
                 rollback_url=self._rollback_url(task, handover),
                 build_artifact=build_artifact,
                 deployment_logs=self._summarize_logs(logs),
+                log_artifacts=log_artifacts,
             )
             await self._emit_lifecycle_event(
                 task.task_id,
@@ -246,10 +273,9 @@ class DevOpsDepartment(Department):
         deployed_url = self._deploy_url(task, build_artifact, environment)
         if not commands:
             logs.append(
-                self._write_local_deployment_record(
-                    task, build_artifact, environment, deployed_url
-                )
+                self._write_local_deployment_record(task, build_artifact, environment, deployed_url)
             )
+            log_artifacts = self._capture_logs(task, "deploy", logs)
         result = DeploymentResult(
             environment=environment,
             status="success",
@@ -257,6 +283,7 @@ class DevOpsDepartment(Department):
             rollback_url=self._rollback_url(task, handover),
             build_artifact=build_artifact,
             deployment_logs=self._summarize_logs(logs),
+            log_artifacts=log_artifacts,
         )
         await self._emit_lifecycle_event(
             task.task_id,
@@ -267,6 +294,41 @@ class DevOpsDepartment(Department):
             },
         )
         return result
+
+    async def _run_shell_with_retry(
+        self,
+        command: str,
+        *,
+        task: CompanyTask,
+        phase: str,
+        high_risk_allowed: bool = False,
+    ) -> str:
+        attempts = self._retry_attempts(task)
+        delay = self._retry_base_delay(task)
+        attempt_logs: list[str] = []
+        for attempt in range(1, attempts + 1):
+            log = await self._run_shell(command, high_risk_allowed=high_risk_allowed)
+            attempt_logs.append(f"attempt={attempt}/{attempts}\n{log}")
+            if self._command_succeeded(log):
+                return "\n--- retry-attempt ---\n".join(attempt_logs)
+            if attempt >= attempts or not self._is_transient_failure(log):
+                return "\n--- retry-attempt ---\n".join(attempt_logs)
+            await self._emit_lifecycle_event(
+                task.task_id,
+                "devops_command_retry",
+                {
+                    "formatted": (
+                        f"DevOps retrying transient {phase} command after attempt {attempt}."
+                    ),
+                    "command": command,
+                    "phase": phase,
+                    "attempt": attempt,
+                    "max_attempts": attempts,
+                    "backoff_seconds": delay * (2 ** (attempt - 1)),
+                },
+            )
+            await asyncio.sleep(delay * (2 ** (attempt - 1)))
+        return "\n--- retry-attempt ---\n".join(attempt_logs)
 
     async def _run_shell(self, command: str, *, high_risk_allowed: bool = False) -> str:
         if not self.can_use_tool("shell"):
@@ -286,19 +348,12 @@ class DevOpsDepartment(Department):
             raise PermissionError(f"Invalid DevOps command: {command}") from exc
         if not parts:
             raise PermissionError("Empty DevOps command is not allowed.")
-        if any(
-            self._matches_prefix(parts, prefix) for prefix in self.SAFE_COMMAND_PREFIXES
-        ):
+        if any(self._matches_prefix(parts, prefix) for prefix in self.SAFE_COMMAND_PREFIXES):
             return
-        if any(
-            self._matches_prefix(parts, prefix)
-            for prefix in self.HIGH_RISK_COMMAND_PREFIXES
-        ):
+        if any(self._matches_prefix(parts, prefix) for prefix in self.HIGH_RISK_COMMAND_PREFIXES):
             if high_risk_allowed:
                 return
-            raise PermissionError(
-                f"High-risk DevOps command requires approval: {command}"
-            )
+            raise PermissionError(f"High-risk DevOps command requires approval: {command}")
         raise PermissionError(f"DevOps command is not in the allowlist: {command}")
 
     @staticmethod
@@ -307,9 +362,7 @@ class DevOpsDepartment(Department):
 
     def _delivery_handover(self, task: CompanyTask) -> DeliveryHandover | None:
         payload = task.payload if isinstance(task.payload, dict) else {}
-        handover = payload.get("delivery_handover") or task.context.get(
-            "delivery_handover"
-        )
+        handover = payload.get("delivery_handover") or task.context.get("delivery_handover")
         delivery_metadata = payload.get("delivery_metadata") or {}
         if not handover and isinstance(delivery_metadata, dict):
             handover = delivery_metadata.get("delivery_handover")
@@ -327,18 +380,68 @@ class DevOpsDepartment(Department):
         root = Path(getattr(self.memory, "repo_path", "."))
         if (root / "Dockerfile").exists():
             return [f"docker build -t {shlex.quote(name)}:{shlex.quote(tag)} ."]
+        package_json = root / "package.json"
+        if package_json.exists():
+            scripts = self._package_scripts(package_json)
+            if "build" in scripts:
+                commands = []
+                if (root / "package-lock.json").exists():
+                    commands.append("npm ci")
+                commands.append("npm run build")
+                return commands
         if (root / "pyproject.toml").exists() or (root / "setup.py").exists():
             return ["python -m build"]
-        if (root / "package.json").exists():
-            return ["npm run build"]
-        return []
+        if (root / "Makefile").exists() or (root / "makefile").exists():
+            return ["make build"]
+        if (root / "Cargo.toml").exists():
+            return ["cargo build --release"]
+        if (root / "go.mod").exists():
+            return ["go build ./..."]
+        return self._fallback_build_commands(task)
+
+    def _fallback_build_commands(self, task: CompanyTask) -> list[str]:
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        configured = (
+            payload.get("fallback_build_commands")
+            or task.context.get("fallback_build_commands")
+            or getattr(self.config, "devops_build_fallback_commands", [])
+        )
+        return [str(cmd) for cmd in configured or []]
+
+    def _build_command_source(self, task: CompanyTask, commands: list[str]) -> str:
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        if payload.get("build_commands") or task.context.get("build_commands"):
+            return "task_configured"
+        if commands == self._fallback_build_commands(task):
+            return "fallback_configured" if commands else "none"
+        root = Path(getattr(self.memory, "repo_path", "."))
+        for marker in (
+            "Dockerfile",
+            "package.json",
+            "pyproject.toml",
+            "setup.py",
+            "Makefile",
+            "makefile",
+            "Cargo.toml",
+            "go.mod",
+        ):
+            if (root / marker).exists():
+                return f"auto_detected:{marker}"
+        return "auto_detected" if commands else "none"
+
+    @staticmethod
+    def _package_scripts(path: Path) -> dict:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        scripts = data.get("scripts", {})
+        return scripts if isinstance(scripts, dict) else {}
 
     def _deployment_commands(self, task: CompanyTask) -> list[str]:
         payload = task.payload if isinstance(task.payload, dict) else {}
         commands = (
-            payload.get("deployment_commands")
-            or task.context.get("deployment_commands")
-            or []
+            payload.get("deployment_commands") or task.context.get("deployment_commands") or []
         )
         return [str(cmd) for cmd in commands]
 
@@ -347,9 +450,7 @@ class DevOpsDepartment(Department):
     ) -> tuple[str, str]:
         payload = task.payload if isinstance(task.payload, dict) else {}
         if payload.get("artifact_location"):
-            return str(payload.get("artifact_type") or "unknown"), str(
-                payload["artifact_location"]
-            )
+            return str(payload.get("artifact_type") or "unknown"), str(payload["artifact_location"])
         first = commands[0] if commands else ""
         if first.startswith("docker build"):
             return "docker_image", f"{name}:{tag}"
@@ -388,9 +489,7 @@ class DevOpsDepartment(Department):
         )
         return f"Recorded local deployment manifest: {path}"
 
-    def _artifact_name(
-        self, task: CompanyTask, handover: DeliveryHandover | None
-    ) -> str:
+    def _artifact_name(self, task: CompanyTask, handover: DeliveryHandover | None) -> str:
         payload = task.payload if isinstance(task.payload, dict) else {}
         raw = (
             payload.get("artifact_name")
@@ -399,11 +498,7 @@ class DevOpsDepartment(Department):
             or "app"
         )
         return (
-            "-".join(
-                part
-                for part in str(raw).strip().lower().replace("_", "-").split()
-                if part
-            )
+            "-".join(part for part in str(raw).strip().lower().replace("_", "-").split() if part)
             or "app"
         )
 
@@ -414,9 +509,7 @@ class DevOpsDepartment(Department):
         return str(task.context.get("version") or "1.0.0")
 
     @staticmethod
-    def _environment(
-        task: CompanyTask, handover: DeliveryHandover | None = None
-    ) -> str:
+    def _environment(task: CompanyTask, handover: DeliveryHandover | None = None) -> str:
         if isinstance(task.payload, dict) and task.payload.get("environment"):
             return str(task.payload.get("environment"))
         if handover:
@@ -433,25 +526,16 @@ class DevOpsDepartment(Department):
         if isinstance(task.payload, dict) and task.payload.get("deploy_url"):
             return str(task.payload["deploy_url"])
         project_name = (
-            str(
-                task.context.get("project_name")
-                or (artifact.name if artifact else "app")
-            )
+            str(task.context.get("project_name") or (artifact.name if artifact else "app"))
             .strip()
             .lower()
         )
-        safe_name = "-".join(
-            part for part in project_name.replace("_", "-").split() if part
-        )
-        env_prefix = (
-            "" if (environment or "production") == "production" else f"{environment}-"
-        )
+        safe_name = "-".join(part for part in project_name.replace("_", "-").split() if part)
+        env_prefix = "" if (environment or "production") == "production" else f"{environment}-"
         return f"https://{env_prefix}{safe_name or 'app'}.example.com"
 
     @staticmethod
-    def _rollback_url(
-        task: CompanyTask, handover: DeliveryHandover | None = None
-    ) -> str | None:
+    def _rollback_url(task: CompanyTask, handover: DeliveryHandover | None = None) -> str | None:
         if isinstance(task.payload, dict) and task.payload.get("rollback_url"):
             return str(task.payload["rollback_url"])
         if handover and handover.rollback_plan:
@@ -474,6 +558,67 @@ class DevOpsDepartment(Department):
             or task.context.get("devops_high_risk_approved")
         )
 
+    def _capture_logs(self, task: CompanyTask, phase: str, logs: list[str]) -> list[str]:
+        if not logs:
+            return []
+        root = Path(getattr(self.memory, "repo_path", "."))
+        log_dir = Path(getattr(self.config, "devops_log_capture_dir", ".aider/company/build-logs"))
+        if not log_dir.is_absolute():
+            log_dir = root / log_dir
+        safe_task = re.sub(r"[^A-Za-z0-9_.-]+", "-", task.task_id or "devops")[:120]
+        task_dir = log_dir / safe_task
+        task_dir.mkdir(parents=True, exist_ok=True)
+        paths = []
+        for idx, log in enumerate(logs, start=1):
+            path = task_dir / f"{phase}-{idx}.log"
+            path.write_text(log, encoding="utf-8")
+            paths.append(str(path))
+        return paths
+
+    @staticmethod
+    def _command_succeeded(log: str) -> bool:
+        return bool(re.search(r"(^|\n)exit_code=0(\n|$)", log))
+
+    @staticmethod
+    def _is_transient_failure(log: str) -> bool:
+        lowered = log.lower()
+        transient_markers = (
+            "timeout",
+            "timed out",
+            "temporarily unavailable",
+            "connection reset",
+            "connection refused",
+            "econnreset",
+            "etimedout",
+            "network",
+            "rate limit",
+            "too many requests",
+            "503",
+            "502",
+            "504",
+        )
+        return any(marker in lowered for marker in transient_markers)
+
+    def _retry_attempts(self, task: CompanyTask) -> int:
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        raw = payload.get("devops_retry_attempts") or task.context.get("devops_retry_attempts")
+        if raw is None:
+            raw = getattr(self.config, "devops_retry_attempts", 3)
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            return 3
+
+    def _retry_base_delay(self, task: CompanyTask) -> float:
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        raw = payload.get("devops_retry_base_delay") or task.context.get("devops_retry_base_delay")
+        if raw is None:
+            raw = getattr(self.config, "devops_retry_base_delay", 0.25)
+        try:
+            return max(0.0, float(raw))
+        except (TypeError, ValueError):
+            return 0.25
+
     @staticmethod
     def _summarize_logs(logs: list[str], limit: int = 1200) -> str:
         return "\n---\n".join(logs)[-limit:]
@@ -481,7 +626,5 @@ class DevOpsDepartment(Department):
     @staticmethod
     def _release_artifact(task: CompanyTask):
         if isinstance(task.payload, dict):
-            return task.payload.get("engineering_result") or task.payload.get(
-                "release_artifact"
-            )
+            return task.payload.get("engineering_result") or task.payload.get("release_artifact")
         return task.payload

@@ -930,6 +930,21 @@ class NanobotCOO:
         if any(
             phrase in prompt_lower
             for phrase in (
+                "last deployment",
+                "last deploy",
+                "latest deployment",
+                "recent deployment",
+            )
+        ):
+            return COOActionDecision(
+                action="inspect_status",
+                response_to_ceo=self._format_last_deployment_for_ceo(),
+                confidence=0.94,
+                reasoning="CEO asked for the last deployment record.",
+            )
+        if any(
+            phrase in prompt_lower
+            for phrase in (
                 "company status",
                 "coo status",
                 "status update",
@@ -1294,7 +1309,55 @@ class NanobotCOO:
             "message_count": len(session.messages),
             "skills_summary": self._skills_status_summary(),
             "daemon": self.list_daemon_workflows(),
+            "last_deployment": self._last_deployment_payload(),
         }
+
+    def _last_deployment_payload(self) -> dict[str, Any] | None:
+        project = self.orchestrator.active_project
+        deploy_result = getattr(project, "deploy_result", None) if project else None
+        if not deploy_result or not isinstance(getattr(deploy_result, "payload", None), dict):
+            return None
+        payload = deploy_result.payload
+        build = payload.get("build_artifact") or {}
+        deployment = payload.get("deployment_result") or {}
+        metadata = getattr(deploy_result, "metadata", {}) or {}
+        return {
+            "task_id": getattr(deploy_result, "task_id", None),
+            "status": getattr(deploy_result, "status", None),
+            "summary": payload.get("summary"),
+            "environment": payload.get("environment") or deployment.get("environment"),
+            "deploy_url": (
+                payload.get("deploy_url")
+                or deployment.get("deployed_url")
+                or metadata.get("deploy_url")
+            ),
+            "git_tag": payload.get("git_tag") or build.get("tag") or metadata.get("git_tag"),
+            "artifact_location": payload.get("release_artifact") or build.get("location"),
+            "artifact_type": build.get("artifact_type"),
+            "logs_summary": (
+                payload.get("deployment_logs_summary") or deployment.get("deployment_logs")
+            ),
+            "log_artifacts": payload.get("log_artifacts") or metadata.get("log_artifacts") or [],
+        }
+
+    def _format_last_deployment_for_ceo(self) -> str:
+        deployment = self._last_deployment_payload()
+        if not deployment:
+            return "CEO, I do not have a recorded deployment for this project yet."
+        lines = [
+            "CEO, the last deployment I have on record is:",
+            f"- Status: {deployment.get('status') or 'unknown'}",
+            f"- Environment: {deployment.get('environment') or 'unknown'}",
+            f"- Artifact: {deployment.get('artifact_location') or 'unknown'}",
+            f"- Git tag: {deployment.get('git_tag') or 'untagged'}",
+            f"- URL: {deployment.get('deploy_url') or 'n/a'}",
+        ]
+        if deployment.get("logs_summary"):
+            lines.append(f"- Logs: {str(deployment['logs_summary'])[:400]}")
+        artifacts = deployment.get("log_artifacts") or []
+        if artifacts:
+            lines.append("- Log artifacts: " + ", ".join(map(str, artifacts[:3])))
+        return "\n".join(lines)
 
     def _skills_status_summary(self) -> dict[str, Any]:
         skills = self.inspect_skills()
@@ -1367,6 +1430,7 @@ class NanobotCOO:
             f"- Skills: {status['skills_summary'].get('available_count', 0)} available / "
             f"{status['skills_summary'].get('recently_used_count', 0)} recently used",
             f"- Daemon: {status['daemon'].get('status', 'not_configured')}",
+            self._format_last_deployment_status_line(status.get("last_deployment")),
         ]
         if status.get("delivery_status"):
             delivery = status["delivery_status"]
@@ -1380,6 +1444,16 @@ class NanobotCOO:
         if status["recent_errors"]:
             lines.append(f"- Recent COO errors: {len(status['recent_errors'])}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_last_deployment_status_line(deployment: dict[str, Any] | None) -> str:
+        if not deployment:
+            return "- Last deployment: none recorded"
+        return (
+            "- Last deployment: "
+            f"{deployment.get('status') or 'unknown'} to {deployment.get('environment') or 'unknown'} "
+            f"({deployment.get('git_tag') or 'untagged'})"
+        )
 
     @staticmethod
     def _format_delivery_status_line(delivery_status: dict[str, Any] | None) -> str:
@@ -1463,6 +1537,7 @@ class NanobotCOO:
             "ceo_profile": self._read_coo_profile(),
             "coo_memory": self.recall_ceo_memory(limit=5),
             "last_deliverable_summary": session_snapshot.get("last_deliverable_summary"),
+            "last_deployment": self._last_deployment_payload(),
             "recent_events": bus_snapshot.get("formatted_events", []),
             "session": session_snapshot,
             "route_history": session_snapshot.get("route_history", []),

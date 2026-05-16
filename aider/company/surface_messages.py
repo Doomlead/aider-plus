@@ -15,9 +15,7 @@ def format_approval_required_message(event: EventMessage) -> str:
     payload = event.payload
     project_name = payload.get("project_name") or "unknown-project"
     gate_name = payload.get("gate_name", "prd_approval")
-    gate_label = (
-        gate_name.replace("prd", "PRD").replace("_", " ").title().replace("Prd", "PRD")
-    )
+    gate_label = gate_name.replace("prd", "PRD").replace("_", " ").title().replace("Prd", "PRD")
     handoff_to = payload.get("handoff_to") or "engineering"
     handoff_label = str(handoff_to).replace("_", " ").title()
     if gate_name == "prd_approval":
@@ -29,9 +27,7 @@ def format_approval_required_message(event: EventMessage) -> str:
     else:
         title = "🧪 **QA Release Approval Required**"
     preview = str(payload.get("artifact_preview", "")).strip()
-    quoted_preview = "\n".join(
-        f"> {line}" if line else ">" for line in preview.splitlines()
-    )
+    quoted_preview = "\n".join(f"> {line}" if line else ">" for line in preview.splitlines())
     return (
         f"{title}\n"
         f"Project: `{project_name}`\n"
@@ -133,6 +129,21 @@ def format_coo_status_message(status: dict) -> str:
         lines.extend(f"• {event}" for event in events[-10:])
     else:
         lines.append("• No COO bus events yet.")
+    last_deployment = status.get("session", {}).get("metadata", {}).get(
+        "last_deployment"
+    ) or status.get("last_deployment")
+    if last_deployment:
+        lines.extend(
+            [
+                "",
+                "**Last deployment**",
+                (
+                    f"• {last_deployment.get('status', 'unknown')} to "
+                    f"{last_deployment.get('environment', 'unknown')} "
+                    f"({last_deployment.get('git_tag', 'untagged')})"
+                ),
+            ]
+        )
     summary = status.get("last_deliverable_summary")
     if summary:
         lines.extend(["", "**Last deliverable**", str(summary)[:800]])

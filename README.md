@@ -17,9 +17,10 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
 
 - **Company Mode:** a Product → UX → Delivery → Engineering → Reviewer → QA →
   Delivery → DevOps workflow for turning ideas, issues, or chat requests into
-  implementation plans, code changes, validation notes, release guidance, and
+  implementation plans, code changes, validation notes, release execution, and
   audit trails. Delivery owns timelines, milestones, blockers, release readiness,
-  and the explicit DevOps handoff.
+  and the explicit DevOps handoff; DevOps executes validated builds, packaging,
+  tagging, deployment, and release metadata capture.
 - **Operations assistant:** a CEO-facing assistant layer that can answer directly,
   ask clarifying questions, remember context, inspect project state, inspect
   learned skills, list daemon workflow state, route work to departments, report
@@ -327,8 +328,38 @@ approval, lifecycle, audit, status, or deployment behavior.
   metrics; reviewer comments can be injected into programmer revisions.
 - **QA** writes validation plans, can run allowed test commands, handles feedback
   rerouting, and reports release confidence/regression risks.
-- **DevOps** handles release/deployment guidance, rollback and recovery notes,
-  and release approvals.
+- **DevOps** executes validated releases after Delivery readiness approval: it
+  validates `DeliveryHandover`, runs allowlisted build/package/deploy commands,
+  emits build/deploy lifecycle events, records rollback/deployment metadata, and
+  refuses handoffs that still have critical blockers.
+
+### DevOps release execution
+
+Delivery remains the release-readiness gate, while DevOps is the execution layer
+for a green handoff:
+
+- `BuildArtifact`, `DeploymentResult`, and `DeliveryHandover.from_dict()` provide
+  structured release schemas so build/deploy artifacts can round-trip through
+  department payloads, metadata, dashboards, and audit surfaces.
+- `DevOpsDepartment` validates the Delivery handover, performs builds, performs
+  deployments, emits `devops_build_started`, `devops_build_success`,
+  `devops_deploy_started`, `devops_deployed`, and `devops_failure` lifecycle
+  events, and returns rich build/deploy metadata in `deploy_report` deliverables.
+- Safe shell execution uses explicit allowlists for Docker builds, Python package
+  builds, npm builds, wheel creation, and tagging. High-risk deployment commands
+  such as `kubectl`, `helm`, cloud CLIs, registry pushes, and hosted deploy CLIs
+  require explicit approval flags before execution.
+- Build detection can infer Docker, Python package, or npm build commands from
+  repository files, while configured deployment commands are supported for real
+  environments. When no external deployment command is configured, DevOps writes
+  a local deployment manifest under `.aider/company/deployments/`.
+- The orchestrator routes validated release approvals through
+  `_execute_devops_release()` and creates Delivery-originated DevOps handoff
+  tasks so the lifecycle remains Engineering → QA → Delivery → DevOps.
+- Company dashboard/status output includes the latest build artifact, deployment
+  status, artifact location, and deployed URL when a DevOps result is present.
+- DevOps coverage includes successful build/deploy execution, readiness-gate
+  blocking, high-risk command gating, and schema round-tripping tests.
 
 Company state includes lifecycle phases, approval gates, resolved task IDs,
 pending tasks, recovered gates, audit events, playbook memory, and project
@@ -368,7 +399,8 @@ per-agent chat paths without requiring Streamlit or a browser.
 - **Engineering** — implementation plans and code changes.
 - **Reviewer** — implementation review and quality checks.
 - **QA** — test plans, validation, release confidence, and regression guidance.
-- **DevOps** — release, deployment, MCP/ops, rollback, and recovery guidance.
+- **DevOps** — validated build/package/tag/deploy execution, release metadata,
+  deployment status, rollback, recovery, and MCP/ops guidance.
 
 ---
 
@@ -541,6 +573,7 @@ Important files:
 - `aider/company/cli.py` — `aider company ...` and `aider warehouse ...` parsing/handlers.
 - `aider/company/coo.py` — operations-assistant sessions, action decisions, memory, status, bus, retry, and delegation.
 - `aider/company/orchestrator.py` — workflow, approvals, lifecycle, context, handoffs, and audit coordination.
+- `aider/company/schemas/` — structured PRD, design, Delivery handoff, build artifact, and deployment result contracts.
 - `aider/company/departments/` — Product, UX, Engineering, Reviewer, QA, Delivery, and DevOps implementations.
 - `aider/company/daemon.py` — issue daemon, run state, proof-of-work, and workspace handling.
 - `aider/company/workflow.py` — daemon workflow file parsing, hooks, and prompt rendering.
@@ -553,7 +586,7 @@ Important files:
 - `aider/gui.py` — Streamlit browser GUI.
 - `aider/desktop.py` — Tkinter desktop GUI.
 - `aider/integrations/discord.py` — Discord chat adapter.
-- `tests/company/`, `tests/mcp/`, and focused `tests/basic/` files — workflow, COO, GUI settings, approvals, lifecycle, daemon, Discord, and MCP coverage.
+- `tests/company/`, `tests/mcp/`, and focused `tests/basic/` files — workflow, COO, GUI settings, approvals, lifecycle, daemon, DevOps release execution, Discord, and MCP coverage.
 
 ---
 

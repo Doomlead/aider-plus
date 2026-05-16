@@ -232,7 +232,9 @@ class DesignSpec:
             else "None defined"
         )
         style_text = (
-            _json.dumps(self.visual_style, indent=2) if self.visual_style else "Default theme"
+            _json.dumps(self.visual_style, indent=2)
+            if self.visual_style
+            else "Default theme"
         )
         combined_notes = self.accessibility_notes + self.technical_requirements
         return (
@@ -422,7 +424,9 @@ class Timeline:
             summary=str(d.get("summary", "Delivery timeline")),
             start=str(d.get("start")) if d.get("start") is not None else None,
             target_release=(
-                str(d.get("target_release")) if d.get("target_release") is not None else None
+                str(d.get("target_release"))
+                if d.get("target_release") is not None
+                else None
             ),
             cadence=str(d.get("cadence", "daily async check-in")),
             milestones=[Milestone.from_dict(m) for m in d.get("milestones", [])],
@@ -455,7 +459,9 @@ class ProjectPlan:
     def to_markdown(self) -> str:
         milestones = "\n\n".join(m.to_markdown() for m in self.milestones) or "- TBD"
         risks = "\n\n".join(r.to_markdown() for r in self.risks) or "- None identified"
-        timeline = self.timeline.to_markdown() if self.timeline else "## Timeline\n- TBD"
+        timeline = (
+            self.timeline.to_markdown() if self.timeline else "## Timeline\n- TBD"
+        )
         return f"""# Delivery Plan: {self.title}
 **Version:** {self.version}  **Status:** {self.status}  **Weighted completion:** {self.weighted_completion or self.completion_percentage}%
 
@@ -499,7 +505,8 @@ class ProjectPlan:
             "overall_status": self.overall_status or self.status,
             "status": self.status,
             "completion_percentage": self.completion_percentage,
-            "weighted_completion": self.weighted_completion or self.completion_percentage,
+            "weighted_completion": self.weighted_completion
+            or self.completion_percentage,
             "executive_summary": self.executive_summary,
             "next_milestone": self.next_milestone or "TBD",
             "critical_blockers": list(self.critical_blockers),
@@ -521,7 +528,8 @@ class ProjectPlan:
             "status": self.status,
             "overall_status": self.overall_status,
             "completion_percentage": self.completion_percentage,
-            "weighted_completion": self.weighted_completion or self.completion_percentage,
+            "weighted_completion": self.weighted_completion
+            or self.completion_percentage,
             "executive_summary": self.executive_summary,
             "critical_blockers": self.critical_blockers,
             "next_milestone": self.next_milestone,
@@ -537,7 +545,9 @@ class ProjectPlan:
             objective=str(d.get("objective", "Coordinate delivery.")),
             milestones=[Milestone.from_dict(m) for m in d.get("milestones", [])],
             risks=[RiskRegister.from_dict(r) for r in d.get("risks", [])],
-            timeline=(Timeline.from_dict(timeline) if isinstance(timeline, dict) else None),
+            timeline=(
+                Timeline.from_dict(timeline) if isinstance(timeline, dict) else None
+            ),
             dependencies=list(d.get("dependencies", [])),
             key_dependencies=list(d.get("key_dependencies", d.get("dependencies", []))),
             cross_department_alignment=list(d.get("cross_department_alignment", [])),
@@ -550,14 +560,18 @@ class ProjectPlan:
             executive_summary=str(d.get("executive_summary", "")),
             critical_blockers=list(d.get("critical_blockers", [])),
             next_milestone=(
-                str(d.get("next_milestone")) if d.get("next_milestone") is not None else None
+                str(d.get("next_milestone"))
+                if d.get("next_milestone") is not None
+                else None
             ),
             progress_summary=str(d.get("progress_summary", "")),
             version=str(d.get("version", "1.0")),
         )
 
     @staticmethod
-    def _coerce_status(status: str) -> Literal["on_track", "at_risk", "delayed", "complete"]:
+    def _coerce_status(
+        status: str,
+    ) -> Literal["on_track", "at_risk", "delayed", "complete"]:
         mapping = {
             "blocked": "delayed",
             "release_ready": "complete",
@@ -568,6 +582,92 @@ class ProjectPlan:
         if normalized in {"on_track", "at_risk", "delayed", "complete"}:
             return normalized  # type: ignore[return-value]
         return "on_track"
+
+
+@dataclass
+class BuildArtifact:
+    """Artifact produced by DevOps build/package execution."""
+
+    artifact_type: Literal[
+        "docker_image",
+        "pypi_package",
+        "executable",
+        "static_site",
+        "source_snapshot",
+        "unknown",
+    ]
+    name: str
+    version: str
+    tag: str
+    location: str
+    build_logs_summary: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "artifact_type": self.artifact_type,
+            "name": self.name,
+            "version": self.version,
+            "tag": self.tag,
+            "location": self.location,
+            "build_logs_summary": self.build_logs_summary,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "BuildArtifact":
+        return cls(
+            artifact_type=str(d.get("artifact_type", "unknown")),
+            name=str(d.get("name", "artifact")),
+            version=str(d.get("version", "1.0.0")),
+            tag=str(d.get("tag", "v1.0.0")),
+            location=str(d.get("location", "")),
+            build_logs_summary=str(d.get("build_logs_summary", "")),
+        )
+
+
+@dataclass
+class DeploymentResult:
+    """Result of DevOps deployment execution for a built artifact."""
+
+    environment: str
+    status: Literal["success", "failed", "partial"]
+    build_artifact: BuildArtifact
+    deployed_url: Optional[str] = None
+    rollback_url: Optional[str] = None
+    deployment_logs: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "environment": self.environment,
+            "status": self.status,
+            "deployed_url": self.deployed_url,
+            "rollback_url": self.rollback_url,
+            "build_artifact": self.build_artifact.to_dict(),
+            "deployment_logs": self.deployment_logs,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DeploymentResult":
+        artifact = d.get("build_artifact") or {}
+        return cls(
+            environment=str(d.get("environment", "production")),
+            status=str(d.get("status", "failed")),
+            deployed_url=(
+                str(d.get("deployed_url"))
+                if d.get("deployed_url") is not None
+                else None
+            ),
+            rollback_url=(
+                str(d.get("rollback_url"))
+                if d.get("rollback_url") is not None
+                else None
+            ),
+            build_artifact=(
+                BuildArtifact.from_dict(artifact)
+                if isinstance(artifact, dict)
+                else artifact
+            ),
+            deployment_logs=str(d.get("deployment_logs", "")),
+        )
 
 
 @dataclass
@@ -601,7 +701,9 @@ class DeliveryHandover:
 
     def to_markdown(self) -> str:
         blockers = _markdown_bullets(self.critical_blockers, empty="None")
-        rollback = _markdown_bullets(self.rollback_notes, empty="Confirm rollback owner and steps")
+        rollback = _markdown_bullets(
+            self.rollback_notes, empty="Confirm rollback owner and steps"
+        )
         return f"""# Delivery → DevOps Handover: {self.project_name}
 **Ready for DevOps:** {'yes' if self.ready_for_devops else 'no'}
 **Go / No-Go:** {self.go_no_go_recommendation}
@@ -628,6 +730,26 @@ class DeliveryHandover:
 {rollback}
 """
 
+    @classmethod
+    def from_dict(cls, d: dict) -> "DeliveryHandover":
+        return cls(
+            project_name=str(d.get("project_name", "Project")),
+            ready_for_devops=bool(d.get("ready_for_devops", False)),
+            delivery_summary=dict(d.get("delivery_summary", {})),
+            release_scope=str(d.get("release_scope", "")),
+            critical_blockers=list(d.get("critical_blockers", [])),
+            rollback_notes=list(d.get("rollback_notes", [])),
+            go_no_go_recommendation=str(
+                d.get(
+                    "go_no_go_recommendation",
+                    "NO-GO until Delivery confirms readiness.",
+                )
+            ),
+            release_notes_draft=str(d.get("release_notes_draft", "")),
+            rollback_plan=str(d.get("rollback_plan", "")),
+            environment=str(d.get("environment", "production")),
+        )
+
 
 @dataclass
 class CompanyTask:
@@ -653,6 +775,7 @@ class CompanyTask:
 
 __all__ = [
     "ApprovalDecision",
+    "BuildArtifact",
     "ApprovalRequest",
     "CompanyEvent",
     "ClarificationRequest",
@@ -662,6 +785,7 @@ __all__ = [
     "Deliverable",
     "DeliveryHandover",
     "DepartmentOutput",
+    "DeploymentResult",
     "EventMessage",
     "Milestone",
     "ProjectPlan",

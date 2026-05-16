@@ -39,22 +39,38 @@ class DeliveryDepartment(Department):
             "playbook.*",
             "skills.shared",
             "skills.delivery",
+            "skills.project_management",
             "project.name",
             "project.phase",
             "project.prd",
         ]
 
     async def process(self, task: CompanyTask) -> Deliverable:
-        plan = self._run_delivery_cycle(task)
+        """Refresh Delivery's authoritative state and produce release handoff data."""
+        plan = self._generate_project_plan(task)
         self.current_plan = plan
         handover = self.handover_to_devops(plan, task)
 
         await self._emit_lifecycle_event(
             task.task_id,
+            "delivery_plan_updated",
+            {
+                "formatted": "Delivery updated the authoritative project plan.",
+                "status": plan.status,
+                "completion_percentage": plan.completion_percentage,
+                "weighted_completion": plan.weighted_completion,
+                "next_milestone": plan.next_milestone,
+                "critical_blockers": list(plan.critical_blockers),
+                "executive_summary": plan.executive_summary,
+            },
+        )
+        # Compatibility for existing event consumers while the richer event rolls out.
+        await self._emit_lifecycle_event(
+            task.task_id,
             "delivery_plan_created",
             {
                 "formatted": "Delivery updated the authoritative project plan.",
-                "status": plan.overall_status,
+                "status": plan.status,
                 "completion_percentage": plan.completion_percentage,
                 "next_milestone": plan.next_milestone,
                 "milestone_count": len(plan.milestones),
@@ -83,6 +99,15 @@ class DeliveryDepartment(Department):
             if risk.severity == "high" or risk.blockers:
                 await self._emit_lifecycle_event(
                     task.task_id,
+                    "project_at_risk",
+                    {
+                        "formatted": f"Delivery marked project at risk: {risk.description}",
+                        "risk": risk.to_dict(),
+                        "severity": "warning",
+                    },
+                )
+                await self._emit_lifecycle_event(
+                    task.task_id,
                     "delivery_blocker",
                     {
                         "formatted": f"Delivery blocker: {risk.description}",
@@ -90,6 +115,24 @@ class DeliveryDepartment(Department):
                         "severity": "warning",
                     },
                 )
+            elif risk.status in {"closed", "resolved"}:
+                await self._emit_lifecycle_event(
+                    task.task_id,
+                    "delivery_blocker_resolved",
+                    {
+                        "formatted": f"Delivery blocker resolved: {risk.description}",
+                        "risk": risk.to_dict(),
+                    },
+                )
+        if handover.ready_for_devops:
+            await self._emit_lifecycle_event(
+                task.task_id,
+                "ready_for_release",
+                {
+                    "formatted": "Delivery readiness gate is green; DevOps handoff is ready.",
+                    "handover": handover.to_dict(),
+                },
+            )
 
         blocking = bool(plan.critical_blockers)
         status = "failure" if blocking else "success"
@@ -120,20 +163,26 @@ class DeliveryDepartment(Department):
             metadata=metadata,
         )
 
-    def _run_delivery_cycle(self, task: CompanyTask) -> ProjectPlan:
-        """Create or refresh a proactive plan for the current project phase."""
+    def _generate_project_plan(self, task: CompanyTask) -> ProjectPlan:
+        """Create the first authoritative Delivery plan for current project state."""
         plan = self._create_project_plan(task)
+        return self._monitor_and_update(plan, task)
+
+    def _monitor_and_update(self, plan: ProjectPlan, task: CompanyTask) -> ProjectPlan:
+        """Proactively recompute risks, blockers, milestones, and executive status."""
         plan.risks = self._assess_risks(task, plan)
         self._assess_project_health(plan, task)
         return plan
+
+    # Backward-compatible alias for existing tests/extensions.
+    def _run_delivery_cycle(self, task: CompanyTask) -> ProjectPlan:
+        return self._generate_project_plan(task)
 
     def _create_project_plan(self, task: CompanyTask) -> ProjectPlan:
         payload = task.payload if isinstance(task.payload, dict) else {}
         context = task.context if isinstance(task.context, dict) else {}
         phase = str(
-            context.get("project_phase")
-            or context.get("current_project_phase")
-            or "planning"
+            context.get("project_phase") or context.get("current_project_phase") or "planning"
         )
         title = str(
             context.get("project_name")
@@ -148,13 +197,13 @@ class DeliveryDepartment(Department):
             or "Coordinate the approved work through release."
         )[:800]
         has_prd = bool(context.get("prd_summary") or payload.get("prd_content"))
-        has_design = bool(
-            context.get("design_spec_summary") or payload.get("design_spec")
-        )
+        has_design = bool(context.get("design_spec_summary") or payload.get("design_spec"))
         has_engineering = bool(
             payload.get("engineering_result") or context.get("engineering_result")
         )
         has_qa = bool(payload.get("qa_report") or payload.get("qa_metadata"))
+        skill_guidance = self._format_guidance(context.get("skill_guidance"))
+        playbook_guidance = self._format_guidance(context.get("playbook_guidance"))
         milestones = [
             Milestone(
                 name="Product and UX alignment",
@@ -190,11 +239,7 @@ class DeliveryDepartment(Department):
                 name="QA verification complete",
                 description="Confirm QA outcome and known residual checks before release.",
                 owner="qa",
-                status=(
-                    "complete"
-                    if has_qa
-                    else "in_progress" if phase == "qa" else "pending"
-                ),
+                status=("complete" if has_qa else "in_progress" if phase == "qa" else "pending"),
                 dependencies=["qa"],
                 exit_criteria=[
                     "QA report is captured",
@@ -203,13 +248,14 @@ class DeliveryDepartment(Department):
             ),
             Milestone(
                 name="Release handoff prepared",
-                description="Prepare DevOps handoff with scope, risks, and rollback notes.",
-                owner="devops",
-                status="ready" if has_qa and has_engineering else "pending",
+                description="Prepare DevOps handoff with scope, risks, release notes, and rollback plan.",
+                owner="delivery",
+                status="complete" if has_qa and has_engineering else "pending",
                 dependencies=["delivery", "devops"],
                 exit_criteria=[
                     "Deployment owner has a release artifact",
                     "Risks and blockers are visible",
+                    "Go/no-go recommendation is explicit",
                 ],
             ),
         ]
@@ -220,32 +266,44 @@ class DeliveryDepartment(Department):
             assumptions=[
                 "Delivery owns timeline, milestone, blocker, and release-readiness visibility.",
                 "DevOps receives an explicit handover before deployment begins.",
+                "Skills and playbook guidance inform Delivery review when available.",
             ],
         )
+        key_dependencies = [
+            "QA verification evidence",
+            "Engineering deliverable",
+            "DevOps environment readiness",
+        ]
+        if skill_guidance:
+            key_dependencies.append("Applicable delivery/project-management skill guidance")
+        if playbook_guidance:
+            key_dependencies.append("Relevant playbook guidance")
         return ProjectPlan(
             title=title,
             objective=objective,
             milestones=milestones,
             timeline=timeline,
-            dependencies=["product", "ux", "engineering", "qa", "devops"],
+            dependencies=["product", "ux", "engineering", "qa", "delivery", "devops"],
+            key_dependencies=key_dependencies,
             cross_department_alignment=[
                 "Product owns scope and acceptance criteria.",
                 "UX owns experience constraints and accessibility details.",
                 "Engineering owns implementation and technical tradeoffs.",
                 "QA owns verification evidence and residual quality risks.",
-                "Delivery owns timeline, blockers, release readiness, and DevOps handoff.",
+                "Delivery owns project state, blockers, completion, release readiness, and DevOps handoff.",
                 "DevOps owns deployment, environment readiness, and rollback execution.",
+                *(f"Skill guidance: {item}" for item in skill_guidance[:3]),
+                *(f"Playbook guidance: {item}" for item in playbook_guidance[:3]),
             ],
         )
 
-    def _assess_project_health(
-        self, plan: ProjectPlan, task: CompanyTask
-    ) -> ProjectPlan:
+    def _assess_project_health(self, plan: ProjectPlan, task: CompanyTask) -> ProjectPlan:
         plan.completion_percentage = self._calculate_completion(plan)
+        plan.weighted_completion = self._calculate_weighted_completion(plan)
         plan.critical_blockers = [
             blocker
             for risk in plan.risks
-            if risk.status != "closed"
+            if risk.status not in {"closed", "resolved"}
             for blocker in risk.blockers
         ]
         next_milestone = next(
@@ -256,29 +314,33 @@ class DeliveryDepartment(Department):
         payload = task.payload if isinstance(task.payload, dict) else {}
         has_engineering = bool(payload.get("engineering_result"))
         has_qa = bool(payload.get("qa_report") or payload.get("qa_metadata"))
+        high_open_risks = [
+            r for r in plan.risks if r.severity == "high" and r.status not in {"closed", "resolved"}
+        ]
         if plan.critical_blockers:
-            plan.status = "blocked"
-            plan.overall_status = "blocked"
+            plan.status = "delayed"
+            plan.overall_status = "delayed"
+            plan.progress_summary = "Critical blockers must be resolved before DevOps handoff."
+        elif has_engineering and has_qa and plan.weighted_completion >= 100:
+            plan.status = "complete"
+            plan.overall_status = "complete"
             plan.progress_summary = (
-                "Critical blockers must be resolved before DevOps handoff."
+                "Engineering and QA artifacts are available; Delivery has prepared release handoff."
             )
-        elif has_engineering and has_qa and plan.completion_percentage >= 100:
-            plan.status = "release_ready"
-            plan.overall_status = "release_ready"
+        elif high_open_risks or (has_engineering and not has_qa):
+            plan.status = "at_risk"
+            plan.overall_status = "at_risk"
             plan.progress_summary = (
-                "Engineering and QA artifacts are available; DevOps handoff is ready."
+                "Delivery is tracking unresolved release-readiness risk before DevOps handoff."
             )
-        elif has_engineering:
-            plan.status = "at_risk" if not has_qa else "on_track"
-            plan.overall_status = plan.status
-            plan.progress_summary = "Engineering output exists; Delivery is tracking QA and release readiness."
         else:
-            plan.status = "planning"
-            plan.overall_status = "planning"
-            plan.progress_summary = "Delivery plan initialized proactively; upstream artifacts are still being collected."
-        plan.progress_summary += (
-            f" {plan.completion_percentage}% of milestones are complete or ready."
-        )
+            plan.status = "on_track"
+            plan.overall_status = "on_track"
+            plan.progress_summary = (
+                "Delivery is proactively coordinating upstream artifacts and release readiness."
+            )
+        plan.progress_summary += f" Weighted completion is {plan.weighted_completion}%."
+        plan.executive_summary = self._executive_summary(plan)
         return plan
 
     def _calculate_completion(self, plan: ProjectPlan) -> int:
@@ -288,18 +350,31 @@ class DeliveryDepartment(Department):
         score = sum(weights.get(m.status, 0.0) for m in plan.milestones)
         return int(round((score / len(plan.milestones)) * 100))
 
+    def _calculate_weighted_completion(self, plan: ProjectPlan) -> int:
+        milestone_weights = {
+            "Product and UX alignment": 20,
+            "Engineering implementation ready": 35,
+            "QA verification complete": 30,
+            "Release handoff prepared": 15,
+        }
+        total = sum(milestone_weights.get(m.name, 10) for m in plan.milestones)
+        if not total:
+            return 0
+        status_weight = {"complete": 1.0, "ready": 1.0, "in_progress": 0.5}
+        score = sum(
+            milestone_weights.get(m.name, 10) * status_weight.get(m.status, 0.0)
+            for m in plan.milestones
+        )
+        return int(round((score / total) * 100))
+
     def _assess_risks(self, task: CompanyTask, plan: ProjectPlan) -> list[RiskRegister]:
         payload = task.payload if isinstance(task.payload, dict) else {}
         context = task.context if isinstance(task.context, dict) else {}
-        phase = str(
-            context.get("project_phase") or context.get("current_project_phase") or ""
-        )
+        phase = str(context.get("project_phase") or context.get("current_project_phase") or "")
         risks: list[RiskRegister] = []
 
         qa_metadata = (
-            payload.get("qa_metadata")
-            if isinstance(payload.get("qa_metadata"), dict)
-            else {}
+            payload.get("qa_metadata") if isinstance(payload.get("qa_metadata"), dict) else {}
         )
         qa_report = payload.get("qa_report")
         engineering_result = payload.get("engineering_result")
@@ -357,35 +432,76 @@ class DeliveryDepartment(Department):
             )
         return risks
 
-    def handover_to_devops(
-        self, plan: ProjectPlan, task: CompanyTask
-    ) -> DeliveryHandover:
+    def handover_to_devops(self, plan: ProjectPlan, task: CompanyTask) -> DeliveryHandover:
         payload = task.payload if isinstance(task.payload, dict) else {}
         context = task.context if isinstance(task.context, dict) else {}
         ready = (
-            plan.completion_percentage >= 100
+            plan.status == "complete"
+            and plan.weighted_completion >= 100
             and not plan.critical_blockers
             and bool(payload.get("engineering_result"))
             and bool(payload.get("qa_report") or payload.get("qa_metadata"))
         )
+        release_scope = str(
+            payload.get("prd_content") or context.get("prd_summary") or plan.objective
+        )
+        blockers = list(plan.critical_blockers)
         return DeliveryHandover(
             project_name=str(
                 context.get("project_name") or payload.get("project_name") or plan.title
             ),
             ready_for_devops=ready,
             delivery_summary=plan.to_summary(),
-            release_scope=str(
-                payload.get("prd_content")
-                or context.get("prd_summary")
-                or plan.objective
-            ),
-            critical_blockers=list(plan.critical_blockers),
+            release_scope=release_scope,
+            critical_blockers=blockers,
             rollback_notes=[
                 "Confirm deployment target and rollback owner before release.",
                 "Use Engineering metadata and QA report as the validation baseline.",
             ],
+            go_no_go_recommendation=(
+                "GO: Delivery confirms scope, QA evidence, blockers, release notes, and rollback plan are ready."
+                if ready
+                else f"NO-GO: resolve {', '.join(blockers) if blockers else 'remaining release-readiness gaps'} before DevOps."
+            ),
+            release_notes_draft=self._release_notes_draft(plan, payload, release_scope),
+            rollback_plan=self._rollback_plan(plan, payload),
             environment=str(context.get("environment", "production")),
         )
+
+    def _executive_summary(self, plan: ProjectPlan) -> str:
+        blockers = ", ".join(plan.critical_blockers) if plan.critical_blockers else "none"
+        return (
+            f"Delivery status is {plan.status} at {plan.weighted_completion}% weighted completion. "
+            f"Next milestone: {plan.next_milestone or 'TBD'}. Critical blockers: {blockers}."
+        )
+
+    def _release_notes_draft(self, plan: ProjectPlan, payload: dict, release_scope: str) -> str:
+        engineering_metadata = (
+            payload.get("engineering_metadata") if isinstance(payload, dict) else {}
+        )
+        files = []
+        if isinstance(engineering_metadata, dict):
+            files = list(
+                engineering_metadata.get("files") or engineering_metadata.get("changed_files") or []
+            )
+        file_note = f"\n\nChanged files: {', '.join(map(str, files[:10]))}." if files else ""
+        return f"Release scope: {release_scope[:500]}\n\nDelivery summary: {plan.executive_summary}{file_note}"
+
+    def _rollback_plan(self, plan: ProjectPlan, payload: dict) -> str:
+        return (
+            "1. Pause rollout and notify Delivery, Engineering, QA, and DevOps owners.\n"
+            "2. Revert to the previous known-good artifact or commit identified by DevOps.\n"
+            "3. Run the QA validation baseline from the Delivery handover.\n"
+            "4. Reopen Delivery blockers/risks and keep the project in delayed status until validated."
+        )
+
+    @staticmethod
+    def _format_guidance(guidance) -> list[str]:
+        if not guidance:
+            return []
+        if isinstance(guidance, list):
+            return [str(item) for item in guidance if item]
+        return [str(guidance)]
 
     @staticmethod
     def _prd_title(context: dict) -> str | None:

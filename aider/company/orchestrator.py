@@ -40,9 +40,7 @@ class CompanyOrchestrator:
     ):
         self.company_config = company_config or default_company_config()
         self.state = CompanyStateManager(project_memory)
-        self.context_builder = ContextBuilder(
-            self.state, self.company_config.skill_learning
-        )
+        self.context_builder = ContextBuilder(self.state, self.company_config.skill_learning)
         self.lifecycle = LifecycleEngine(self.state)
         self.approvals = ApprovalManager(self.state, audit_logger=self._log_event)
         self.approval_manager = self.approvals
@@ -132,10 +130,7 @@ class CompanyOrchestrator:
         reviewer_config = self.company_config.departments.get("reviewer")
         if reviewer_config is not None:
             agent_loop.reviewer_department_config = reviewer_config
-            if (
-                loop_config is not None
-                and getattr(loop_config, "reviewer_model", None) is None
-            ):
+            if loop_config is not None and getattr(loop_config, "reviewer_model", None) is None:
                 loop_config.reviewer_model = reviewer_config.preferred_model
 
         if dept_config.preferred_model:
@@ -202,9 +197,7 @@ class CompanyOrchestrator:
         self._shutdown = True
         tasks = [task for task in self._background_tasks if not task.done()]
         tasks.extend(
-            task
-            for task in self.approvals._recovered_gate_tasks.values()
-            if not task.done()
+            task for task in self.approvals._recovered_gate_tasks.values() if not task.done()
         )
         for gate in self.approvals.gates.values():
             if not gate.done():
@@ -283,12 +276,8 @@ class CompanyOrchestrator:
                         **d.metadata.get("context", {}),
                         "gate_name": "clarification_approval",
                         "approver_role": "ceo",
-                        "artifact_preview": d.metadata.get(
-                            "artifact_preview", d.payload
-                        ),
-                        "clarification_questions": d.metadata.get(
-                            "clarification_questions", []
-                        ),
+                        "artifact_preview": d.metadata.get("artifact_preview", d.payload),
+                        "clarification_questions": d.metadata.get("clarification_questions", []),
                         "original_request": d.metadata.get("original_request", ""),
                         "handoff_to": "product",
                     },
@@ -330,12 +319,8 @@ class CompanyOrchestrator:
                 project.prd = str(d.content)
                 project.requires_design = bool(d.metadata.get("requires_design", False))
                 if "delivery" in self.departments:
-                    await self.submit(
-                        self._proactive_delivery_task(d, phase="prototyping")
-                    )
-                next_target = (
-                    "ux" if project.requires_design else d.metadata.get("handoff_to")
-                )
+                    await self.submit(self._proactive_delivery_task(d, phase="prototyping"))
+                next_target = "ux" if project.requires_design else d.metadata.get("handoff_to")
                 if next_target == "ux" and "ux" not in self.departments:
                     next_target = "engineering"
                 if next_target and next_target in self.departments:
@@ -350,9 +335,7 @@ class CompanyOrchestrator:
             if d.status == "success":
                 if "delivery" in self.departments:
                     await self.submit(self._proactive_delivery_task(d, phase="design"))
-                self.lifecycle.apply(
-                    self.lifecycle.transition_for_deliverable(project, d)
-                )
+                self.lifecycle.apply(self.lifecycle.transition_for_deliverable(project, d))
                 if "engineering" in self.departments:
                     await self.submit(self._handoff_task(d, "engineering"))
                 return True
@@ -360,9 +343,7 @@ class CompanyOrchestrator:
         if project.phase == "development" and d.department == "engineering":
             project.engineering_result = d
             if d.status == "success":
-                self.lifecycle.apply(
-                    self.lifecycle.transition_for_deliverable(project, d)
-                )
+                self.lifecycle.apply(self.lifecycle.transition_for_deliverable(project, d))
                 if "qa" in self.departments:
                     await self.submit(self._qa_task(d))
                 return True
@@ -381,15 +362,11 @@ class CompanyOrchestrator:
             )
 
             # Record QA outcome for pass-rate tracking.
-            qa_test_passed = (
-                d.payload.get("test_passed") if isinstance(d.payload, dict) else None
-            )
+            qa_test_passed = d.payload.get("test_passed") if isinstance(d.payload, dict) else None
             self.state.record_qa_result(qa_test_passed)
 
             qa_meta = d.metadata or {}
-            if qa_meta.get("handoff_to") == "engineering" and not qa_meta.get(
-                "blocking", True
-            ):
+            if qa_meta.get("handoff_to") == "engineering" and not qa_meta.get("blocking", True):
                 qa_feedback_dict = qa_meta.get("qa_feedback") or {}
                 revision_number = qa_feedback_dict.get("revision_number", 1)
 
@@ -401,8 +378,7 @@ class CompanyOrchestrator:
                             event=CompanyEvent.PROJECT_BLOCKED,
                             task_id=d.task_id,
                             payload={
-                                "reason": f"QA failed after {max_qa_revisions} "
-                                "revision cycles.",
+                                "reason": f"QA failed after {max_qa_revisions} " "revision cycles.",
                                 "last_feedback": qa_feedback_dict,
                             },
                         )
@@ -417,9 +393,7 @@ class CompanyOrchestrator:
                 return True
 
             if "delivery" in self.departments:
-                self.lifecycle.apply(
-                    self.lifecycle.transition_for_deliverable(project, d)
-                )
+                self.lifecycle.apply(self.lifecycle.transition_for_deliverable(project, d))
                 await self.submit(self._delivery_task(d))
             else:
                 self.state.set_current_phase("release_ready")
@@ -428,9 +402,7 @@ class CompanyOrchestrator:
 
         if d.department == "delivery":
             project.delivery_result = d
-            plan_dict = (
-                d.metadata.get("project_plan") if isinstance(d.metadata, dict) else None
-            )
+            plan_dict = d.metadata.get("project_plan") if isinstance(d.metadata, dict) else None
             if isinstance(plan_dict, dict):
                 project.delivery_plan = ProjectPlan.from_dict(plan_dict)
             self._log_event(
@@ -446,7 +418,7 @@ class CompanyOrchestrator:
                 if "engineering" in self.departments:
                     await self.submit(self._engineering_revision_task(d))
                 return True
-            if not await self._handle_delivery_handoff(d):
+            if not await self.delivery_readiness_gate(d):
                 return True
             self.lifecycle.apply(self.lifecycle.transition_for_deliverable(project, d))
             await self._request_release_approval(d)
@@ -462,9 +434,7 @@ class CompanyOrchestrator:
             )
             self.lifecycle.apply(self.lifecycle.transition_for_deliverable(project, d))
             await self._run_post_mortem(d)
-            self.lifecycle.apply(
-                self.lifecycle.transition_after_post_mortem(project.phase, d)
-            )
+            self.lifecycle.apply(self.lifecycle.transition_after_post_mortem(project.phase, d))
             if d.status == "success":
                 return True
 
@@ -516,8 +486,7 @@ class CompanyOrchestrator:
                 "original_request": context.get("original_request"),
                 "prd_content": prd_content,
                 "prd_structured": context.get("prd_structured"),
-                "prd_summary": context.get("prd_summary")
-                or self._synthesize_prd_summary(context),
+                "prd_summary": context.get("prd_summary") or self._synthesize_prd_summary(context),
                 "design_spec": design_spec_md,
                 "design_spec_structured": design_spec_structured,
                 "design_spec_summary": design_spec_summary,
@@ -540,9 +509,7 @@ class CompanyOrchestrator:
             metadata.setdefault("next_artifact_type", "design_spec")
             context.update(payload)
         elif (
-            d.department == "product"
-            and next_target == "engineering"
-            and d.artifact_type == "memo"
+            d.department == "product" and next_target == "engineering" and d.artifact_type == "memo"
         ):
             payload = {
                 "clarification_response": d.content,
@@ -569,9 +536,7 @@ class CompanyOrchestrator:
             context=context,
         )
         task.context.setdefault("prd_summary", context.get("prd_summary"))
-        task.context.setdefault(
-            "design_spec_structured", context.get("design_spec_structured")
-        )
+        task.context.setdefault("design_spec_structured", context.get("design_spec_structured"))
         task.context["playbook_guidance"] = self._get_relevant_playbooks(task)
         task.context["skill_guidance"] = self._get_relevant_skills(task)
         return task
@@ -593,9 +558,7 @@ class CompanyOrchestrator:
         if components:
             parts.append(f"Components: {len(components)}")
 
-        if a11y := spec.get("accessibility_checklist") or spec.get(
-            "accessibility_notes"
-        ):
+        if a11y := spec.get("accessibility_checklist") or spec.get("accessibility_notes"):
             parts.append(f"Accessibility: {str(a11y)[:150]}")
 
         return "\n".join(parts)
@@ -627,7 +590,13 @@ class CompanyOrchestrator:
         if not self.company_config.skill_learning.enabled:
             return []
         manager = CompanySkillManager(self.state, self.company_config.skill_learning)
-        skills = manager.query_for_task(task, role=task.target)
+        skills = list(manager.query_for_task(task, role=task.target))
+        if task.target == "delivery":
+            seen = {(skill.scope, skill.name) for skill in skills}
+            for skill in manager.query_for_task(task, role="project_management"):
+                if (skill.scope, skill.name) not in seen:
+                    skills.append(skill)
+                    seen.add((skill.scope, skill.name))
         manager.record_skill_usage(skills, role=task.target)
         return manager.format_skill_guidance(skills)
 
@@ -683,9 +652,7 @@ class CompanyOrchestrator:
         return None
 
     async def recover_pending_approvals(self) -> None:
-        await self.approvals.recover_pending_approvals(
-            self._complete_recovered_approval
-        )
+        await self.approvals.recover_pending_approvals(self._complete_recovered_approval)
 
     async def _complete_recovered_approval(
         self, task: CompanyTask, decision: ApprovalDecision
@@ -694,9 +661,7 @@ class CompanyOrchestrator:
             if self._is_release_approval(task):
                 if self.active_project:
                     self.lifecycle.apply(
-                        self.lifecycle.transition_after_approval(
-                            self.active_project, task, False
-                        )
+                        self.lifecycle.transition_after_approval(self.active_project, task, False)
                     )
                 await self._route_release_rejection(task, decision)
             else:
@@ -726,9 +691,7 @@ class CompanyOrchestrator:
     def _prd_content(task: CompanyTask) -> str:
         if isinstance(task.payload, dict):
             return str(
-                task.payload.get("prd_content")
-                or task.payload.get("previous_prd")
-                or task.payload
+                task.payload.get("prd_content") or task.payload.get("previous_prd") or task.payload
             )
         return str(task.payload)
 
@@ -759,9 +722,7 @@ class CompanyOrchestrator:
                 "revision_number": revision_number,
             }
         )
-        engineering_result = (
-            self.active_project.engineering_result if self.active_project else None
-        )
+        engineering_result = self.active_project.engineering_result if self.active_project else None
         return CompanyTask(
             task_id=f"{d.task_id}_qa_revision_{revision_number}",
             origin="qa",
@@ -827,9 +788,7 @@ class CompanyOrchestrator:
             context.setdefault("project_name", self.active_project.name)
             context.setdefault("project_phase", phase or self.active_project.phase)
         payload = {
-            "prd_content": (
-                self.active_project.prd if self.active_project else d.content
-            ),
+            "prd_content": self.active_project.prd if self.active_project else d.content,
             "source_department": d.department,
             "source_artifact_type": d.artifact_type,
             "source_metadata": dict(d.metadata),
@@ -845,9 +804,7 @@ class CompanyOrchestrator:
             origin=d.department,
             target="delivery",
             artifact_type=(
-                d.artifact_type
-                if d.artifact_type in {"prd", "design_spec"}
-                else "general"
+                d.artifact_type if d.artifact_type in {"prd", "design_spec"} else "general"
             ),
             payload=payload,
             blocking=False,
@@ -915,14 +872,16 @@ class CompanyOrchestrator:
                     else task.payload
                 ),
                 "qa_metadata": (
-                    task.payload.get("qa_metadata", {})
-                    if isinstance(task.payload, dict)
-                    else {}
+                    task.payload.get("qa_metadata", {}) if isinstance(task.payload, dict) else {}
                 ),
                 "delivery_plan": (
                     task.payload.get("delivery_plan")
-                    if isinstance(task.payload, dict)
-                    else context.get("delivery_plan")
+                    if isinstance(task.payload, dict) and task.payload.get("delivery_plan")
+                    else (
+                        self.active_project.delivery_plan.to_dict()
+                        if self.active_project and self.active_project.delivery_plan
+                        else context.get("delivery_plan")
+                    )
                 ),
                 "delivery_metadata": (
                     task.payload.get("delivery_metadata", {})
@@ -931,7 +890,7 @@ class CompanyOrchestrator:
                 ),
                 "delivery_handover": (
                     task.payload.get("delivery_handover")
-                    if isinstance(task.payload, dict)
+                    if isinstance(task.payload, dict) and task.payload.get("delivery_handover")
                     else context.get("delivery_handover")
                 ),
                 "environment": context.get("environment", "production"),
@@ -940,7 +899,7 @@ class CompanyOrchestrator:
             context=context,
         )
 
-    async def _handle_delivery_handoff(self, item) -> bool:
+    async def delivery_readiness_gate(self, item) -> bool:
         """Validate Delivery readiness before DevOps receives a release task."""
         metadata = getattr(item, "metadata", {}) or {}
         payload = getattr(item, "payload", {}) or {}
@@ -954,15 +913,15 @@ class CompanyOrchestrator:
             delivery_metadata = {}
         if not delivery_handover and isinstance(metadata, dict):
             delivery_handover = metadata.get("delivery_handover")
-        if (
-            not delivery_handover
-            and self.active_project
-            and self.active_project.delivery_plan
-        ):
+        if not delivery_handover and self.active_project and self.active_project.delivery_plan:
+            plan = self.active_project.delivery_plan
             delivery_handover = {
-                "ready_for_devops": not self.active_project.delivery_plan.critical_blockers,
-                "critical_blockers": self.active_project.delivery_plan.critical_blockers,
-                "delivery_summary": self.active_project.delivery_plan.to_summary(),
+                "ready_for_devops": plan.status == "complete" and not plan.critical_blockers,
+                "critical_blockers": plan.critical_blockers,
+                "delivery_summary": plan.to_summary(),
+                "go_no_go_recommendation": (
+                    "GO" if plan.status == "complete" and not plan.critical_blockers else "NO-GO"
+                ),
             }
         if not delivery_handover:
             return "delivery" not in self.departments
@@ -993,14 +952,16 @@ class CompanyOrchestrator:
             self.state.set_current_phase("delivery")
         return False
 
+    async def _handle_delivery_handoff(self, item) -> bool:
+        """Backward-compatible alias for the Delivery readiness gate."""
+        return await self.delivery_readiness_gate(item)
+
     async def _submit_devops_after_release(self, task: CompanyTask) -> None:
-        if not await self._handle_delivery_handoff(task):
+        if not await self.delivery_readiness_gate(task):
             return
         if self.active_project:
             self.lifecycle.apply(
-                self.lifecycle.transition_after_approval(
-                    self.active_project, task, True
-                )
+                self.lifecycle.transition_after_approval(self.active_project, task, True)
             )
         if "devops" in self.departments:
             await self.submit(self._devops_task(task))
@@ -1017,13 +978,9 @@ class CompanyOrchestrator:
                 "qa_report": d.content,
                 "qa_metadata": dict(d.metadata),
                 "delivery_plan": d.content if d.department == "delivery" else None,
-                "delivery_metadata": (
-                    dict(d.metadata) if d.department == "delivery" else {}
-                ),
+                "delivery_metadata": dict(d.metadata) if d.department == "delivery" else {},
                 "delivery_handover": (
-                    d.metadata.get("delivery_handover")
-                    if d.department == "delivery"
-                    else None
+                    d.metadata.get("delivery_handover") if d.department == "delivery" else None
                 ),
             },
             blocking=True,
@@ -1043,9 +1000,7 @@ class CompanyOrchestrator:
 
         if self.active_project:
             self.lifecycle.apply(
-                self.lifecycle.transition_after_approval(
-                    self.active_project, task, False
-                )
+                self.lifecycle.transition_after_approval(self.active_project, task, False)
             )
         await self._route_release_rejection(task, decision)
 
@@ -1057,9 +1012,7 @@ class CompanyOrchestrator:
             d.payload.get("model") if isinstance(d.payload, dict) else None
         )
         cache_enabled = (
-            d.metadata.get("cache_enabled")
-            if self.company_config.record_caching_stats
-            else None
+            d.metadata.get("cache_enabled") if self.company_config.record_caching_stats else None
         )
         self.state.record_department_tokens(
             d.department,
@@ -1100,19 +1053,28 @@ class CompanyOrchestrator:
                 artifacts.append(f"Delivery: {project.delivery_result.status}")
             if project.deploy_result:
                 artifacts.append(f"Deployment: {project.deploy_result.status}")
-            lines.append(
-                "Artifacts: " + (", ".join(artifacts) if artifacts else "none")
-            )
+            lines.append("Artifacts: " + (", ".join(artifacts) if artifacts else "none"))
+            if getattr(project, "delivery_plan", None):
+                delivery = project.delivery_plan.to_summary()
+                blockers = delivery.get("critical_blockers") or []
+                blocker_text = ", ".join(map(str, blockers)) if blockers else "none"
+                blocker_prefix = "🔴 " if blockers else ""
+                lines.extend(
+                    [
+                        "Delivery:",
+                        f"  Status: {delivery.get('status') or delivery.get('overall_status')}",
+                        f"  Completion: {delivery.get('weighted_completion', delivery.get('completion_percentage', 0))}%",
+                        f"  Next milestone: {delivery.get('next_milestone', 'TBD')}",
+                        f"  Critical blockers: {blocker_prefix}{blocker_text}",
+                    ]
+                )
         lines.append("Departments: " + (", ".join(sorted(self.departments)) or "none"))
         caching_agents = []
         for name in sorted({"coo", *self.departments.keys()}):
             agent_config = self.company_config.get_department_config(name)
             marker = "on" if agent_config.enable_caching else "off"
             caching_agents.append(f"{name}:{marker}")
-        lines.append(
-            "Prompt caching: "
-            + (", ".join(caching_agents) if caching_agents else "none")
-        )
+        lines.append("Prompt caching: " + (", ".join(caching_agents) if caching_agents else "none"))
         lines.append(f"Pending approvals: {len(pending)}")
         if pending:
             for approval in pending:
@@ -1124,8 +1086,7 @@ class CompanyOrchestrator:
                 )
         obs = observability
         lines.append(
-            "Turns per phase: "
-            + json.dumps(obs.get("turns_per_phase", {}), sort_keys=True)
+            "Turns per phase: " + json.dumps(obs.get("turns_per_phase", {}), sort_keys=True)
         )
 
         # Structured token usage per department
@@ -1141,9 +1102,7 @@ class CompanyOrchestrator:
                     cached = rec.get("cached_runs", 0)
                     uncached = rec.get("uncached_runs", 0)
                     cache_info = (
-                        f", {cached} cached/{uncached} uncached"
-                        if (cached + uncached) > 0
-                        else ""
+                        f", {cached} cached/{uncached} uncached" if (cached + uncached) > 0 else ""
                     )
                     lines.append(
                         f"  {dept}: {total:,} tokens "
@@ -1193,9 +1152,7 @@ class CompanyOrchestrator:
         if isinstance(task_data, dict):
             return CompanyTask(
                 task_id=str(task_data.get("task_id") or approval.get("task_id")),
-                origin=str(
-                    task_data.get("origin") or approval.get("department") or "ceo"
-                ),
+                origin=str(task_data.get("origin") or approval.get("department") or "ceo"),
                 target=str(task_data.get("target") or "engineering"),
                 artifact_type=task_data.get("artifact_type", "general"),
                 payload=task_data.get("payload", approval.get("artifact_preview", "")),
@@ -1251,13 +1208,9 @@ class CompanyOrchestrator:
             and task.artifact_type == "prd"
         ):
             project.prd = self._prd_content(task)
-            self.lifecycle.apply(
-                self.lifecycle.transition_after_approval(project, task, True)
-            )
+            self.lifecycle.apply(self.lifecycle.transition_after_approval(project, task, True))
 
-    async def _route_rejection(
-        self, task: CompanyTask, decision: ApprovalDecision
-    ) -> None:
+    async def _route_rejection(self, task: CompanyTask, decision: ApprovalDecision) -> None:
         if task.origin not in self.departments:
             return
 
@@ -1282,18 +1235,12 @@ class CompanyOrchestrator:
 
         if self.active_project and task.origin == "product":
             self.lifecycle.apply(
-                self.lifecycle.transition_after_approval(
-                    self.active_project, task, False
-                )
+                self.lifecycle.transition_after_approval(self.active_project, task, False)
             )
 
-        feedback = (
-            decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
-        )
+        feedback = decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
         reviewer_notes = (
-            decision.metadata.get("reviewer_notes")
-            or decision.metadata.get("notes")
-            or ""
+            decision.metadata.get("reviewer_notes") or decision.metadata.get("notes") or ""
         )
         revision_task = CompanyTask(
             task_id=task.task_id,
@@ -1323,14 +1270,10 @@ class CompanyOrchestrator:
             self.active_project.revision_count = revision_count
         await self._dispatch(revision_task)
 
-    async def _route_release_rejection(
-        self, task: CompanyTask, decision: ApprovalDecision
-    ) -> None:
+    async def _route_release_rejection(self, task: CompanyTask, decision: ApprovalDecision) -> None:
         if "engineering" not in self.departments:
             return
-        feedback = (
-            decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
-        )
+        feedback = decision.metadata.get("feedback") or decision.reason or "Rejected by CEO"
         await self._dispatch(
             CompanyTask(
                 task_id=task.task_id,
@@ -1408,10 +1351,7 @@ class CompanyOrchestrator:
 
             if failed_list:
                 tests_str = ", ".join(str(t) for t in failed_list[:3])
-                summary = (
-                    f"QA failure in '{project.name}': tests [{tests_str}]. "
-                    f"{test_results}"
-                )
+                summary = f"QA failure in '{project.name}': tests [{tests_str}]. " f"{test_results}"
             else:
                 summary = f"QA failure in '{project.name}': {test_results}"
 
@@ -1421,9 +1361,7 @@ class CompanyOrchestrator:
         # Deployment failure from the live devops deliverable
         if d.department == "devops" and d.status == "failure":
             deploy_text = (
-                str(d.payload.get("summary", ""))
-                if isinstance(d.payload, dict)
-                else str(d.payload)
+                str(d.payload.get("summary", "")) if isinstance(d.payload, dict) else str(d.payload)
             )
             if deploy_text:
                 playbook_manager.append_raw(
@@ -1444,9 +1382,7 @@ class CompanyOrchestrator:
             {
                 "project_id": project.project_id,
                 "phase": project.phase,
-                "patterns_extracted": {
-                    cat: len(pats) for cat, pats in patterns.items()
-                },
+                "patterns_extracted": {cat: len(pats) for cat, pats in patterns.items()},
                 "skill_proposals_created": len(skill_proposals),
             },
             "orchestrator",

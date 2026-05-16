@@ -137,14 +137,11 @@ class ContextBuilder:
 
         return "\n".join(result_lines).strip()
 
-
     # ------------------------------------------------------------------
     # Procedural skill retrieval
     # ------------------------------------------------------------------
 
-    def _get_relevant_skills(
-        self, task: CompanyTask, requirements: Iterable[str] | None = None
-    ):
+    def _get_relevant_skills(self, task: CompanyTask, requirements: Iterable[str] | None = None):
         """Return the top shared + role-specific skills for task prompt injection.
 
         Skills are intentionally injected as short summaries instead of full
@@ -168,7 +165,20 @@ class ContextBuilder:
         original_k = manager.config.query_k
         manager.config.query_k = min(max(original_k, 3), _MAX_SKILL_ITEMS)
         try:
-            return manager.query_for_task(task, role=task.target)
+            skills = list(manager.query_for_task(task, role=task.target))
+            requested_roles = [
+                requirement.split(".", 1)[1]
+                for requirement in requirements
+                if requirement.startswith("skills.")
+                and requirement not in {"skills.*", "skills.shared", f"skills.{task.target}"}
+            ]
+            seen = {(skill.scope, skill.name) for skill in skills}
+            for role in requested_roles:
+                for skill in manager.query_for_task(task, role=role):
+                    if (skill.scope, skill.name) not in seen:
+                        skills.append(skill)
+                        seen.add((skill.scope, skill.name))
+            return skills
         finally:
             manager.config.query_k = original_k
 
@@ -197,11 +207,7 @@ class ContextBuilder:
         if want_all:
             categories = None  # PlaybookManager.query() defaults to all
         else:
-            categories = [
-                r.split(".", 1)[1]
-                for r in requirements
-                if r.startswith("playbook.")
-            ]
+            categories = [r.split(".", 1)[1] for r in requirements if r.startswith("playbook.")]
 
         query = self._task_query(task)
         manager = PlaybookManager(self.state)

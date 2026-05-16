@@ -11,7 +11,18 @@ from aider.company.schemas import CompanyTask
 from aider.company.state import CompanyStateManager
 from aider.skills import SkillManager, SkillSummary
 
-COMPANY_SKILL_SCOPES = ("shared", "coo", "product", "ux", "engineering", "reviewer", "qa", "devops")
+COMPANY_SKILL_SCOPES = (
+    "shared",
+    "coo",
+    "product",
+    "ux",
+    "engineering",
+    "reviewer",
+    "qa",
+    "delivery",
+    "project_management",
+    "devops",
+)
 DEFAULT_SKILL_QUERY_K = 5
 
 
@@ -91,9 +102,7 @@ class CompanySkillManager:
         guidance: list[str] = []
         for skill in skills:
             summary = skill.description or skill.title or "No summary available"
-            guidance.append(
-                f"{skill.scope}/{skill.name}: {skill.title} — {summary}".strip()
-            )
+            guidance.append(f"{skill.scope}/{skill.name}: {skill.title} — {summary}".strip())
         return guidance
 
     def record_skill_usage(
@@ -111,9 +120,7 @@ class CompanySkillManager:
             recent = []
         now = datetime.now(timezone.utc).isoformat()
         existing = {
-            (item.get("scope"), item.get("name")): item
-            for item in recent
-            if isinstance(item, dict)
+            (item.get("scope"), item.get("name")): item for item in recent if isinstance(item, dict)
         }
         for skill in used:
             existing[(skill.scope, skill.name)] = {
@@ -154,15 +161,12 @@ class CompanySkillManager:
             ][:recent_limit]
         return {"available": available, "recently_used": recent}
 
-
     def inspect_skills(
         self, *, available_limit: int = 25, recent_limit: int = 10
     ) -> dict[str, Any]:
         """Return UI/COO-friendly detail about approved and recently used skills."""
 
-        summary = self.dashboard_summary(
-            available_limit=available_limit, recent_limit=recent_limit
-        )
+        summary = self.dashboard_summary(available_limit=available_limit, recent_limit=recent_limit)
         proposals = self.list_proposals(status="pending")
         return {
             "enabled": self.config.enabled,

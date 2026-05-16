@@ -519,6 +519,19 @@ class DesktopCompanySession:
         if warehouse_registry.exists():
             active_products = str(warehouse_registry)
         daemon = self.daemon_status()
+        delivery_plan = getattr(self.active_project, "delivery_plan", None)
+        delivery_summary = (
+            delivery_plan.to_summary()
+            if delivery_plan is not None
+            else (
+                getattr(
+                    getattr(self.active_project, "delivery_result", None),
+                    "metadata",
+                    {},
+                )
+                or {}
+            ).get("delivery_summary", {})
+        )
         return {
             "caching": self.caching_status(),
             "coo_status": coo_status.get("status", "unknown"),
@@ -526,17 +539,18 @@ class DesktopCompanySession:
                 "action", "—"
             ),
             "delivery_status": (
-                getattr(
+                delivery_summary.get("overall_status")
+                or getattr(
                     getattr(self.active_project, "delivery_result", None),
                     "status",
                     None,
                 )
-                or (
-                    "active"
-                    if self.current_phase() == "delivery"
-                    else "not started"
-                )
+                or ("active" if self.current_phase() == "delivery" else "not started")
             ),
+            "delivery_summary": delivery_summary,
+            "delivery_completion": delivery_summary.get("completion_percentage", 0),
+            "delivery_next_milestone": delivery_summary.get("next_milestone", "TBD"),
+            "delivery_critical_blockers": delivery_summary.get("critical_blockers", []),
             "pending_escalations": len(pending),
             "daemon": daemon,
             "daemon_status": daemon.get("status", "unknown"),
@@ -1617,6 +1631,14 @@ class AiderPlusDesktop:
                     f"COO status: {overview['coo_status']}",
                     f"Last COO action: {overview['coo_last_action']}",
                     f"Delivery status: {company_label(overview['delivery_status'])}",
+                    f"Delivery completion: {overview.get('delivery_completion', 0)}%",
+                    f"Delivery next milestone: {overview.get('delivery_next_milestone', 'TBD')}",
+                    "Delivery critical blockers: "
+                    + (
+                        ", ".join(overview.get("delivery_critical_blockers") or [])
+                        if overview.get("delivery_critical_blockers")
+                        else "None"
+                    ),
                     f"Pending human escalations: {overview['pending_escalations']}",
                     f"Daemon status: {overview['daemon_status']}",
                     f"Daemon running: {daemon.get('running', False)}",

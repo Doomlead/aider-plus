@@ -232,7 +232,9 @@ class DesignSpec:
             else "None defined"
         )
         style_text = (
-            _json.dumps(self.visual_style, indent=2) if self.visual_style else "Default theme"
+            _json.dumps(self.visual_style, indent=2)
+            if self.visual_style
+            else "Default theme"
         )
         combined_notes = self.accessibility_notes + self.technical_requirements
         return (
@@ -422,7 +424,9 @@ class Timeline:
             summary=str(d.get("summary", "Delivery timeline")),
             start=str(d.get("start")) if d.get("start") is not None else None,
             target_release=(
-                str(d.get("target_release")) if d.get("target_release") is not None else None
+                str(d.get("target_release"))
+                if d.get("target_release") is not None
+                else None
             ),
             cadence=str(d.get("cadence", "daily async check-in")),
             milestones=[Milestone.from_dict(m) for m in d.get("milestones", [])],
@@ -442,21 +446,33 @@ class ProjectPlan:
     dependencies: list[str] = field(default_factory=list)
     cross_department_alignment: list[str] = field(default_factory=list)
     status: str = "on_track"
+    overall_status: str = "on_track"
+    completion_percentage: int = 0
+    critical_blockers: list[str] = field(default_factory=list)
+    next_milestone: Optional[str] = None
     progress_summary: str = ""
     version: str = "1.0"
 
     def to_markdown(self) -> str:
         milestones = "\n\n".join(m.to_markdown() for m in self.milestones) or "- TBD"
         risks = "\n\n".join(r.to_markdown() for r in self.risks) or "- None identified"
-        timeline = self.timeline.to_markdown() if self.timeline else "## Timeline\n- TBD"
+        timeline = (
+            self.timeline.to_markdown() if self.timeline else "## Timeline\n- TBD"
+        )
         return f"""# Delivery Plan: {self.title}
-**Version:** {self.version}  **Status:** {self.status}
+**Version:** {self.version}  **Status:** {self.overall_status or self.status}  **Completion:** {self.completion_percentage}%
 
 ## Objective
 {self.objective}
 
 ## Progress Summary
 {self.progress_summary or 'Initial plan created.'}
+
+## Dashboard Summary
+- **Overall status:** {self.overall_status or self.status}
+- **Completion:** {self.completion_percentage}%
+- **Next milestone:** {self.next_milestone or 'TBD'}
+- **Critical blockers:** {', '.join(self.critical_blockers) if self.critical_blockers else 'None'}
 
 ## Cross-Department Alignment
 {_markdown_bullets(self.cross_department_alignment)}
@@ -473,6 +489,20 @@ class ProjectPlan:
 {risks}
 """
 
+    def to_summary(self) -> dict:
+        """Return the compact delivery dashboard summary."""
+        return {
+            "title": self.title,
+            "overall_status": self.overall_status or self.status,
+            "status": self.status,
+            "completion_percentage": self.completion_percentage,
+            "next_milestone": self.next_milestone or "TBD",
+            "critical_blockers": list(self.critical_blockers),
+            "risk_count": len(self.risks),
+            "milestone_count": len(self.milestones),
+            "progress_summary": self.progress_summary,
+        }
+
     def to_dict(self) -> dict:
         return {
             "title": self.title,
@@ -483,6 +513,10 @@ class ProjectPlan:
             "dependencies": self.dependencies,
             "cross_department_alignment": self.cross_department_alignment,
             "status": self.status,
+            "overall_status": self.overall_status,
+            "completion_percentage": self.completion_percentage,
+            "critical_blockers": self.critical_blockers,
+            "next_milestone": self.next_milestone,
             "progress_summary": self.progress_summary,
             "version": self.version,
         }
@@ -495,13 +529,71 @@ class ProjectPlan:
             objective=str(d.get("objective", "Coordinate delivery.")),
             milestones=[Milestone.from_dict(m) for m in d.get("milestones", [])],
             risks=[RiskRegister.from_dict(r) for r in d.get("risks", [])],
-            timeline=Timeline.from_dict(timeline) if isinstance(timeline, dict) else None,
+            timeline=(
+                Timeline.from_dict(timeline) if isinstance(timeline, dict) else None
+            ),
             dependencies=list(d.get("dependencies", [])),
             cross_department_alignment=list(d.get("cross_department_alignment", [])),
             status=str(d.get("status", "on_track")),
+            overall_status=str(d.get("overall_status", d.get("status", "on_track"))),
+            completion_percentage=int(d.get("completion_percentage", 0) or 0),
+            critical_blockers=list(d.get("critical_blockers", [])),
+            next_milestone=(
+                str(d.get("next_milestone"))
+                if d.get("next_milestone") is not None
+                else None
+            ),
             progress_summary=str(d.get("progress_summary", "")),
             version=str(d.get("version", "1.0")),
         )
+
+
+@dataclass
+class DeliveryHandover:
+    """Explicit release-readiness artifact handed from Delivery to DevOps."""
+
+    project_name: str
+    ready_for_devops: bool
+    delivery_summary: dict
+    release_scope: str = ""
+    critical_blockers: list[str] = field(default_factory=list)
+    rollback_notes: list[str] = field(default_factory=list)
+    environment: str = "production"
+
+    def to_dict(self) -> dict:
+        return {
+            "project_name": self.project_name,
+            "ready_for_devops": self.ready_for_devops,
+            "delivery_summary": self.delivery_summary,
+            "release_scope": self.release_scope,
+            "critical_blockers": self.critical_blockers,
+            "rollback_notes": self.rollback_notes,
+            "environment": self.environment,
+        }
+
+    def to_markdown(self) -> str:
+        blockers = _markdown_bullets(self.critical_blockers, empty="None")
+        rollback = _markdown_bullets(
+            self.rollback_notes, empty="Confirm rollback owner and steps"
+        )
+        return f"""# Delivery → DevOps Handover: {self.project_name}
+**Ready for DevOps:** {'yes' if self.ready_for_devops else 'no'}
+**Environment:** {self.environment}
+
+## Release Scope
+{self.release_scope or 'TBD'}
+
+## Delivery Summary
+- **Status:** {self.delivery_summary.get('overall_status', 'unknown')}
+- **Completion:** {self.delivery_summary.get('completion_percentage', 0)}%
+- **Next milestone:** {self.delivery_summary.get('next_milestone', 'TBD')}
+
+## Critical Blockers
+{blockers}
+
+## Rollback Notes
+{rollback}
+"""
 
 
 @dataclass
@@ -535,6 +627,7 @@ __all__ = [
     "DesignSpec",
     "DesignSpecV2",
     "Deliverable",
+    "DeliveryHandover",
     "DepartmentOutput",
     "EventMessage",
     "Milestone",

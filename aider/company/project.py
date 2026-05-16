@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-from aider.company.schemas import Deliverable
+from aider.company.schemas import Deliverable, ProjectPlan
 
 
 @dataclass
@@ -25,5 +25,6 @@ class Project:
     engineering_result: Optional[Deliverable] = None
     qa_result: Optional[Deliverable] = None
     delivery_result: Optional[Deliverable] = None
+    delivery_plan: Optional[ProjectPlan] = None
     deploy_result: Optional[Deliverable] = None
     revision_count: int = 0

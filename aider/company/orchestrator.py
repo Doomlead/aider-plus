@@ -389,6 +389,27 @@ class CompanyOrchestrator:
                     await self.submit(self._qa_revision_task(d, qa_feedback_dict))
                 return True
 
+            if "delivery" in self.departments:
+                self.lifecycle.apply(self.lifecycle.transition_for_deliverable(project, d))
+                await self.submit(self._delivery_task(d))
+            else:
+                self.state.set_current_phase("release_ready")
+                await self._request_release_approval(d)
+            return True
+
+        if project.phase == "delivery" and d.department == "delivery":
+            project.delivery_result = d
+            self._log_event(
+                "delivery_plan_ready" if d.status == "success" else "delivery_blocked",
+                d.payload,
+                d.department,
+                {"task_id": d.task_id, "status": d.status},
+            )
+            if d.status != "success":
+                self.state.set_current_phase("development")
+                if "engineering" in self.departments:
+                    await self.submit(self._engineering_revision_task(d))
+                return True
             self.lifecycle.apply(self.lifecycle.transition_for_deliverable(project, d))
             await self._request_release_approval(d)
             return True
@@ -745,6 +766,37 @@ class CompanyOrchestrator:
             context=context,
         )
 
+    def _delivery_task(self, d: Deliverable) -> CompanyTask:
+        context = dict(d.metadata.get("context", {}))
+        if self.active_project:
+            context.setdefault("project_name", self.active_project.name)
+        task = CompanyTask(
+            task_id=d.task_id,
+            origin="qa",
+            target="delivery",
+            artifact_type="test_report",
+            payload={
+                "qa_report": d.content,
+                "qa_metadata": dict(d.metadata),
+                "engineering_result": (
+                    self.active_project.engineering_result.content
+                    if self.active_project and self.active_project.engineering_result
+                    else None
+                ),
+                "engineering_metadata": (
+                    dict(self.active_project.engineering_result.metadata)
+                    if self.active_project and self.active_project.engineering_result
+                    else {}
+                ),
+                "prd_content": self.active_project.prd if self.active_project else "",
+            },
+            blocking=False,
+            context=context,
+        )
+        task.context["playbook_guidance"] = self._get_relevant_playbooks(task)
+        task.context["skill_guidance"] = self._get_relevant_skills(task)
+        return task
+
     def _devops_task(self, task: CompanyTask) -> CompanyTask:
         context = dict(task.context)
         if self.active_project:
@@ -773,6 +825,16 @@ class CompanyOrchestrator:
                 "qa_metadata": (
                     task.payload.get("qa_metadata", {}) if isinstance(task.payload, dict) else {}
                 ),
+                "delivery_plan": (
+                    task.payload.get("delivery_plan")
+                    if isinstance(task.payload, dict)
+                    else context.get("delivery_plan")
+                ),
+                "delivery_metadata": (
+                    task.payload.get("delivery_metadata", {})
+                    if isinstance(task.payload, dict)
+                    else {}
+                ),
                 "environment": context.get("environment", "production"),
             },
             blocking=False,
@@ -792,12 +854,16 @@ class CompanyOrchestrator:
     async def _request_release_approval(self, d: Deliverable) -> None:
         task = CompanyTask(
             task_id=f"{d.task_id}:release",
-            origin="qa",
+            origin=d.department,
             target="engineering",
             artifact_type="test_report",
             payload={
                 "qa_report": d.content,
                 "qa_metadata": dict(d.metadata),
+                "delivery_plan": d.content if d.department == "delivery" else None,
+                "delivery_metadata": (
+                    dict(d.metadata) if d.department == "delivery" else {}
+                ),
             },
             blocking=True,
             context={
@@ -865,6 +931,8 @@ class CompanyOrchestrator:
                 artifacts.append(f"Engineering: {project.engineering_result.status}")
             if project.qa_result:
                 artifacts.append(f"QA: {project.qa_result.status}")
+            if getattr(project, "delivery_result", None):
+                artifacts.append(f"Delivery: {project.delivery_result.status}")
             if project.deploy_result:
                 artifacts.append(f"Deployment: {project.deploy_result.status}")
             lines.append("Artifacts: " + (", ".join(artifacts) if artifacts else "none"))
@@ -1263,6 +1331,8 @@ class CompanyOrchestrator:
             return "engineering_complete"
         if event_type == "deliverable_produced" and department == "qa":
             return "qa_complete"
+        if event_type == "deliverable_produced" and department == "delivery":
+            return "delivery_plan_ready"
         if event_type == "deliverable_produced" and department == "devops":
             return "deployment_complete"
         return event_type

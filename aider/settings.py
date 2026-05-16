@@ -13,6 +13,7 @@ COMPANY_AGENT_NAMES = (
     "engineering",
     "reviewer",
     "qa",
+    "delivery",
     "devops",
 )
 PRIMARY_PROVIDER_API_KEYS = (

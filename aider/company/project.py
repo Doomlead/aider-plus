@@ -13,6 +13,7 @@ class Project:
         "design",
         "development",
         "qa",
+        "delivery",
         "release_ready",
         "deploying",
         "post_mortem",
@@ -23,5 +24,6 @@ class Project:
     design_spec: Optional[dict] = None
     engineering_result: Optional[Deliverable] = None
     qa_result: Optional[Deliverable] = None
+    delivery_result: Optional[Deliverable] = None
     deploy_result: Optional[Deliverable] = None
     revision_count: int = 0

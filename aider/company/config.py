@@ -135,6 +135,10 @@ def default_company_config() -> CompanyConfig:
                 name="qa",
                 enable_caching=False,
             ),
+            "delivery": DepartmentConfig(
+                name="delivery",
+                enable_caching=True,
+            ),
             "devops": DepartmentConfig(
                 name="devops",
                 enable_caching=False,
@@ -149,7 +153,7 @@ def default_company_config() -> CompanyConfig:
 DEFAULT_COMPANY_CONFIG = default_company_config()
 
 
-_COMPANY_AGENT_NAMES = ("coo", "product", "ux", "engineering", "reviewer", "qa", "devops")
+_COMPANY_AGENT_NAMES = ("coo", "product", "ux", "engineering", "reviewer", "qa", "delivery", "devops")
 
 
 def _parse_bool_env(value: str) -> bool | None:

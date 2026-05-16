@@ -24,6 +24,7 @@ from aider.company.audit import AuditLogViewer
 from aider.company.config import apply_agent_model_overrides_from_env
 from aider.company.coo import NanobotCOO
 from aider.company.daemon import CompanyDaemonError, load_daemon
+from aider.company.departments.delivery import DeliveryDepartment
 from aider.company.departments.devops import DevOpsDepartment
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
@@ -57,6 +58,7 @@ AGENT_DISPLAY_NAMES = {
     "coo": "COO",
     "ux": "UX",
     "qa": "QA",
+    "delivery": "Delivery",
     "devops": "DevOps",
 }
 
@@ -81,6 +83,7 @@ AGENT_ICONS = {
     "Engineering": "🛠️",
     "Reviewer": "🔎",
     "QA": "✅",
+    "Delivery": "🗓️",
     "DevOps": "🚀",
 }
 
@@ -90,6 +93,7 @@ COMPANY_PHASES = [
     "design",
     "development",
     "qa",
+    "delivery",
     "release_ready",
     "deploying",
     "post_mortem",
@@ -274,6 +278,10 @@ class DesktopCompanySession:
             project_memory=project_memory,
             agent_loop=agent_loops["qa"],
         )
+        self.delivery = DeliveryDepartment(
+            project_memory=project_memory,
+            agent_loop=agent_loops["delivery"],
+        )
         self.devops = DevOpsDepartment(
             project_memory=project_memory,
             agent_loop=agent_loops["devops"],
@@ -288,6 +296,7 @@ class DesktopCompanySession:
             self.ux,
             self.engineering,
             self.qa,
+            self.delivery,
             self.devops,
         ):
             self.orchestrator.register(department)
@@ -300,6 +309,7 @@ class DesktopCompanySession:
             self.ux,
             self.engineering,
             self.qa,
+            self.delivery,
             self.devops,
         ):
             self.submit_background(
@@ -615,6 +625,18 @@ class DesktopCompanySession:
             "coo_last_action": (coo_status.get("last_coo_action") or {}).get(
                 "action", "—"
             ),
+            "delivery_status": (
+                getattr(
+                    getattr(self.active_project, "delivery_result", None),
+                    "status",
+                    None,
+                )
+                or (
+                    "active"
+                    if self.current_phase() == "delivery"
+                    else "not started"
+                )
+            ),
             "pending_escalations": len(pending),
             "daemon": daemon,
             "daemon_status": daemon.get("status", "unknown"),
@@ -674,6 +696,7 @@ class DesktopCompanySession:
         for attr, label in (
             ("engineering_result", "Engineering output"),
             ("qa_result", "QA results"),
+            ("delivery_result", "Delivery plan"),
             ("deploy_result", "Deployment"),
         ):
             deliverable = getattr(project, attr, None)
@@ -1346,11 +1369,15 @@ class GUI:
         metrics = company.dashboard_metrics(turns_this_session=self.count_user_turns())
         overview = company.system_overview()
         st.subheader("System Overview")
-        o1, o2, o3, o4 = st.columns(4)
+        o1, o2, o3, o4, o5 = st.columns(5)
         o1.metric("COO status", overview["coo_status"])
         o2.metric("Last COO action", overview["coo_last_action"])
-        o3.metric("Pending escalations", overview["pending_escalations"])
-        o4.metric("Daemon status", overview["daemon_status"])
+        o3.metric(
+            "Delivery status",
+            humanize_company_label(overview["delivery_status"]),
+        )
+        o4.metric("Pending escalations", overview["pending_escalations"])
+        o5.metric("Daemon status", overview["daemon_status"])
         with st.container(border=True):
             st.write(f"**Caching enabled:** {overview['caching']}")
             st.write(

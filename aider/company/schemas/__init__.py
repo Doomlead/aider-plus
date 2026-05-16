@@ -274,6 +274,236 @@ class DesignSpec:
         )
 
 
+def _markdown_bullets(items: list[str], empty: str = "TBD") -> str:
+    return "\n".join(f"- {item}" for item in items) if items else f"- {empty}"
+
+
+@dataclass
+class Milestone:
+    """Delivery milestone with status and ownership metadata."""
+
+    name: str
+    description: str = ""
+    owner: str = "delivery"
+    status: str = "pending"
+    due: Optional[str] = None
+    dependencies: list[str] = field(default_factory=list)
+    exit_criteria: list[str] = field(default_factory=list)
+
+    def to_markdown(self) -> str:
+        due = f" (due: {self.due})" if self.due else ""
+        return (
+            f"### {self.name}{due}\n"
+            f"- **Owner:** {self.owner}\n"
+            f"- **Status:** {self.status}\n"
+            f"- **Description:** {self.description or 'TBD'}\n"
+            f"- **Dependencies:** {', '.join(self.dependencies) if self.dependencies else 'None'}\n"
+            f"- **Exit criteria:**\n{_markdown_bullets(self.exit_criteria)}"
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "owner": self.owner,
+            "status": self.status,
+            "due": self.due,
+            "dependencies": self.dependencies,
+            "exit_criteria": self.exit_criteria,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Milestone":
+        return cls(
+            name=str(d.get("name", "Milestone")),
+            description=str(d.get("description", "")),
+            owner=str(d.get("owner", "delivery")),
+            status=str(d.get("status", "pending")),
+            due=str(d.get("due")) if d.get("due") is not None else None,
+            dependencies=list(d.get("dependencies", [])),
+            exit_criteria=list(d.get("exit_criteria", [])),
+        )
+
+
+@dataclass
+class RiskRegister:
+    """Structured delivery risk entry for tracking probability, impact, and mitigation."""
+
+    risk_id: str
+    description: str
+    severity: str = "medium"
+    probability: str = "medium"
+    impact: str = "medium"
+    owner: str = "delivery"
+    mitigation: str = ""
+    status: str = "open"
+    blockers: list[str] = field(default_factory=list)
+
+    def to_markdown(self) -> str:
+        return (
+            f"### {self.risk_id}: {self.description}\n"
+            f"- **Severity:** {self.severity}\n"
+            f"- **Probability:** {self.probability}\n"
+            f"- **Impact:** {self.impact}\n"
+            f"- **Owner:** {self.owner}\n"
+            f"- **Status:** {self.status}\n"
+            f"- **Mitigation:** {self.mitigation or 'TBD'}\n"
+            f"- **Blockers:** {', '.join(self.blockers) if self.blockers else 'None'}"
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "risk_id": self.risk_id,
+            "description": self.description,
+            "severity": self.severity,
+            "probability": self.probability,
+            "impact": self.impact,
+            "owner": self.owner,
+            "mitigation": self.mitigation,
+            "status": self.status,
+            "blockers": self.blockers,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RiskRegister":
+        return cls(
+            risk_id=str(d.get("risk_id", d.get("id", "RISK-1"))),
+            description=str(d.get("description", "Delivery risk")),
+            severity=str(d.get("severity", "medium")),
+            probability=str(d.get("probability", "medium")),
+            impact=str(d.get("impact", "medium")),
+            owner=str(d.get("owner", "delivery")),
+            mitigation=str(d.get("mitigation", "")),
+            status=str(d.get("status", "open")),
+            blockers=list(d.get("blockers", [])),
+        )
+
+
+@dataclass
+class Timeline:
+    """Project timeline summary owned by Delivery / Project Management."""
+
+    summary: str
+    start: Optional[str] = None
+    target_release: Optional[str] = None
+    cadence: str = "daily async check-in"
+    milestones: list[Milestone] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+
+    def to_markdown(self) -> str:
+        milestones = "\n\n".join(m.to_markdown() for m in self.milestones) or "- TBD"
+        return f"""## Timeline
+{self.summary}
+
+- **Start:** {self.start or 'TBD'}
+- **Target release:** {self.target_release or 'TBD'}
+- **Cadence:** {self.cadence}
+
+### Assumptions
+{_markdown_bullets(self.assumptions)}
+
+### Milestones
+{milestones}
+"""
+
+    def to_dict(self) -> dict:
+        return {
+            "summary": self.summary,
+            "start": self.start,
+            "target_release": self.target_release,
+            "cadence": self.cadence,
+            "milestones": [m.to_dict() for m in self.milestones],
+            "assumptions": self.assumptions,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Timeline":
+        return cls(
+            summary=str(d.get("summary", "Delivery timeline")),
+            start=str(d.get("start")) if d.get("start") is not None else None,
+            target_release=(
+                str(d.get("target_release")) if d.get("target_release") is not None else None
+            ),
+            cadence=str(d.get("cadence", "daily async check-in")),
+            milestones=[Milestone.from_dict(m) for m in d.get("milestones", [])],
+            assumptions=list(d.get("assumptions", [])),
+        )
+
+
+@dataclass
+class ProjectPlan:
+    """Delivery-owned plan that coordinates scope, milestones, timeline, and risks."""
+
+    title: str
+    objective: str
+    milestones: list[Milestone] = field(default_factory=list)
+    risks: list[RiskRegister] = field(default_factory=list)
+    timeline: Optional[Timeline] = None
+    dependencies: list[str] = field(default_factory=list)
+    cross_department_alignment: list[str] = field(default_factory=list)
+    status: str = "on_track"
+    progress_summary: str = ""
+    version: str = "1.0"
+
+    def to_markdown(self) -> str:
+        milestones = "\n\n".join(m.to_markdown() for m in self.milestones) or "- TBD"
+        risks = "\n\n".join(r.to_markdown() for r in self.risks) or "- None identified"
+        timeline = self.timeline.to_markdown() if self.timeline else "## Timeline\n- TBD"
+        return f"""# Delivery Plan: {self.title}
+**Version:** {self.version}  **Status:** {self.status}
+
+## Objective
+{self.objective}
+
+## Progress Summary
+{self.progress_summary or 'Initial plan created.'}
+
+## Cross-Department Alignment
+{_markdown_bullets(self.cross_department_alignment)}
+
+## Dependencies
+{_markdown_bullets(self.dependencies, empty='None')}
+
+{timeline}
+
+## Milestone Tracker
+{milestones}
+
+## Risk Register
+{risks}
+"""
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "objective": self.objective,
+            "milestones": [m.to_dict() for m in self.milestones],
+            "risks": [r.to_dict() for r in self.risks],
+            "timeline": self.timeline.to_dict() if self.timeline else None,
+            "dependencies": self.dependencies,
+            "cross_department_alignment": self.cross_department_alignment,
+            "status": self.status,
+            "progress_summary": self.progress_summary,
+            "version": self.version,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ProjectPlan":
+        timeline = d.get("timeline")
+        return cls(
+            title=str(d.get("title", "Delivery Plan")),
+            objective=str(d.get("objective", "Coordinate delivery.")),
+            milestones=[Milestone.from_dict(m) for m in d.get("milestones", [])],
+            risks=[RiskRegister.from_dict(r) for r in d.get("risks", [])],
+            timeline=Timeline.from_dict(timeline) if isinstance(timeline, dict) else None,
+            dependencies=list(d.get("dependencies", [])),
+            cross_department_alignment=list(d.get("cross_department_alignment", [])),
+            status=str(d.get("status", "on_track")),
+            progress_summary=str(d.get("progress_summary", "")),
+            version=str(d.get("version", "1.0")),
+        )
+
+
 @dataclass
 class CompanyTask:
     task_id: str
@@ -285,6 +515,7 @@ class CompanyTask:
         "design_spec",
         "code",
         "test_report",
+        "delivery_plan",
         "deploy_request",
         "memo",
         "clarification",
@@ -306,7 +537,11 @@ __all__ = [
     "Deliverable",
     "DepartmentOutput",
     "EventMessage",
+    "Milestone",
+    "ProjectPlan",
     "PRD",
     "ProcessResult",
     "QAFeedback",
+    "RiskRegister",
+    "Timeline",
 ]

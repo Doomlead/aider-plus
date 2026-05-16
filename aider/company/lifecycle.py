@@ -92,9 +92,30 @@ class LifecycleEngine:
         ("qa", "deliverable_done", "qa", None): LifecycleTransition(
             "qa",
             "deliverable_done",
-            "release_ready",
+            "delivery",
             department="qa",
-            description="QA report creates a release approval gate.",
+            description="QA report moves to Delivery coordination before release approval.",
+        ),
+        ("delivery", "deliverable_done", "delivery", None): LifecycleTransition(
+            "delivery",
+            "deliverable_done",
+            "release_ready",
+            department="delivery",
+            description="Delivery plan creates a release approval gate.",
+        ),
+        ("release_ready", "approval_approved", "delivery", None): LifecycleTransition(
+            "release_ready",
+            "approval_approved",
+            "deploying",
+            department="delivery",
+            description="Delivery-approved release starts deployment.",
+        ),
+        ("release_ready", "approval_rejected", "delivery", None): LifecycleTransition(
+            "release_ready",
+            "approval_rejected",
+            "development",
+            department="delivery",
+            description="Delivery release rejection routes back to Engineering.",
         ),
         ("release_ready", "approval_approved", "qa", None): LifecycleTransition(
             "release_ready",
@@ -163,6 +184,8 @@ class LifecycleEngine:
             else "deliverable_failure"
         )
         if project.phase == "qa" and deliverable.department == "qa":
+            event = "deliverable_done"
+        elif project.phase == "delivery" and deliverable.department == "delivery":
             event = "deliverable_done"
         elif project.phase == "deploying" and deliverable.department == "devops":
             event = "deliverable_done"

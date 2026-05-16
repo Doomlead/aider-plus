@@ -1446,7 +1446,7 @@ class NanobotCOO:
             "Use available Procedural Skills from the task payload when they match "
             "the CEO's request; they are lightweight operating procedures, not "
             "extra departments. "
-            "Do not replace Product, UX, Engineering, QA, DevOps, or the "
+            "Do not replace Product, UX, Engineering, QA, Delivery, DevOps, or the "
             "CompanyOrchestrator. When execution belongs to the internal company, choose "
             "action=delegate_company_task and select exactly one company_target from the "
             f"available departments: {', '.join(departments)}.\n"
@@ -1816,6 +1816,7 @@ class NanobotCOO:
         prompt_lower = prompt.lower()
         keyword_routes = (
             ("qa", ("test", "tests", "qa", "quality", "bug reproduction")),
+            ("delivery", ("delivery", "project management", "timeline", "milestone", "risk", "blocker", "coordination")),
             ("devops", ("deploy", "deployment", "ci", "release", "docker")),
             ("ux", ("design", "ux", "ui", "wireframe", "accessibility")),
             ("product", ("prd", "requirements", "product", "spec")),

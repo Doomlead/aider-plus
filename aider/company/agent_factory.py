@@ -18,6 +18,7 @@ DEPARTMENT_AGENT_NAMES = (
     "engineering",
     "reviewer",
     "qa",
+    "delivery",
     "devops",
 )
 COMPANY_AGENT_ROLE_NAMES = DEPARTMENT_AGENT_NAMES

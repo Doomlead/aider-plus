@@ -55,7 +55,9 @@ class UXDepartment(Department):
                 "UX Schema Gate failed (attempt %s). Retrying...", self._retry_count
             )
             rejection_feedback = gate_result.to_engineering_rejection_payload()
-            raw_spec = await self._generate_design_spec(task, feedback=rejection_feedback)
+            raw_spec = await self._generate_design_spec(
+                task, feedback=rejection_feedback
+            )
             gate_result = validator.validate(raw_spec)
 
         # 3. Failure path
@@ -75,7 +77,9 @@ class UXDepartment(Department):
 
         # 4. Success path
         structured_spec = (
-            gate_result.parsed_spec.model_dump() if gate_result.parsed_spec else raw_spec
+            gate_result.parsed_spec.model_dump()
+            if gate_result.parsed_spec
+            else raw_spec
         )
 
         await self._emit_lifecycle_event(
@@ -105,9 +109,11 @@ class UXDepartment(Department):
             task_id=task.task_id,
             department=self.name,
             artifact_type="design_spec",
-            payload=json.dumps(raw_spec, indent=2)
-            if isinstance(raw_spec, dict)
-            else str(raw_spec),
+            payload=(
+                json.dumps(raw_spec, indent=2)
+                if isinstance(raw_spec, dict)
+                else str(raw_spec)
+            ),
             status="success",
             metadata={
                 "design_spec_structured": structured_spec,
@@ -132,7 +138,6 @@ class UXDepartment(Department):
             "You are an expert UX Designer. Create a complete, structured design "
             "specification. Consult available Procedural Skills when their summaries "
             f"match the UX task.\n\n"
-
             f"PRD / Requirements:\n{prd_context}\n\n"
             f"Procedural Skills Available:\n{skill_guidance or 'None'}\n\n"
             f"{feedback or ''}\n\n"
@@ -170,9 +175,11 @@ class UXDepartment(Department):
             # Minimal fallback
             return {
                 "title": "Design Specification",
-                "overview": str(content)[:500]
-                if isinstance(content, str)
-                else "Generation failed",
+                "overview": (
+                    str(content)[:500]
+                    if isinstance(content, str)
+                    else "Generation failed"
+                ),
                 "screens": [],
                 "components": [],
                 "global_state_management": "Unknown",
@@ -181,7 +188,9 @@ class UXDepartment(Department):
 
     def _get_prd_context(self, task: CompanyTask) -> str:
         payload = task.payload if isinstance(task.payload, dict) else {}
-        context = task.context if isinstance(getattr(task, "context", None), dict) else {}
+        context = (
+            task.context if isinstance(getattr(task, "context", None), dict) else {}
+        )
 
         prd = context.get("prd_structured") or payload.get("prd_structured")
         if isinstance(prd, dict):
@@ -197,6 +206,14 @@ class UXDepartment(Department):
             or payload.get("original_request")
             or str(task.payload)
         )
+
+    @staticmethod
+    def _format_skill_guidance(context: dict) -> str:
+        guidance = context.get("skill_guidance", [])
+        if not guidance:
+            return ""
+        items = guidance if isinstance(guidance, list) else [guidance]
+        return "\n".join(f"- {str(item)[:240]}" for item in items[:5])
 
     @staticmethod
     def _result_content(result):

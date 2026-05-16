@@ -2,7 +2,7 @@
 
 Aider Plus is a Git-native product studio built on top of Aider. It keeps the
 core Aider workflow—real repositories, diffs, branches, tests, commits, and
-reviewable changes—then adds a Company Mode, a Nanobot-style COO assistant,
+reviewable changes—then adds Company Mode, an operations assistant,
 warehouse-backed product creation, browser and desktop control surfaces, local
 memory, skills, MCP tooling, Discord/headless adapters, and an issue-driven
 Company daemon.
@@ -15,10 +15,12 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
 
 ## What Aider Plus adds to upstream Aider
 
-- **Company Mode:** a Product → UX → Engineering → Reviewer → QA → DevOps
-  workflow for turning ideas, issues, or chat requests into implementation plans,
-  code changes, validation notes, release guidance, and audit trails.
-- **Nanobot-style COO:** a CEO-facing assistant layer that can answer directly,
+- **Company Mode:** a Product → UX → Delivery → Engineering → Reviewer → QA →
+  Delivery → DevOps workflow for turning ideas, issues, or chat requests into
+  implementation plans, code changes, validation notes, release guidance, and
+  audit trails. Delivery owns timelines, milestones, blockers, release readiness,
+  and the explicit DevOps handoff.
+- **Operations assistant:** a CEO-facing assistant layer that can answer directly,
   ask clarifying questions, remember context, inspect project state, inspect
   learned skills, list daemon workflow state, route work to departments, report
   status, and surface queue/error telemetry.
@@ -30,7 +32,8 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
   and internal admin tools.
 - **Browser and native desktop GUIs:** shared Company dashboards, direct chat,
   per-agent chat tabs, settings editors, approvals, audit views, memory views,
-  skill quick views, daemon status/proof-of-work panels, and guide pages.
+  Delivery summaries, skill quick views, daemon status/proof-of-work panels, and
+  guide pages.
 - **Headless and chat-adapter operation:** `--headless`/`--bot-mode` supports
   scripted tasks, queues, CI, services, Discord, and future chat adapters.
 - **Durable local memory:** conversation summaries, project memory, retrieval,
@@ -41,7 +44,7 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
   generated from successful audit/playbook patterns.
 - **MCP integration:** department agent loops can use Model Context Protocol
   tools through approval-aware adapters and manager configuration.
-- **Company daemon:** a Symphony-inspired daemon can pull eligible issues from a
+- **Company daemon:** an issue workflow daemon can pull eligible issues from a
   local JSON tracker, prepare per-issue workspaces, run Company prompts, write
   proof-of-work artifacts, update tracker state, and require human review.
 
@@ -250,8 +253,8 @@ run the Company implementation loop inside that product repo.
 aider company daemon --workflow PATH [--once] [--dry-run] [--status]
 ```
 
-Run one Symphony-inspired daemon tick for an issue-backed workflow, preview it
-with `--dry-run`, or print run/workspace status with `--status`.
+Run one issue-workflow daemon tick for an issue-backed workflow, preview it with
+`--dry-run`, or print run/workspace status with `--status`.
 
 ### Warehouse commands
 
@@ -286,9 +289,9 @@ User / CEO
 CLI, Browser GUI, Desktop GUI, API/MCP, daemon, or chat adapter
   |
   v
-NanobotCOO personal-assistant loop
-  |  - reads durable COO session history
-  |  - pulls COO profile, project memory, skills, and warehouse context
+Operations assistant loop
+  |  - reads durable assistant session history
+  |  - pulls assistant profile, project memory, skills, and warehouse context
   |  - decides whether to answer, clarify, remember, inspect, use tools, or delegate
   |
   +--> direct response / clarification / memory update / status brief
@@ -297,7 +300,7 @@ NanobotCOO personal-assistant loop
 CompanyOrchestrator
   |
   v
-Product -> UX -> Engineering -> Reviewer -> QA -> DevOps
+Product -> UX -> Delivery -> Engineering -> Reviewer -> QA -> Delivery -> DevOps
   |
   v
 Git-backed product repo + deliverables + audit log + approvals + memory
@@ -528,7 +531,7 @@ Useful checks:
 
 ```bash
 python -m py_compile aider/company/templates.py aider/company/warehouse.py aider/company/cli.py aider/company/daemon.py aider/company/workflow.py aider/company/tracker.py aider/main.py
-python -m pytest tests/company/test_warehouse_cli.py tests/company/test_zero_to_mvp_cli.py tests/company/test_symphony_daemon.py
+python -m pytest tests/company/test_warehouse_cli.py tests/company/test_zero_to_mvp_cli.py tests/company/test_delivery_department.py
 ```
 
 Important files:
@@ -536,10 +539,10 @@ Important files:
 - `aider/company/templates.py` — zero-to-MVP prompts and template starter structures.
 - `aider/company/warehouse.py` — thin warehouse registry for Git-backed product repos.
 - `aider/company/cli.py` — `aider company ...` and `aider warehouse ...` parsing/handlers.
-- `aider/company/coo.py` — Nanobot-style COO sessions, action decisions, memory, status, bus, retry, and delegation.
+- `aider/company/coo.py` — operations-assistant sessions, action decisions, memory, status, bus, retry, and delegation.
 - `aider/company/orchestrator.py` — workflow, approvals, lifecycle, context, handoffs, and audit coordination.
-- `aider/company/departments/` — Product, UX, Engineering, Reviewer, QA, and DevOps implementations.
-- `aider/company/daemon.py` — Symphony-inspired issue daemon, run state, proof-of-work, and workspace handling.
+- `aider/company/departments/` — Product, UX, Engineering, Reviewer, QA, Delivery, and DevOps implementations.
+- `aider/company/daemon.py` — issue daemon, run state, proof-of-work, and workspace handling.
 - `aider/company/workflow.py` — daemon workflow file parsing, hooks, and prompt rendering.
 - `aider/company/tracker.py` — tracker abstraction and local JSON tracker adapter.
 - `aider/company/skills.py` — role-scoped skill retrieval, usage tracking, and proposal approval.
@@ -655,8 +658,6 @@ focuses on functional, test, integration, and non-README documentation changes.
 - `97b1cf7` — Hardened UX structured output handling.
 - `dd574f2` — Refactored the desktop app to native Tkinter.
 - `36b8061` — Added browser UI settings and an agent prompt box.
-- `6289ff6` — Added Nanobot-inspired COO agent orchestration.
-- `f320fbc` — Refactored NanobotCOO routing coordination.
 - `c627a7a` — Added COO status observability surfaces.
 - `f3dc31e` — Improved Product PRD revision handling.
 - `bc1faf2` — Added Company agent prompt caching configuration.
@@ -668,7 +669,6 @@ focuses on functional, test, integration, and non-README documentation changes.
 - `fbc97b3` — Documented desktop GUI tabs and fields.
 - `7e3d44b` — Polished desktop guide placement and agent labels.
 - `9595966` — Added the optional MCP integration layer.
-- `e2d6d2e` — Made the Nanobot COO a CEO assistant layer.
 - `be2873e` — Added an initial zero-to-MVP Company create flow.
 - `9983101` — Extended the zero-to-MVP Company create flow.
 - `c600ffe` — Added the product warehouse manager.
@@ -677,4 +677,3 @@ focuses on functional, test, integration, and non-README documentation changes.
 - `c5d43a1` — Added product warehouse scaffolding.
 - `cf0c5ba` — Polished settings UI and added Discord token configuration.
 - `1f0b86c` — Improved Company skill retrieval and dashboard visibility.
-- `ec4eb23` — Added the Symphony-inspired Company daemon.

@@ -95,8 +95,52 @@ def test_delivery_progress_updates_release_ready_and_round_trips_schema(tmp_path
     assert plan.status == "release_ready"
     assert "Engineering and QA artifacts are available" in plan.progress_summary
     assert any(m.name == "Release handoff prepared" for m in plan.milestones)
-    assert (
-        plan.to_dict()["timeline"]["cadence"]
-        == "daily async check-in until release"
-    )
+    assert plan.to_dict()["timeline"]["cadence"] == "daily async check-in until release"
     assert "## Risk Register" in plan.to_markdown()
+
+
+def test_delivery_proactive_planning_tracks_early_phase_without_blocking(tmp_path):
+    department = DeliveryDepartment(ProjectMemory(str(tmp_path)))
+    task = make_task(
+        payload={"engineering_result": None, "qa_report": None, "qa_metadata": {}},
+        context={"project_phase": "prototyping"},
+    )
+    task.origin = "product"
+    task.artifact_type = "prd"
+
+    deliverable = asyncio.run(department.process(task))
+    summary = deliverable.metadata["delivery_summary"]
+
+    assert deliverable.status == "success"
+    assert deliverable.metadata["ready_for_devops"] is False
+    assert "handoff_to" not in deliverable.metadata
+    assert summary["overall_status"] == "planning"
+    assert summary["completion_percentage"] < 100
+    assert summary["next_milestone"] in {
+        "Engineering implementation ready",
+        "QA verification complete",
+    }
+    assert deliverable.metadata["critical_blockers"] == []
+
+
+def test_delivery_health_assessment_exposes_blockers_and_summary(tmp_path):
+    department = DeliveryDepartment(ProjectMemory(str(tmp_path)))
+    task = make_task(payload={"qa_report": None, "qa_metadata": {}})
+    plan = department._run_delivery_cycle(task)
+
+    assert plan.overall_status == "blocked"
+    assert plan.completion_percentage < 100
+    assert plan.critical_blockers == ["qa_report"]
+    assert plan.to_summary()["critical_blockers"] == ["qa_report"]
+    assert "Critical blockers" in plan.to_markdown()
+
+
+def test_delivery_handover_to_devops_requires_release_ready_plan(tmp_path):
+    department = DeliveryDepartment(ProjectMemory(str(tmp_path)))
+    deliverable = asyncio.run(department.process(make_task()))
+    handover = deliverable.metadata["delivery_handover"]
+
+    assert handover["ready_for_devops"] is True
+    assert handover["project_name"] == "Invite Flow"
+    assert handover["delivery_summary"]["completion_percentage"] == 100
+    assert handover["critical_blockers"] == []

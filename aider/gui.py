@@ -619,6 +619,19 @@ class DesktopCompanySession:
         if warehouse_registry.exists():
             active_products = str(warehouse_registry)
         daemon = self.daemon_status()
+        delivery_plan = getattr(self.active_project, "delivery_plan", None)
+        delivery_summary = (
+            delivery_plan.to_summary()
+            if delivery_plan is not None
+            else (
+                getattr(
+                    getattr(self.active_project, "delivery_result", None),
+                    "metadata",
+                    {},
+                )
+                or {}
+            ).get("delivery_summary", {})
+        )
         return {
             "caching": self.caching_status(),
             "coo_status": coo_status.get("status", "unknown"),
@@ -626,17 +639,18 @@ class DesktopCompanySession:
                 "action", "—"
             ),
             "delivery_status": (
-                getattr(
+                delivery_summary.get("overall_status")
+                or getattr(
                     getattr(self.active_project, "delivery_result", None),
                     "status",
                     None,
                 )
-                or (
-                    "active"
-                    if self.current_phase() == "delivery"
-                    else "not started"
-                )
+                or ("active" if self.current_phase() == "delivery" else "not started")
             ),
+            "delivery_summary": delivery_summary,
+            "delivery_completion": delivery_summary.get("completion_percentage", 0),
+            "delivery_next_milestone": delivery_summary.get("next_milestone", "TBD"),
+            "delivery_critical_blockers": delivery_summary.get("critical_blockers", []),
             "pending_escalations": len(pending),
             "daemon": daemon,
             "daemon_status": daemon.get("status", "unknown"),
@@ -1375,6 +1389,7 @@ class GUI:
         o3.metric(
             "Delivery status",
             humanize_company_label(overview["delivery_status"]),
+            f"{overview['delivery_completion']}% complete",
         )
         o4.metric("Pending escalations", overview["pending_escalations"])
         o5.metric("Daemon status", overview["daemon_status"])
@@ -1384,6 +1399,17 @@ class GUI:
                 f"**Active warehouse products:** {overview['active_warehouse_products']}"
             )
             st.write(f"**MCP status:** {overview['mcp_status']}")
+            blockers = overview.get("delivery_critical_blockers") or []
+            st.write(
+                f"**Delivery completion:** {overview.get('delivery_completion', 0)}%"
+            )
+            st.write(
+                f"**Delivery next milestone:** {overview.get('delivery_next_milestone', 'TBD')}"
+            )
+            st.write(
+                "**Delivery critical blockers:** "
+                + (", ".join(blockers) if blockers else "None")
+            )
             st.write(
                 "**Daemon:** "
                 f"running={overview['daemon'].get('running', False)}, "

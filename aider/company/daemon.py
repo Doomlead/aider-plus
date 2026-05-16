@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 from aider.company.templates import DEFAULT_TEMPLATE_KEY, render_zero_to_mvp_prompt
 from aider.company.tracker import LocalJsonTrackerAdapter, TrackerAdapter, TrackerIssue
-from aider.company.warehouse import WarehouseManager, default_warehouse_path
+from aider.company.warehouse import default_warehouse_path
 from aider.company.workflow import CompanyWorkflow, WorkflowError
 
 

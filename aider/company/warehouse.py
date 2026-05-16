@@ -95,20 +95,19 @@ class WarehouseManager:
 
     def list_products(self) -> list[ProductRecord]:
         registry = self._read_registry(require_exists=True)
-        products = registry.get("products", {})
-        return [ProductRecord(**record) for record in products.values()]
+        return self._records_from_registry(registry)
 
     def status(self) -> dict[str, Any]:
         registry = self._read_registry(require_exists=True)
-        products = self.list_products()
-        existing = [p for p in products if Path(p.path).exists()]
-        missing = [p for p in products if not Path(p.path).exists()]
+        products = self._records_from_registry(registry)
+        existing_count = sum(1 for product in products if Path(product.path).exists())
+        missing_count = len(products) - existing_count
         return {
             "root": str(self.root),
             "registry": str(self.registry_path),
             "products": len(products),
-            "existing_products": len(existing),
-            "missing_products": len(missing),
+            "existing_products": existing_count,
+            "missing_products": missing_count,
             "products_dir": str(self.products_dir),
             "coo_memory": str(self.root / ".aider" / "coo"),
         }
@@ -154,10 +153,49 @@ class WarehouseManager:
     def get_product(self, name_or_slug: str) -> ProductRecord:
         slug = slugify_product_name(name_or_slug)
         registry = self._read_registry(require_exists=True)
-        record = registry.get("products", {}).get(slug)
-        if not record:
+        record = self._product_entries(registry).get(slug)
+        if not isinstance(record, dict):
             raise WarehouseError(f"Unknown warehouse product: {name_or_slug}")
-        return ProductRecord(**record)
+        return self._record_from_dict(record)
+
+    @staticmethod
+    def _records_from_registry(registry: dict[str, Any]) -> list[ProductRecord]:
+        return [
+            WarehouseManager._record_from_dict(record)
+            for record in WarehouseManager._product_entries(registry).values()
+            if isinstance(record, dict)
+        ]
+
+    @staticmethod
+    def _product_entries(registry: dict[str, Any]) -> dict[str, Any]:
+        products = registry.get("products", {})
+        if not isinstance(products, dict):
+            raise WarehouseError(
+                "Invalid warehouse registry: products must be an object"
+            )
+        return products
+
+    @staticmethod
+    def _record_from_dict(record: dict[str, Any]) -> ProductRecord:
+        return ProductRecord(
+            name=str(record.get("name", "")),
+            slug=str(record.get("slug", "")),
+            path=str(record.get("path", "")),
+            template=(
+                str(record["template"]) if record.get("template") is not None else None
+            ),
+            idea=(str(record["idea"]) if record.get("idea") is not None else None),
+            created_at=(
+                str(record["created_at"])
+                if record.get("created_at") is not None
+                else None
+            ),
+            updated_at=(
+                str(record["updated_at"])
+                if record.get("updated_at") is not None
+                else None
+            ),
+        )
 
     def _read_registry(self, *, require_exists: bool = False) -> dict[str, Any]:
         if not self.registry_path.exists():

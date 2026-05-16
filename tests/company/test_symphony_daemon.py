@@ -4,7 +4,6 @@ from pathlib import Path
 from aider.company.cli import handle_company_cli_pre_coder, parse_company_cli
 from aider.company.daemon import (
     CompanyDaemon,
-    RunWorkspaceManager,
     sanitize_workspace_key,
 )
 from aider.company.tracker import LocalJsonTrackerAdapter

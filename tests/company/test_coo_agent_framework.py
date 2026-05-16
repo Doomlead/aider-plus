@@ -374,18 +374,13 @@ def test_nanobot_coo_falls_back_after_llm_retry_exhaustion(tmp_path):
             task_id="task-llm-fallback",
         )
         status = await coo.get_session_status("cli:llm-fallback")
-        error_events = [
-            event for event in result["events"] if event["event_type"] == "coo_error"
-        ]
+        error_events = [event for event in result["events"] if event["event_type"] == "coo_error"]
 
         assert loop.calls == 4
         assert result["route"]["strategy"] == "deterministic"
         assert result["target"] == "engineering"
         assert error_events
-        assert (
-            error_events[-1]["metadata"]["message_metadata"]["error_type"]
-            == "llm_route_failed"
-        )
+        assert error_events[-1]["metadata"]["message_metadata"]["error_type"] == "llm_route_failed"
         assert error_events[-1]["metadata"]["message_metadata"]["retries"] == 3
         assert status["error_count"] == 1
         assert status["last_error"]["error_type"] == "llm_route_failed"
@@ -434,9 +429,7 @@ def test_nanobot_coo_successful_llm_retry(tmp_path):
         assert result["target"] == "qa"
         assert result["route"]["strategy"] == "llm"
         assert result["route"]["confidence"] == 0.82
-        assert not [
-            event for event in result["events"] if event["event_type"] == "coo_error"
-        ]
+        assert not [event for event in result["events"] if event["event_type"] == "coo_error"]
         assert status["error_count"] == 0
 
     asyncio.run(run())
@@ -477,9 +470,7 @@ def test_coo_routing_fallback_and_escalation_after_retries(tmp_path):
             task_id="task-fallback-escalation",
         )
         status = await coo.get_session_status("cli:fallback-escalation")
-        error_events = [
-            event for event in result["events"] if event["event_type"] == "coo_error"
-        ]
+        error_events = [event for event in result["events"] if event["event_type"] == "coo_error"]
 
         assert result["status"] == "pending_human_escalation"
         assert result["route"]["strategy"] == "deterministic_fallback"
@@ -488,9 +479,7 @@ def test_coo_routing_fallback_and_escalation_after_retries(tmp_path):
             "falling back to deterministic routing"
         )
         assert error_events[-2]["metadata"]["escalate_to_human"] is False
-        assert error_events[-1]["metadata"]["recovery_suggestion"] == (
-            "escalating to human"
-        )
+        assert error_events[-1]["metadata"]["recovery_suggestion"] == ("escalating to human")
         assert error_events[-1]["metadata"]["escalate_to_human"] is True
         assert error_events[-1]["metadata"].get("approval_task_id")
         assert status["attention"]["has_recent_errors"] is True
@@ -498,9 +487,7 @@ def test_coo_routing_fallback_and_escalation_after_retries(tmp_path):
         assert status["pending_human_escalations"] == [
             error_events[-1]["metadata"]["approval_task_id"]
         ]
-        assert orchestrator.approval_manager.gates[
-            error_events[-1]["metadata"]["approval_task_id"]
-        ]
+        assert orchestrator.approval_manager.gates[error_events[-1]["metadata"]["approval_task_id"]]
 
     asyncio.run(run())
 
@@ -586,9 +573,7 @@ Work on {{{{ issue.identifier }}}}: {{{{ issue.title }}}}
 """,
             encoding="utf-8",
         )
-        CompanyDaemon(workflow=CompanyWorkflow.load(workflow_path)).run_once(
-            dry_run=True
-        )
+        CompanyDaemon(workflow=CompanyWorkflow.load(workflow_path)).run_once(dry_run=True)
 
         coo = NanobotCOO(orchestrator=orchestrator, default_target="engineering")
         skill_result = await coo.receive_user_message(
@@ -606,5 +591,63 @@ Work on {{{{ issue.identifier }}}}: {{{{ issue.title }}}}
         assert workflow_status["last_run"]
         assert workflow_status["pending_proof_of_work"] == 1
         assert workflow_status["recent_proof_of_work"][0]["issue"] == "AP-9"
+
+    asyncio.run(run())
+
+
+def test_nanobot_coo_answers_last_deployment_from_devops_record(tmp_path):
+    async def run():
+        from aider.company.project import Project
+
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        orchestrator.active_project = Project(
+            project_id="proj-1",
+            name="Invite Flow",
+            phase="done",
+            deploy_result=Deliverable(
+                task_id="deploy-1",
+                department="devops",
+                artifact_type="deploy_report",
+                payload={
+                    "summary": "Built and deployed.",
+                    "release_artifact": "invite-flow:v2.1.0",
+                    "deploy_url": "https://staging-invite-flow.example.com",
+                    "git_tag": "v2.1.0",
+                    "environment": "staging",
+                    "build_logs_summary": "build ok",
+                    "log_artifacts": [
+                        str(tmp_path / ".aider/company/build-logs/deploy-1/build-1.log")
+                    ],
+                    "build_artifact": {
+                        "name": "invite-flow",
+                        "tag": "v2.1.0",
+                        "location": "invite-flow:v2.1.0",
+                        "artifact_type": "docker_image",
+                    },
+                    "deployment_result": {
+                        "status": "success",
+                        "environment": "staging",
+                        "deployed_url": "https://staging-invite-flow.example.com",
+                    },
+                },
+                status="success",
+                metadata={},
+            ),
+        )
+        coo = NanobotCOO(orchestrator=orchestrator, default_target="engineering")
+
+        result = await coo.receive_user_message(
+            message="What was the last deployment?",
+            session_id="cli:last-deploy",
+            surface="cli",
+            task_id="task-last-deploy",
+        )
+
+        assert result["target"] == "coo"
+        assert result["action"]["action"] == "inspect_status"
+        assert "last deployment" in result["result"]["content"].lower()
+        assert "staging" in result["result"]["content"]
+        assert "v2.1.0" in result["result"]["content"]
 
     asyncio.run(run())

@@ -86,9 +86,7 @@ def test_devops_refuses_unready_delivery_handover(tmp_path):
 
     assert deliverable.status == "failure"
     assert deliverable.metadata["handoff_to"] == "delivery"
-    assert deliverable.metadata["delivery_handover"]["critical_blockers"] == [
-        "qa_report"
-    ]
+    assert deliverable.metadata["delivery_handover"]["critical_blockers"] == ["qa_report"]
 
 
 def test_devops_blocks_high_risk_deploy_without_approval(tmp_path):
@@ -127,9 +125,71 @@ def test_devops_schema_round_trips_build_and_deployment_result():
     handover = DeliveryHandover.from_dict(ready_handover())
 
     assert BuildArtifact.from_dict(artifact.to_dict()).to_dict() == artifact.to_dict()
-    assert (
-        DeploymentResult.from_dict(deployment.to_dict()).to_dict()
-        == deployment.to_dict()
-    )
+    assert DeploymentResult.from_dict(deployment.to_dict()).to_dict() == deployment.to_dict()
     assert handover.ready_for_devops is True
     assert handover.environment == "staging"
+
+
+def test_devops_uses_configurable_fallback_and_captures_logs(tmp_path):
+    from aider.company.config import DepartmentConfig
+
+    department = DevOpsDepartment(
+        ProjectMemory(str(tmp_path)),
+        config=DepartmentConfig(
+            name="devops",
+            devops_build_fallback_commands=["python -m build"],
+            devops_retry_base_delay=0,
+        ),
+    )
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        return f"$ {command}\nexit_code=0\nfallback build ok"
+
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(tmp_path, build_commands=[])
+    task.payload.pop("build_commands")
+
+    deliverable = asyncio.run(department.process(task))
+
+    build = deliverable.payload["build_artifact"]
+    assert build["detected_command_source"] == "fallback_configured"
+    assert build["log_artifacts"]
+    assert "fallback build ok" in build["build_logs_summary"]
+    assert all(
+        (tmp_path in __import__("pathlib").Path(path).parents) for path in build["log_artifacts"]
+    )
+    assert deliverable.payload["log_artifacts"]
+
+
+def test_devops_retries_transient_build_failure(tmp_path):
+    from aider.company.config import DepartmentConfig
+
+    department = DevOpsDepartment(
+        ProjectMemory(str(tmp_path)),
+        config=DepartmentConfig(
+            name="devops",
+            devops_retry_attempts=3,
+            devops_retry_base_delay=0,
+        ),
+    )
+    calls = {"count": 0}
+    events = []
+
+    async def capture(event):
+        events.append(event)
+
+    async def flaky_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return f"$ {command}\nexit_code=1\nconnection reset by peer"
+        return f"$ {command}\nexit_code=0\nok after retry"
+
+    department._on_event = capture
+    department._run_shell = flaky_run  # type: ignore[method-assign]
+
+    deliverable = asyncio.run(department.process(make_task(tmp_path)))
+
+    assert deliverable.status == "success"
+    assert calls["count"] == 2
+    assert "ok after retry" in deliverable.payload["build_logs_summary"]
+    assert "devops_command_retry" in [event.payload["name"] for event in events]

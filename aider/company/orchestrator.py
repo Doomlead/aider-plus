@@ -852,7 +852,7 @@ class CompanyOrchestrator:
             context.setdefault("project_name", self.active_project.name)
         return CompanyTask(
             task_id=task.task_id,
-            origin="ceo",
+            origin="delivery",
             target="devops",
             artifact_type="deploy_request",
             payload={
@@ -963,6 +963,12 @@ class CompanyOrchestrator:
             self.lifecycle.apply(
                 self.lifecycle.transition_after_approval(self.active_project, task, True)
             )
+        await self._execute_devops_release(task)
+
+    async def _execute_devops_release(self, task: CompanyTask) -> None:
+        """Route a validated Delivery handoff into DevOps build/deploy execution."""
+        if not await self.delivery_readiness_gate(task):
+            return
         if "devops" in self.departments:
             await self.submit(self._devops_task(task))
         elif self.active_project:
@@ -1054,6 +1060,28 @@ class CompanyOrchestrator:
             if project.deploy_result:
                 artifacts.append(f"Deployment: {project.deploy_result.status}")
             lines.append("Artifacts: " + (", ".join(artifacts) if artifacts else "none"))
+            if project.deploy_result and isinstance(project.deploy_result.payload, dict):
+                build = project.deploy_result.payload.get("build_artifact") or {}
+                deploy = project.deploy_result.payload.get("deployment_result") or {}
+                lines.extend(
+                    [
+                        "DevOps release:",
+                        (
+                            f"  Build: {build.get('name', 'artifact')}:"
+                            f"{build.get('tag', 'untagged')} "
+                            f"({build.get('artifact_type', 'unknown')})"
+                        ),
+                        f"  Artifact: {build.get('location', 'unknown')}",
+                        (
+                            "  Deploy status: "
+                            f"{deploy.get('status', project.deploy_result.status)}"
+                        ),
+                        (
+                            "  URL: "
+                            f"{deploy.get('deployed_url') or project.deploy_result.metadata.get('deploy_url') or 'n/a'}"
+                        ),
+                    ]
+                )
             if getattr(project, "delivery_plan", None):
                 delivery = project.delivery_plan.to_summary()
                 blockers = delivery.get("critical_blockers") or []

@@ -9,7 +9,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Optional
 
+from aider.company.daemon import CompanyDaemonError, load_daemon
 from aider.company.orchestrator import CompanyOrchestrator
+from aider.company.workflow import WorkflowError
 from aider.company.schemas import CompanyTask, Deliverable
 from aider.company.skills import CompanySkillManager
 from aider.memory import ProjectMemory
@@ -376,6 +378,8 @@ class COOActionDecision:
         "ask_ceo_clarification",
         "delegate_company_task",
         "inspect_status",
+        "inspect_skills",
+        "list_daemon_workflows",
         "update_memory",
         "recall_memory",
         "use_tool",
@@ -396,6 +400,8 @@ class COOActionDecision:
             "ask_ceo_clarification",
             "delegate_company_task",
             "inspect_status",
+            "inspect_skills",
+            "list_daemon_workflows",
             "update_memory",
             "recall_memory",
             "use_tool",
@@ -407,6 +413,8 @@ class COOActionDecision:
             "delegate": "delegate_company_task",
             "route": "delegate_company_task",
             "status": "inspect_status",
+            "skills": "inspect_skills",
+            "daemon": "list_daemon_workflows",
             "remember": "update_memory",
             "recall": "recall_memory",
             "tool": "use_tool",
@@ -987,6 +995,39 @@ class NanobotCOO:
             )
         if any(
             phrase in prompt_lower
+            for phrase in (
+                "what skills",
+                "recall a skill",
+                "recall skill",
+                "inspect skills",
+                "learned skills",
+                "available skills",
+            )
+        ):
+            return COOActionDecision(
+                action="inspect_skills",
+                response_to_ceo=self._format_skills_for_ceo(),
+                confidence=0.92,
+                reasoning="CEO asked about procedural skills.",
+            )
+        if any(
+            phrase in prompt_lower
+            for phrase in (
+                "daemon status",
+                "daemon workflow",
+                "daemon workflows",
+                "proof-of-work",
+                "proof of work",
+            )
+        ):
+            return COOActionDecision(
+                action="list_daemon_workflows",
+                response_to_ceo=self._format_daemon_workflows_for_ceo(),
+                confidence=0.92,
+                reasoning="CEO asked about daemon workflow state.",
+            )
+        if any(
+            phrase in prompt_lower
             for phrase in ("what do you remember", "recall memory", "coo memory")
         ):
             memory_items = self.recall_ceo_memory(limit=8)
@@ -1115,6 +1156,10 @@ class NanobotCOO:
             content = action.response_to_ceo or "Noted, CEO. I updated COO memory."
         elif action.action == "recall_memory":
             content = action.response_to_ceo
+        elif action.action == "inspect_skills":
+            content = action.response_to_ceo or self._format_skills_for_ceo()
+        elif action.action == "list_daemon_workflows":
+            content = action.response_to_ceo or self._format_daemon_workflows_for_ceo()
         elif action.action == "ask_ceo_clarification":
             content = (
                 action.response_to_ceo or "CEO, can you clarify the desired outcome?"
@@ -1202,6 +1247,42 @@ class NanobotCOO:
         """COO tool: recall recent repo-local COO memory notes."""
         return self._read_coo_memory(limit=limit)
 
+    def inspect_skills(self) -> dict[str, Any]:
+        """COO tool: inspect learned procedural skills and recent usage."""
+
+        manager = CompanySkillManager(
+            self.orchestrator.state, self.orchestrator.company_config.skill_learning
+        )
+        return manager.inspect_skills()
+
+    def list_daemon_workflows(self) -> dict[str, Any]:
+        """COO tool: inspect repo-local daemon workflow status when configured."""
+
+        workflow_path = Path(self.orchestrator.memory.repo_path) / "AIDER_WORKFLOW.md"
+        if not workflow_path.exists():
+            return {
+                "configured": False,
+                "workflow": str(workflow_path),
+                "status": "not_configured",
+                "workflows": [],
+            }
+        try:
+            status = load_daemon(workflow_path).get_status()
+        except (CompanyDaemonError, WorkflowError, OSError, ValueError) as exc:
+            return {
+                "configured": True,
+                "workflow": str(workflow_path),
+                "status": "unavailable",
+                "error": str(exc),
+                "workflows": [],
+            }
+        return {
+            "configured": True,
+            "workflow": str(workflow_path),
+            "status": status.get("status", "unknown"),
+            "workflows": [status],
+        }
+
     def _coo_memory_dir(self) -> Path:
         path = Path(self.orchestrator.memory.repo_path) / ".aider" / "coo"
         path.mkdir(parents=True, exist_ok=True)
@@ -1272,7 +1353,67 @@ class NanobotCOO:
             "pending_approvals": pending_approvals,
             "recent_errors": list(session.metadata.get("recent_errors", []) or [])[-5:],
             "message_count": len(session.messages),
+            "skills_summary": self._skills_status_summary(),
+            "daemon": self.list_daemon_workflows(),
         }
+
+    def _skills_status_summary(self) -> dict[str, Any]:
+        skills = self.inspect_skills()
+        return {
+            "available_count": skills.get("available_count", 0),
+            "recently_used_count": skills.get("recently_used_count", 0),
+            "recently_used": skills.get("recently_used", [])[:3],
+            "available": skills.get("available", [])[:5],
+            "pending_proposals": len(skills.get("pending_proposals", [])),
+        }
+
+    def _format_skills_for_ceo(self) -> str:
+        skills = self.inspect_skills()
+        lines = [
+            "CEO, here are the learned procedural skills:",
+            f"- Available: {skills.get('available_count', 0)}",
+            f"- Recently used: {skills.get('recently_used_count', 0)}",
+            f"- Pending proposals: {len(skills.get('pending_proposals', []))}",
+        ]
+        recent = skills.get("recently_used") or []
+        available = skills.get("available") or []
+        if recent:
+            lines.append("- Recent skills:")
+            lines.extend(
+                f"  - {item.get('scope')}/{item.get('name')}: "
+                f"{item.get('title') or item.get('description') or 'Untitled'}"
+                for item in recent[:5]
+            )
+        if available:
+            lines.append("- Available skills:")
+            lines.extend(
+                f"  - {item.get('scope')}/{item.get('name')}: "
+                f"{item.get('description') or item.get('title') or 'No summary'}"
+                for item in available[:5]
+            )
+        return "\n".join(lines)
+
+    def _format_daemon_workflows_for_ceo(self) -> str:
+        daemon = self.list_daemon_workflows()
+        if not daemon.get("configured"):
+            return "CEO, no AIDER_WORKFLOW.md daemon workflow is configured for this repo."
+        if daemon.get("status") == "unavailable":
+            return f"CEO, daemon status is unavailable: {daemon.get('error')}"
+        workflows = daemon.get("workflows") or []
+        if not workflows:
+            return "CEO, no daemon workflows are available."
+        lines = ["CEO, daemon workflow status:"]
+        for workflow in workflows:
+            lines.extend(
+                [
+                    f"- Workflow: {workflow.get('workflow')}",
+                    f"  Status: {workflow.get('status', 'unknown')}",
+                    f"  Last run: {workflow.get('last_run') or 'never'}",
+                    f"  Active workflows: {workflow.get('active_workflows', 0)}",
+                    f"  Pending proof-of-work: {workflow.get('pending_proof_of_work', 0)}",
+                ]
+            )
+        return "\n".join(lines)
 
     def _format_company_status_for_ceo(self, session: COOSession) -> str:
         status = self._company_status_payload(session)
@@ -1283,6 +1424,9 @@ class NanobotCOO:
             f"- Active department: {status['active_department'] or 'none'}",
             f"- Last task: {status['last_task_id'] or 'none'}",
             f"- Pending CEO approvals: {len(status['pending_approvals'])}",
+            f"- Skills: {status['skills_summary'].get('available_count', 0)} available / "
+            f"{status['skills_summary'].get('recently_used_count', 0)} recently used",
+            f"- Daemon: {status['daemon'].get('status', 'not_configured')}",
         ]
         if status["pending_approvals"]:
             lines.append("  - " + ", ".join(status["pending_approvals"]))
@@ -1308,12 +1452,14 @@ class NanobotCOO:
             f"available departments: {', '.join(departments)}.\n"
             "When a direct executive response is enough, choose answer_directly. "
             "When the CEO asks about status or approvals, choose inspect_status. "
+            "When the CEO asks about learned procedural skills, choose inspect_skills. "
+            "When the CEO asks about daemon workflows or proof-of-work, choose list_daemon_workflows. "
             "When the CEO asks you to remember something, choose update_memory. "
             "When the CEO asks what you remember, choose recall_memory. "
             "When unsafe or ambiguous, choose ask_ceo_clarification.\n\n"
             "Return only JSON matching this COOActionDecision schema:\n"
             "{\n"
-            '  "action": "answer_directly | ask_ceo_clarification | delegate_company_task | inspect_status | update_memory | recall_memory | use_tool",\n'
+            '  "action": "answer_directly | ask_ceo_clarification | delegate_company_task | inspect_status | inspect_skills | list_daemon_workflows | update_memory | recall_memory | use_tool",\n'
             '  "response_to_ceo": "short executive response when not delegating",\n'
             '  "company_target": "one available department when delegating, otherwise null",\n'
             '  "tool_name": "optional tool name",\n'
@@ -1367,6 +1513,8 @@ class NanobotCOO:
                 "pending_human_escalations", []
             ),
             "last_human_escalation": session_snapshot.get("last_human_escalation"),
+            "skills_summary": self._skills_status_summary(),
+            "daemon": self.list_daemon_workflows(),
             "attention": {
                 "has_recent_errors": bool(session_snapshot.get("recent_errors")),
                 "has_pending_human_escalations": bool(

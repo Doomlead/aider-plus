@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import asyncio
+import json
 
 from aider.agent.loop import AgentLoopConfig, AiderAgentLoop
 from aider.company.agent_factory import (
@@ -16,9 +17,12 @@ from aider.company.config import (
     apply_agent_model_overrides_from_env,
 )
 from aider.company.coo import COOActionDecision, COORouteDecision, NanobotCOO
+from aider.company.daemon import CompanyDaemon
 from aider.company.department import Department
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.schemas import CompanyTask, Deliverable
+from aider.company.skills import CompanySkillManager
+from aider.company.workflow import CompanyWorkflow
 from aider.memory import ProjectMemory
 
 
@@ -530,5 +534,77 @@ def test_nanobot_coo_routing_prompt_contains_structured_context(tmp_path):
         assert '"should_escalate_to_human"' in prompt
         assert '"escalate_to_human"' in prompt
         assert "Few-shot route decisions" in prompt
+
+    asyncio.run(run())
+
+
+def test_coo_recalls_skill_and_dashboard_includes_daemon_status(tmp_path):
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        orchestrator.register(EchoDepartment(memory, name="engineering"))
+        skill_manager = CompanySkillManager(orchestrator.state)
+        skill_manager.manager.create_skill(
+            scope="coo",
+            name="brief-daemon-state",
+            content=(
+                "# Brief Daemon State\n"
+                "Description: Explain daemon runs, proof-of-work, and active workflows.\n"
+            ),
+        )
+
+        tracker_path = tmp_path / "issues.json"
+        tracker_path.write_text(
+            json.dumps(
+                {
+                    "issues": [
+                        {
+                            "identifier": "AP-9",
+                            "title": "Show daemon status",
+                            "labels": ["aider-plus"],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        workflow_path = tmp_path / "AIDER_WORKFLOW.md"
+        workflow_path.write_text(
+            f"""---
+tracker:
+  kind: local
+  path: {tracker_path}
+  labels: [aider-plus]
+workspace:
+  root: {tmp_path / 'runs'}
+agent:
+  max_concurrent_agents: 1
+hooks:
+  timeout_seconds: 5
+---
+Work on {{{{ issue.identifier }}}}: {{{{ issue.title }}}}
+""",
+            encoding="utf-8",
+        )
+        CompanyDaemon(workflow=CompanyWorkflow.load(workflow_path)).run_once(
+            dry_run=True
+        )
+
+        coo = NanobotCOO(orchestrator=orchestrator, default_target="engineering")
+        skill_result = await coo.receive_user_message(
+            message="inspect skills and recall a skill",
+            session_id="cli:skills-daemon",
+            surface="cli",
+        )
+        status = await coo.get_session_status("cli:skills-daemon")
+
+        assert skill_result["action"]["action"] == "inspect_skills"
+        assert "coo/brief-daemon-state" in skill_result["result"]["content"]
+        assert status["skills_summary"]["available_count"] == 1
+        assert status["daemon"]["status"] == "idle"
+        workflow_status = status["daemon"]["workflows"][0]
+        assert workflow_status["last_run"]
+        assert workflow_status["pending_proof_of_work"] == 1
+        assert workflow_status["recent_proof_of_work"][0]["issue"] == "AP-9"
 
     asyncio.run(run())

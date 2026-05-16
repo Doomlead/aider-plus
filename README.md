@@ -19,8 +19,9 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
   workflow for turning ideas, issues, or chat requests into implementation plans,
   code changes, validation notes, release guidance, and audit trails.
 - **Nanobot-style COO:** a CEO-facing assistant layer that can answer directly,
-  ask clarifying questions, remember context, inspect project state, route work
-  to departments, report status, and surface queue/error telemetry.
+  ask clarifying questions, remember context, inspect project state, inspect
+  learned skills, list daemon workflow state, route work to departments, report
+  status, and surface queue/error telemetry.
 - **Warehouse-backed product studio:** `aider company new` can create a named
   product repo inside a central warehouse, register it, scaffold starter files,
   and then run Company Mode against the new repo.
@@ -29,7 +30,7 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
   and internal admin tools.
 - **Browser and native desktop GUIs:** shared Company dashboards, direct chat,
   per-agent chat tabs, settings editors, approvals, audit views, memory views,
-  status panels, and guide pages.
+  skill quick views, daemon status/proof-of-work panels, and guide pages.
 - **Headless and chat-adapter operation:** `--headless`/`--bot-mode` supports
   scripted tasks, queues, CI, services, Discord, and future chat adapters.
 - **Durable local memory:** conversation summaries, project memory, retrieval,
@@ -407,8 +408,9 @@ Aider Plus keeps learning artifacts local and inspectable:
 - Procedural skills live under `.aider/skills/<scope>/<name>/SKILL.md` where
   scopes include `shared`, `coo`, `product`, `ux`, `engineering`, `reviewer`,
   `qa`, and `devops`.
-- Skill retrieval scores skills against the task and role; dashboards show
-  available and recently used skills.
+- Skill retrieval scores skills against the task and role; browser and desktop
+  dashboards show available/recently used skills with local `SKILL.md` paths, and
+  the COO can answer skill questions through `inspect_skills()`.
 - Self-improvement is additive: learned procedural workflows become
   approval-gated JSON proposals under `.aider/skill_proposals/` before they are
   installed as skills.
@@ -461,6 +463,9 @@ uses YAML front matter plus a prompt body. The daemon can:
 - run hooks such as `after_create`, `before_run`, `after_run`, and `before_remove`;
 - render issue placeholders into the Company prompt;
 - produce `.aider/company/run-state.json` and `.aider/company/proof-of-work.json`;
+- expose `CompanyDaemon.get_status()` with running/idle state, last run, active
+  workflows, pending proof-of-work, recent proof artifacts, hook timeout, and
+  max-workspace safety limits for dashboards and COO inspection;
 - comment, attach PR URLs, and transition tracker state.
 
 Example workflow:
@@ -500,6 +505,11 @@ aider company daemon --workflow .aider/company/workflow.md --dry-run
 aider company daemon --workflow .aider/company/workflow.md --once
 aider company daemon --workflow .aider/company/workflow.md --status
 ```
+
+If a repo has `AIDER_WORKFLOW.md` at its root, the browser and native desktop
+System Overview panels also show daemon status, last run, active workflows,
+pending proof-of-work, and recent proof artifact paths. The COO uses
+`list_daemon_workflows()` to answer the same questions from chat/status surfaces.
 
 ---
 

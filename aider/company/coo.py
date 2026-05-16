@@ -80,9 +80,7 @@ class COOMessageBus:
     async def publish_inbound(self, message: COOMessage) -> COOMessageBusEvent:
         await self.inbound.put(message)
         self.stats["inbound_published"] += 1
-        return await self._record(
-            "message_published", message, "inbound", self.inbound_size
-        )
+        return await self._record("message_published", message, "inbound", self.inbound_size)
 
     async def consume_inbound(self) -> COOMessage:
         message = await self.inbound.get()
@@ -93,9 +91,7 @@ class COOMessageBus:
     async def publish_outbound(self, message: COOMessage) -> COOMessageBusEvent:
         await self.outbound.put(message)
         self.stats["outbound_published"] += 1
-        return await self._record(
-            "message_published", message, "outbound", self.outbound_size
-        )
+        return await self._record("message_published", message, "outbound", self.outbound_size)
 
     async def consume_outbound(self) -> COOMessage:
         message = await self.outbound.get()
@@ -155,9 +151,7 @@ class COOMessageBus:
             message_metadata = event.metadata.get("message_metadata", {})
             route = message_metadata.get("route") or {}
             coo_action = message_metadata.get("coo_action") or {}
-            target = message_metadata.get("department") or message_metadata.get(
-                "target"
-            )
+            target = message_metadata.get("department") or message_metadata.get("target")
             task_id = message_metadata.get("task_id")
             details = [
                 f"{event.event_type.replace('_', ' ')}",
@@ -184,9 +178,7 @@ class COOMessageBus:
                 details.append(f"handoff → {target}")
             if task_id:
                 details.append(f"task {task_id}")
-            formatted.append(
-                f"[{event.created_at}] {event.session_key}: " + " | ".join(details)
-            )
+            formatted.append(f"[{event.created_at}] {event.session_key}: " + " | ".join(details))
         return formatted
 
     def snapshot(self) -> dict[str, Any]:
@@ -243,16 +235,10 @@ class COOSession:
         if last_route and (not route_history or route_history[-1] != last_route):
             route_history.append(last_route)
         last_assistant = next(
-            (
-                message
-                for message in reversed(self.messages)
-                if message.get("role") == "assistant"
-            ),
+            (message for message in reversed(self.messages) if message.get("role") == "assistant"),
             None,
         )
-        pending_escalations = list(
-            self.metadata.get("pending_human_escalations", []) or []
-        )
+        pending_escalations = list(self.metadata.get("pending_human_escalations", []) or [])
         recent_errors = list(self.metadata.get("recent_errors", []) or [])
         if self.metadata.get("last_error") and (
             not recent_errors or recent_errors[-1] != self.metadata.get("last_error")
@@ -267,9 +253,7 @@ class COOSession:
             "recent_events": recent_events,
             "route_history": route_history[-recent_limit:],
             "active_department": self.metadata.get("last_target"),
-            "last_deliverable_summary": (
-                last_assistant.get("content") if last_assistant else None
-            ),
+            "last_deliverable_summary": last_assistant.get("content") if last_assistant else None,
             "error_count": int(self.metadata.get("error_count", 0) or 0),
             "last_error": self.metadata.get("last_error"),
             "recent_errors": recent_errors[-recent_limit:],
@@ -289,9 +273,7 @@ class COOSessionManager:
 
     @staticmethod
     def safe_key(key: str) -> str:
-        safe = "".join(
-            ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in key
-        )
+        safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in key)
         return safe[:160] or "default"
 
     def _path(self, key: str) -> Path:
@@ -436,12 +418,10 @@ class COOActionDecision:
         if self.tool_name is not None:
             self.tool_name = str(self.tool_name).strip() or None
         self.memory_updates = [
-            update for update in (self.memory_updates or []) if isinstance(update, dict)
+            update for update in self.memory_updates or [] if isinstance(update, dict)
         ]
         self.context = dict(self.context or {})
-        self.reasoning = str(
-            self.reasoning or self.context.get("reasoning") or ""
-        ).strip()
+        self.reasoning = str(self.reasoning or self.context.get("reasoning") or "").strip()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -473,11 +453,7 @@ class COORouteDecision:
     reasoning: str | None = None
 
     def __post_init__(self) -> None:
-        target = (
-            self.chosen_department
-            if self.chosen_department is not None
-            else self.target
-        )
+        target = self.chosen_department if self.chosen_department is not None else self.target
         self.target = str(target or "").strip().lower()
         self.chosen_department = self.target
         self.strategy = str(self.strategy or "deterministic").strip().lower()
@@ -525,9 +501,7 @@ class NanobotCOO:
         enable_llm_routing: bool | None = None,
     ):
         self.orchestrator = orchestrator
-        self.coo_agent_loop = (
-            coo_agent_loop if coo_agent_loop is not None else agent_loop
-        )
+        self.coo_agent_loop = coo_agent_loop if coo_agent_loop is not None else agent_loop
         self.session_manager = session_manager or COOSessionManager(orchestrator.memory)
         self.bus = bus or COOMessageBus()
         self.default_target = default_target
@@ -554,9 +528,7 @@ class NanobotCOO:
         coro: Callable[[], Awaitable[Any]] | Awaitable[Any],
         max_retries: int = 3,
         base_delay: float = 1.0,
-        on_final_failure: (
-            Callable[[BaseException], Awaitable[None] | None] | None
-        ) = None,
+        on_final_failure: Callable[[BaseException], Awaitable[None] | None] | None = None,
     ) -> Any:
         """Call an async operation with bounded exponential backoff."""
         attempts = max(0, int(max_retries)) + 1 if callable(coro) else 1
@@ -606,9 +578,7 @@ class NanobotCOO:
         if approval_task_id:
             error_payload["approval_task_id"] = approval_task_id
         if session is not None:
-            session.metadata["error_count"] = (
-                int(session.metadata.get("error_count", 0) or 0) + 1
-            )
+            session.metadata["error_count"] = int(session.metadata.get("error_count", 0) or 0) + 1
             session.metadata["last_error"] = error_payload
             recent_errors = list(session.metadata.get("recent_errors", []) or [])
             recent_errors.append(error_payload)
@@ -627,9 +597,7 @@ class NanobotCOO:
         error_details: dict[str, Any],
     ) -> CompanyTask:
         """Open a blocking human approval gate for unrecoverable COO failures."""
-        target = error_details.get("fallback_target") or session.metadata.get(
-            "last_target"
-        )
+        target = error_details.get("fallback_target") or session.metadata.get("last_target")
         if target not in self.orchestrator.departments:
             target = (
                 self.default_target
@@ -640,10 +608,7 @@ class NanobotCOO:
             target = next(iter(self.orchestrator.departments))
         target = target or "coo"
         task = CompanyTask(
-            task_id=str(
-                error_details.get("approval_task_id")
-                or f"coo-escalation-{uuid.uuid4()}"
-            ),
+            task_id=str(error_details.get("approval_task_id") or f"coo-escalation-{uuid.uuid4()}"),
             origin="coo",
             target=target,
             artifact_type="coo_escalation",
@@ -697,18 +662,12 @@ class NanobotCOO:
     ) -> dict[str, Any]:
         """Persist a user message, route it, hand it off, and return result/events."""
         message = message if message is not None else options.pop("prompt", None)
-        session_id = (
-            session_id if session_id is not None else options.pop("session_key", None)
-        )
+        session_id = session_id if session_id is not None else options.pop("session_key", None)
         surface = options.pop("channel", surface)
         if message is None:
-            raise TypeError(
-                "receive_user_message() missing required argument: 'message'"
-            )
+            raise TypeError("receive_user_message() missing required argument: 'message'")
         if session_id is None:
-            raise TypeError(
-                "receive_user_message() missing required argument: 'session_id'"
-            )
+            raise TypeError("receive_user_message() missing required argument: 'session_id'")
 
         target = options.pop("target", None)
         artifact_type = options.pop("artifact_type", "raw_prompt")
@@ -790,8 +749,7 @@ class NanobotCOO:
             route = action.route or COORouteDecision(
                 target=action.company_target or target or self.default_target,
                 strategy="coo_action",
-                reason=action.reasoning
-                or "COO delegated work to an internal department",
+                reason=action.reasoning or "COO delegated work to an internal department",
                 confidence=action.confidence,
             )
             return await self.delegate_company_task(session, message, route, payload)
@@ -817,9 +775,7 @@ class NanobotCOO:
                 "recovery_suggestion": "escalating to human",
                 "fallback_target": route.target,
             }
-            escalation = await self._escalate_to_human(
-                session, inbound.content, error_details
-            )
+            escalation = await self._escalate_to_human(session, inbound.content, error_details)
             await self._emit_coo_error(
                 session=session,
                 session_id=session.key,
@@ -871,9 +827,7 @@ class NanobotCOO:
                     "recovery_suggestion": "escalating to human",
                     "fallback_target": fallback_route.target,
                 }
-                escalation = await self._escalate_to_human(
-                    session, inbound.content, error_details
-                )
+                escalation = await self._escalate_to_human(session, inbound.content, error_details)
                 await self._emit_coo_error(
                     session=session,
                     session_id=session.key,
@@ -889,9 +843,7 @@ class NanobotCOO:
 
             try:
                 result = await self._call_with_retry(
-                    lambda: self.route_to_department(
-                        session, fallback_route.target, payload
-                    ),
+                    lambda: self.route_to_department(session, fallback_route.target, payload),
                     on_final_failure=emit_fallback_handoff_failure,
                 )
             except Exception as err:
@@ -1045,9 +997,7 @@ class NanobotCOO:
             )
         return None
 
-    async def _llm_action(
-        self, prompt: str, session: COOSession
-    ) -> COOActionDecision | None:
+    async def _llm_action(self, prompt: str, session: COOSession) -> COOActionDecision | None:
         task_payload = {
             "prompt": prompt,
             "history": session.get_history(12),
@@ -1057,9 +1007,7 @@ class NanobotCOO:
             "departments": sorted(self.orchestrator.departments),
             "skill_guidance": self._coo_skill_guidance(prompt),
         }
-        surface = (
-            session.messages[-1].get("surface") if session.messages else "coo"
-        ) or "coo"
+        surface = (session.messages[-1].get("surface") if session.messages else "coo") or "coo"
 
         async def emit_llm_action_failure(err: BaseException) -> None:
             await self._emit_coo_error(
@@ -1118,17 +1066,13 @@ class NanobotCOO:
                 strategy="llm",
                 reason=str(parsed.get("reasoning") or parsed.get("reason") or ""),
                 confidence=parsed.get("confidence", 0.5),
-                should_escalate_to_human=bool(
-                    parsed.get("should_escalate_to_human", False)
-                ),
+                should_escalate_to_human=bool(parsed.get("should_escalate_to_human", False)),
                 escalate_to_human=bool(parsed.get("escalate_to_human", False)),
                 metadata={"raw": parsed},
             )
         return COOActionDecision(
             action=action_name,
-            response_to_ceo=str(
-                parsed.get("response_to_ceo") or parsed.get("response") or ""
-            ),
+            response_to_ceo=str(parsed.get("response_to_ceo") or parsed.get("response") or ""),
             confidence=parsed.get("confidence", 0.5),
             requires_approval=bool(parsed.get("requires_approval", False)),
             company_target=candidate or parsed.get("company_target"),
@@ -1147,9 +1091,7 @@ class NanobotCOO:
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         if action.action == "inspect_status":
-            content = action.response_to_ceo or self._format_company_status_for_ceo(
-                session
-            )
+            content = action.response_to_ceo or self._format_company_status_for_ceo(session)
         elif action.action == "update_memory":
             for update in action.memory_updates:
                 self.remember_ceo_preference(update)
@@ -1161,9 +1103,7 @@ class NanobotCOO:
         elif action.action == "list_daemon_workflows":
             content = action.response_to_ceo or self._format_daemon_workflows_for_ceo()
         elif action.action == "ask_ceo_clarification":
-            content = (
-                action.response_to_ceo or "CEO, can you clarify the desired outcome?"
-            )
+            content = action.response_to_ceo or "CEO, can you clarify the desired outcome?"
         elif action.action == "use_tool":
             content = (
                 action.response_to_ceo
@@ -1236,9 +1176,7 @@ class NanobotCOO:
     def remember_ceo_preference(self, item: dict[str, Any] | str) -> dict[str, Any]:
         """COO tool: persist a CEO preference or operational note."""
         payload = (
-            {"type": "ceo_preference", "content": item}
-            if isinstance(item, str)
-            else dict(item)
+            {"type": "ceo_preference", "content": item} if isinstance(item, str) else dict(item)
         )
         self._append_coo_memory(payload)
         return payload
@@ -1307,9 +1245,7 @@ class NanobotCOO:
                     "risky_tools": "ask",
                 },
             }
-            path.write_text(
-                json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            path.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
             return profile
         try:
             return json.loads(path.read_text(encoding="utf-8"))
@@ -1341,11 +1277,14 @@ class NanobotCOO:
     def _company_status_payload(self, session: COOSession) -> dict[str, Any]:
         project = self.orchestrator.active_project
         pending_approvals = self.get_pending_approvals()
+        delivery_plan = getattr(project, "delivery_plan", None)
+        delivery_status = delivery_plan.to_summary() if delivery_plan else None
         return {
             "ceo_role": "Chief Executive Officer",
             "coo_role": "Chief Operating Officer",
             "active_project_phase": getattr(project, "phase", None) or "unassigned",
             "active_project_name": getattr(project, "name", None),
+            "delivery_status": delivery_status,
             "departments": sorted(self.orchestrator.departments),
             "active_department": session.metadata.get("last_target"),
             "last_task_id": session.metadata.get("last_task_id"),
@@ -1424,15 +1363,39 @@ class NanobotCOO:
             f"- Active department: {status['active_department'] or 'none'}",
             f"- Last task: {status['last_task_id'] or 'none'}",
             f"- Pending CEO approvals: {len(status['pending_approvals'])}",
+            self._format_delivery_status_line(status.get("delivery_status")),
             f"- Skills: {status['skills_summary'].get('available_count', 0)} available / "
             f"{status['skills_summary'].get('recently_used_count', 0)} recently used",
             f"- Daemon: {status['daemon'].get('status', 'not_configured')}",
         ]
+        if status.get("delivery_status"):
+            delivery = status["delivery_status"]
+            blockers = delivery.get("critical_blockers") or []
+            lines.append(f"  - Next milestone: {delivery.get('next_milestone', 'TBD')}")
+            lines.append(
+                "  - Critical blockers: " + (", ".join(map(str, blockers)) if blockers else "none")
+            )
         if status["pending_approvals"]:
             lines.append("  - " + ", ".join(status["pending_approvals"]))
         if status["recent_errors"]:
             lines.append(f"- Recent COO errors: {len(status['recent_errors'])}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_delivery_status_line(delivery_status: dict[str, Any] | None) -> str:
+        if not delivery_status:
+            return "- Delivery: no active plan yet"
+        completion = delivery_status.get(
+            "weighted_completion", delivery_status.get("completion_percentage", 0)
+        )
+        blockers = delivery_status.get("critical_blockers") or []
+        blocker_note = (
+            f", {len(blockers)} critical blocker(s)" if blockers else ", no critical blockers"
+        )
+        return (
+            f"- Delivery: {delivery_status.get('status') or delivery_status.get('overall_status')} "
+            f"at {completion}%{blocker_note}"
+        )
 
     def _get_coo_action_prompt(self, session: COOSession) -> str:
         departments = sorted(self.orchestrator.departments)
@@ -1471,7 +1434,6 @@ class NanobotCOO:
             f"Current company status: {json.dumps(self._company_status_payload(session), ensure_ascii=False)}"
         )
 
-
     def _coo_skill_guidance(self, prompt: str) -> list[str]:
         if not self.orchestrator.company_config.skill_learning.enabled:
             return []
@@ -1500,18 +1462,14 @@ class NanobotCOO:
             "last_coo_action": session.metadata.get("last_coo_action", {}),
             "ceo_profile": self._read_coo_profile(),
             "coo_memory": self.recall_ceo_memory(limit=5),
-            "last_deliverable_summary": session_snapshot.get(
-                "last_deliverable_summary"
-            ),
+            "last_deliverable_summary": session_snapshot.get("last_deliverable_summary"),
             "recent_events": bus_snapshot.get("formatted_events", []),
             "session": session_snapshot,
             "route_history": session_snapshot.get("route_history", []),
             "error_count": session_snapshot.get("error_count", 0),
             "last_error": session_snapshot.get("last_error"),
             "recent_errors": session_snapshot.get("recent_errors", []),
-            "pending_human_escalations": session_snapshot.get(
-                "pending_human_escalations", []
-            ),
+            "pending_human_escalations": session_snapshot.get("pending_human_escalations", []),
             "last_human_escalation": session_snapshot.get("last_human_escalation"),
             "skills_summary": self._skills_status_summary(),
             "daemon": self.list_daemon_workflows(),
@@ -1653,9 +1611,7 @@ class NanobotCOO:
                 return decision
         return self._deterministic_route(prompt)
 
-    async def _llm_route(
-        self, prompt: str, session: COOSession
-    ) -> COORouteDecision | None:
+    async def _llm_route(self, prompt: str, session: COOSession) -> COORouteDecision | None:
         task_payload = {
             "prompt": prompt,
             "history": session.get_history(12),
@@ -1665,9 +1621,7 @@ class NanobotCOO:
             "departments": sorted(self.orchestrator.departments),
             "skill_guidance": self._coo_skill_guidance(prompt),
         }
-        surface = (
-            session.messages[-1].get("surface") if session.messages else "coo"
-        ) or "coo"
+        surface = (session.messages[-1].get("surface") if session.messages else "coo") or "coo"
 
         async def emit_llm_route_failure(err: BaseException) -> None:
             await self._emit_coo_error(
@@ -1697,9 +1651,7 @@ class NanobotCOO:
 
         parsed = self._parse_json(result.get("content", ""))
         candidate = (
-            str(parsed.get("chosen_department") or parsed.get("target") or "")
-            .strip()
-            .lower()
+            str(parsed.get("chosen_department") or parsed.get("target") or "").strip().lower()
         )
         if candidate in self.orchestrator.departments:
             return COORouteDecision(
@@ -1707,9 +1659,7 @@ class NanobotCOO:
                 strategy="llm",
                 reason=str(parsed.get("reasoning") or parsed.get("reason") or ""),
                 confidence=parsed.get("confidence", 0.5),
-                should_escalate_to_human=bool(
-                    parsed.get("should_escalate_to_human", False)
-                ),
+                should_escalate_to_human=bool(parsed.get("should_escalate_to_human", False)),
                 escalate_to_human=bool(parsed.get("escalate_to_human", False)),
                 metadata={"raw": parsed},
             )
@@ -1719,9 +1669,7 @@ class NanobotCOO:
         project = self.orchestrator.active_project
         return getattr(project, "phase", None) or "unassigned"
 
-    def _recent_route_history(
-        self, session: COOSession, *, limit: int = 3
-    ) -> list[dict[str, Any]]:
+    def _recent_route_history(self, session: COOSession, *, limit: int = 3) -> list[dict[str, Any]]:
         routes = []
         for message in session.messages:
             route = message.get("route") or message.get("metadata", {}).get("route")
@@ -1816,7 +1764,18 @@ class NanobotCOO:
         prompt_lower = prompt.lower()
         keyword_routes = (
             ("qa", ("test", "tests", "qa", "quality", "bug reproduction")),
-            ("delivery", ("delivery", "project management", "timeline", "milestone", "risk", "blocker", "coordination")),
+            (
+                "delivery",
+                (
+                    "delivery",
+                    "project management",
+                    "timeline",
+                    "milestone",
+                    "risk",
+                    "blocker",
+                    "coordination",
+                ),
+            ),
             ("devops", ("deploy", "deployment", "ci", "release", "docker")),
             ("ux", ("design", "ux", "ui", "wireframe", "accessibility")),
             ("product", ("prd", "requirements", "product", "spec")),
@@ -1832,9 +1791,7 @@ class NanobotCOO:
                     reason=f"Matched {target} routing keywords",
                 )
         target = (
-            "engineering"
-            if "engineering" in self.orchestrator.departments
-            else self.default_target
+            "engineering" if "engineering" in self.orchestrator.departments else self.default_target
         )
         if target not in self.orchestrator.departments:
             target = next(iter(self.orchestrator.departments))

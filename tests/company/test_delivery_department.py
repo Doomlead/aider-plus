@@ -55,14 +55,16 @@ def test_delivery_plan_creation_emits_lifecycle_events(tmp_path):
     assert deliverable.artifact_type == "delivery_plan"
     assert "# Delivery Plan: Invite Flow" in deliverable.payload
     assert deliverable.metadata["handoff_to"] == "devops"
-    assert deliverable.metadata["project_plan"]["status"] == "release_ready"
+    assert deliverable.metadata["project_plan"]["status"] == "complete"
     assert [event.event for event in events] and all(
         event.event == CompanyEvent.LIFECYCLE for event in events
     )
     event_names = [event.payload["name"] for event in events]
+    assert "delivery_plan_updated" in event_names
     assert "delivery_plan_created" in event_names
     assert "milestone_updated" in event_names
     assert "risk_identified" in event_names
+    assert "ready_for_release" in event_names
 
 
 def test_delivery_risk_assessment_identifies_blocker_for_missing_qa(tmp_path):
@@ -92,10 +94,13 @@ def test_delivery_progress_updates_release_ready_and_round_trips_schema(tmp_path
 
     plan = ProjectPlan.from_dict(deliverable.metadata["project_plan"])
 
-    assert plan.status == "release_ready"
+    assert plan.status == "complete"
     assert "Engineering and QA artifacts are available" in plan.progress_summary
     assert any(m.name == "Release handoff prepared" for m in plan.milestones)
     assert plan.to_dict()["timeline"]["cadence"] == "daily async check-in until release"
+    assert plan.to_dict()["weighted_completion"] == 100
+    assert plan.to_dict()["key_dependencies"]
+    assert "## Executive Summary" in plan.to_markdown()
     assert "## Risk Register" in plan.to_markdown()
 
 
@@ -114,7 +119,7 @@ def test_delivery_proactive_planning_tracks_early_phase_without_blocking(tmp_pat
     assert deliverable.status == "success"
     assert deliverable.metadata["ready_for_devops"] is False
     assert "handoff_to" not in deliverable.metadata
-    assert summary["overall_status"] == "planning"
+    assert summary["overall_status"] == "on_track"
     assert summary["completion_percentage"] < 100
     assert summary["next_milestone"] in {
         "Engineering implementation ready",
@@ -128,7 +133,7 @@ def test_delivery_health_assessment_exposes_blockers_and_summary(tmp_path):
     task = make_task(payload={"qa_report": None, "qa_metadata": {}})
     plan = department._run_delivery_cycle(task)
 
-    assert plan.overall_status == "blocked"
+    assert plan.overall_status == "delayed"
     assert plan.completion_percentage < 100
     assert plan.critical_blockers == ["qa_report"]
     assert plan.to_summary()["critical_blockers"] == ["qa_report"]
@@ -143,4 +148,8 @@ def test_delivery_handover_to_devops_requires_release_ready_plan(tmp_path):
     assert handover["ready_for_devops"] is True
     assert handover["project_name"] == "Invite Flow"
     assert handover["delivery_summary"]["completion_percentage"] == 100
+    assert handover["delivery_summary"]["weighted_completion"] == 100
     assert handover["critical_blockers"] == []
+    assert handover["go_no_go_recommendation"].startswith("GO")
+    assert "Release scope" in handover["release_notes_draft"]
+    assert "previous known-good" in handover["rollback_plan"]

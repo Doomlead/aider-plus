@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from aider.company.daemon import CompanyDaemonError, load_daemon
+from aider.company.workflow import WorkflowError
 from aider.company.templates import (
     DEFAULT_TEMPLATE_KEY,
     list_templates,
@@ -31,6 +33,9 @@ class CompanyCLICommand:
     dry_plan: bool = False
     warehouse_path: str | None = None
     product_path: str | None = None
+    workflow_path: str | None = None
+    once: bool = False
+    status: bool = False
 
 
 class CompanyCLIError(ValueError):
@@ -41,6 +46,7 @@ USAGE = """Usage:
   aider company templates
   aider company create <idea> [--template TEMPLATE] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
   aider company new <idea> [--template TEMPLATE] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
+  aider company daemon --workflow PATH [--once] [--dry-run] [--status]
   aider warehouse init [PATH]
   aider warehouse list [--warehouse PATH]
   aider warehouse open PRODUCT [--warehouse PATH]
@@ -83,6 +89,9 @@ def parse_company_cli(
                 "`aider company templates` does not accept extra arguments.\n" + USAGE
             )
         return CompanyCLICommand(action="templates"), aider_args
+
+    if action == "daemon":
+        return _parse_company_daemon(rest), aider_args
 
     if action not in {"create", "new"}:
         raise CompanyCLIError(f"Unknown company command: {action}\n{USAGE}")
@@ -139,6 +148,43 @@ def parse_company_cli(
     )
 
 
+def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
+    workflow_path: str | None = None
+    dry_run = False
+    once = False
+    status = False
+    rest = list(args)
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        if token == "--workflow":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--workflow requires a path.\n" + USAGE)
+            workflow_path = rest[index]
+        elif token == "--dry-run":
+            dry_run = True
+        elif token == "--once":
+            once = True
+        elif token == "--status":
+            status = True
+        else:
+            raise CompanyCLIError(f"Unknown company daemon option: {token}.\n{USAGE}")
+        index += 1
+
+    if not workflow_path:
+        raise CompanyCLIError(
+            "`aider company daemon` requires --workflow PATH.\n" + USAGE
+        )
+    return CompanyCLICommand(
+        action="daemon",
+        dry_plan=dry_run,
+        workflow_path=workflow_path,
+        once=once,
+        status=status,
+    )
+
+
 def format_template_list() -> str:
     """Return a human-readable template catalog."""
 
@@ -164,6 +210,8 @@ def handle_company_cli_pre_coder(command: CompanyCLICommand) -> int | None:
     if command.action == "templates":
         print(format_template_list())
         return 0
+    if command.action == "daemon":
+        return handle_company_daemon_cli(command)
     if command.action in {"create", "new"} and command.dry_plan:
         if command.action == "new":
             warehouse = (
@@ -182,6 +230,52 @@ def handle_company_cli_pre_coder(command: CompanyCLICommand) -> int | None:
         print(render_company_plan(command))
         return 0
     return None
+
+
+def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
+    """Run Symphony-inspired Company daemon commands that do not need a Coder."""
+
+    if not command.workflow_path:
+        raise CompanyCLIError("`aider company daemon` requires --workflow PATH.")
+    try:
+        daemon = load_daemon(command.workflow_path)
+        if command.status:
+            status = daemon.status()
+            print(f"Workflow: {status['workflow']}")
+            print(f"Tracker: {status['tracker']}")
+            print(f"Workspace root: {status['workspace_root']}")
+            print(f"Max concurrent agents: {status['max_concurrent_agents']}")
+            if not status["runs"]:
+                print("Runs: none")
+            else:
+                print("Runs:")
+                for run in status["runs"]:
+                    print(
+                        f"- {run.get('issue_id', 'unknown')}: {run.get('status', 'unknown')} "
+                        f"attempts={run.get('attempts', 0)} workspace={run.get('workspace', '')}"
+                    )
+            return 0
+        proofs = daemon.run_once(dry_run=command.dry_plan)
+        if not proofs:
+            print("No eligible company daemon issues found.")
+            return 0
+        for proof in proofs:
+            print(f"Issue: {proof.issue}")
+            print(f"Workspace: {proof.workspace}")
+            print(f"Summary: {proof.summary}")
+            print(
+                "Proof of work: "
+                f"{Path(proof.workspace) / '.aider' / 'company' / 'proof-of-work.json'}"
+            )
+            print(f"Human review required: {proof.human_review_required}")
+        if not command.once:
+            print(
+                "Processed one daemon tick. Re-run the command or a scheduler for more ticks."
+            )
+        return 0
+    except (CompanyDaemonError, WorkflowError, OSError, ValueError) as exc:
+        print(str(exc))
+        return 1
 
 
 def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:

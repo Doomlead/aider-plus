@@ -74,6 +74,27 @@ def test_mcp_config_interpolates_project_and_task_dirs():
     assert resolved.env["ROOT"] == "/repo"
 
 
+def test_mcp_config_normalizes_lists_and_rejects_unknown_transport():
+    server = MCPServerConfig.from_dict(
+        {
+            "name": "docs",
+            "args": "--stdio",
+            "allowed_tools": "search",
+            "tool_policies": {
+                "search": {"allowed_departments": "engineering"},
+            },
+        }
+    )
+
+    assert server.transport == "stdio"
+    assert server.args == ["--stdio"]
+    assert server.allowed_tools == ["search"]
+    assert server.tool_policies["search"].allowed_departments == ["engineering"]
+
+    with pytest.raises(ValueError, match="Unsupported MCP transport"):
+        MCPServerConfig.from_dict({"name": "bad", "transport": "websocket"})
+
+
 def test_mcp_tools_convert_into_tool_registry_and_keep_department_allowlists():
     manager = FakeManager(MCPConfig(enabled=True))
     tool = mcp_tool_to_aider_tool(manager, manager.tool)

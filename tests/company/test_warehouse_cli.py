@@ -105,3 +105,19 @@ def test_warehouse_root_contains_products_directory(tmp_path):
     assert product_path.joinpath("README.md").exists()
     assert product_path.joinpath("app", "README.md").exists()
     assert product_path.joinpath(".aider", "company", "product.json").exists()
+
+
+def test_warehouse_status_ignores_forward_compatible_record_fields(tmp_path):
+    manager = WarehouseManager(tmp_path / "warehouse")
+    manager.init()
+    manager.create_product(name="Habit Tracker", idea="Build habits")
+    registry = manager._read_registry(require_exists=True)
+    registry["products"]["habit-tracker"]["future_field"] = "ignored"
+    manager._write_registry(registry)
+
+    products = manager.list_products()
+    status = manager.status()
+
+    assert products[0].slug == "habit-tracker"
+    assert status["products"] == 1
+    assert status["existing_products"] == 1

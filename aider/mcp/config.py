@@ -2,9 +2,32 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 MCPTransport = Literal["stdio", "streamable_http", "sse"]
+MCP_TRANSPORTS: frozenset[str] = frozenset(("stdio", "streamable_http", "sse"))
+
+
+def _coerce_string_list(value: Any) -> list[str]:
+    """Return a clean list of strings without treating one string as characters."""
+
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item) for item in value if item is not None]
+
+
+def _coerce_transport(value: Any) -> MCPTransport:
+    transport = str(value or "stdio")
+    if transport not in MCP_TRANSPORTS:
+        raise ValueError(
+            f"Unsupported MCP transport: {transport}. "
+            f"Expected one of: {', '.join(sorted(MCP_TRANSPORTS))}."
+        )
+    return cast(MCPTransport, transport)
 
 
 @dataclass
@@ -22,7 +45,7 @@ class MCPToolPolicy:
             enabled=bool(data.get("enabled", True)),
             read_only=bool(data.get("read_only", False)),
             requires_approval=bool(data.get("requires_approval", False)),
-            allowed_departments=list(data.get("allowed_departments", []) or []),
+            allowed_departments=_coerce_string_list(data.get("allowed_departments")),
         )
 
 
@@ -57,14 +80,14 @@ class MCPServerConfig:
         }
         return cls(
             name=str(data.get("name", "")),
-            transport=str(data.get("transport", "stdio")),  # type: ignore[arg-type]
+            transport=_coerce_transport(data.get("transport", "stdio")),
             command=data.get("command"),
-            args=list(data.get("args", []) or []),
+            args=_coerce_string_list(data.get("args")),
             url=data.get("url"),
             env={str(k): str(v) for k, v in (data.get("env") or {}).items()},
             enabled=bool(data.get("enabled", True)),
-            allowed_departments=list(data.get("allowed_departments", []) or []),
-            allowed_tools=list(data.get("allowed_tools", []) or []),
+            allowed_departments=_coerce_string_list(data.get("allowed_departments")),
+            allowed_tools=_coerce_string_list(data.get("allowed_tools")),
             tool_policies=policies,
             timeout_seconds=float(data.get("timeout_seconds", 30.0) or 30.0),
         )

@@ -307,11 +307,14 @@ Create or reuse a warehouse product repo, register it, scaffold the template, an
 run the Company implementation loop inside that product repo.
 
 ```bash
-aider company daemon --workflow PATH [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N]
+aider company daemon --workflow PATH [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N] [--watch]
 ```
 
 Run one issue-workflow daemon tick for an issue-backed workflow, preview it with
-`--dry-run`, trigger one issue with `--run ISSUE_ID`, restrict the runner with `--departments product,engineering,qa` and `--max-iterations N`, or print run/workspace status with `--status`.
+`--dry-run`, trigger one issue with `--run ISSUE_ID`, restrict the runner with
+`--departments product,engineering,qa` and `--max-iterations N`, print
+run/workspace status with `--status`, or add `--watch` to stream shared EventBus
+progress while the run executes.
 
 ### Warehouse commands
 
@@ -356,6 +359,10 @@ Operations assistant loop
   v
 CompanyOrchestrator
   |
+  +--> shared typed EventBus (lifecycle, daemon progress, COO actions, approvals)
+  |       |
+  |       +--> Browser GUI / Desktop GUI / Discord / daemon --watch / future API+MCP streams
+  |
   v
 Product -> UX -> Delivery -> Engineering -> Reviewer -> QA -> Delivery -> DevOps
   |
@@ -363,9 +370,17 @@ Product -> UX -> Delivery -> Engineering -> Reviewer -> QA -> Delivery -> DevOps
 Git-backed product repo + deliverables + audit log + approvals + memory
 ```
 
-The orchestrator is the canonical product-building path. Surfaces should send
-messages in and render shared results out rather than reimplementing department,
-approval, lifecycle, audit, status, or deployment behavior.
+The orchestrator is the canonical product-building path. It publishes structured,
+versioned runtime events through `aider.company.events.EventBus`, so surfaces
+should send messages in and render shared EventBus results out rather than
+reimplementing department, approval, lifecycle, audit, status, or deployment
+behavior. `surface_messages.py` contains the shared formatting layer for these
+events and the simple server-sent-event payload used by future API/MCP streams.
+Each event carries `version: 1` and `severity` (`info`, `warning`, or `error`),
+with explicit constants for supported/deprecated versions so future breaking
+schema changes can be introduced with a compatibility window. The in-memory bus
+keeps a bounded replay buffer and automatically prunes old events during
+long-running sessions.
 
 ---
 

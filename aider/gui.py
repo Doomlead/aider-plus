@@ -202,6 +202,7 @@ class DesktopCompanySession:
         self.service_tasks = []
         self.background_error = None
         self._shutdown = False
+        self._event_bus_unsubscribe = None
         self.loop = asyncio.new_event_loop()
         self.loop_thread = threading.Thread(
             target=self._run_loop,
@@ -292,6 +293,9 @@ class DesktopCompanySession:
             company_config=company_config,
         )
         self.orchestrator.active_project = self.active_project
+        self._event_bus_unsubscribe = self.orchestrator.event_bus.subscribe(
+            self._record_runtime_event
+        )
         for department in (
             self.product,
             self.ux,
@@ -323,6 +327,12 @@ class DesktopCompanySession:
             "Recover pending approvals",
             service=True,
         )
+
+    async def _record_runtime_event(self, event):
+        with self.event_lock:
+            self.events.append(event)
+            self.event_queue.append(event)
+            self.event_version += 1
 
     async def _record_company_message(self, message):
         with self.event_lock:
@@ -393,6 +403,9 @@ class DesktopCompanySession:
         if self._shutdown:
             return
         self._shutdown = True
+        if self._event_bus_unsubscribe is not None:
+            self._event_bus_unsubscribe()
+            self._event_bus_unsubscribe = None
         futures = [future for _, future in self.pending_runs + self.service_tasks]
         if self.orchestrator and self.loop.is_running():
             try:

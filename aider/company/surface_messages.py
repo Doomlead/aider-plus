@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from aider.company.events import CompanyEvent as RuntimeCompanyEvent, EventBus
 from aider.company.schemas import CompanyEvent, EventMessage
 
 if TYPE_CHECKING:
@@ -15,7 +16,9 @@ def format_approval_required_message(event: EventMessage) -> str:
     payload = event.payload
     project_name = payload.get("project_name") or "unknown-project"
     gate_name = payload.get("gate_name", "prd_approval")
-    gate_label = gate_name.replace("prd", "PRD").replace("_", " ").title().replace("Prd", "PRD")
+    gate_label = (
+        gate_name.replace("prd", "PRD").replace("_", " ").title().replace("Prd", "PRD")
+    )
     handoff_to = payload.get("handoff_to") or "engineering"
     handoff_label = str(handoff_to).replace("_", " ").title()
     if gate_name == "prd_approval":
@@ -27,7 +30,9 @@ def format_approval_required_message(event: EventMessage) -> str:
     else:
         title = "🧪 **QA Release Approval Required**"
     preview = str(payload.get("artifact_preview", "")).strip()
-    quoted_preview = "\n".join(f"> {line}" if line else ">" for line in preview.splitlines())
+    quoted_preview = "\n".join(
+        f"> {line}" if line else ">" for line in preview.splitlines()
+    )
     return (
         f"{title}\n"
         f"Project: `{project_name}`\n"
@@ -69,6 +74,53 @@ def format_lifecycle_event_message(event: EventMessage) -> str:
     if body:
         body = "\n" + body
     return f"{icon} **{label}**{suffix}\nTask: `{event.task_id}`{body}"
+
+
+def format_runtime_event_message(event: RuntimeCompanyEvent) -> str:
+    """Format a typed EventBus event for chat, GUI timelines, logs, or APIs."""
+
+    payload = event.payload or {}
+    title = str(payload.get("name") or event.event_type).replace("_", " ").title()
+    task_id = payload.get("task_id") or payload.get("issue_id") or event.session_id
+    status = payload.get("status")
+    department = (payload.get("metadata") or {}).get("department") or payload.get(
+        "department"
+    )
+    icon = {"warning": "⚠️", "error": "❌"}.get(
+        event.severity,
+        {
+            "daemon_run_progress": "🛰️",
+            "coo_action_taken": "🤖",
+            "deployment_completed": "🚀",
+            "approval_required": "📋",
+            "project_blocked": "🚧",
+        }.get(event.event_type, "🔄"),
+    )
+    details = []
+    if event.severity != "info":
+        details.append(f"Severity: `{event.severity}`")
+    if department:
+        details.append(f"Department: `{department}`")
+    if status:
+        details.append(f"Status: `{status}`")
+    if payload.get("stage"):
+        details.append(f"Stage: `{payload.get('stage')}`")
+    if (
+        payload.get("completed_count") is not None
+        and payload.get("total_stages") is not None
+    ):
+        details.append(
+            f"Progress: {payload.get('completed_count')}/{payload.get('total_stages')}"
+        )
+    if payload.get("error"):
+        details.append(f"Error: {payload.get('error')}")
+    return "\n".join([f"{icon} **{title}**", f"Task: `{task_id}`", *details])[:1900]
+
+
+def event_stream_response(event_bus: EventBus, limit: int = 50) -> str:
+    """Return a simple SSE payload for API/MCP adapters to expose later."""
+
+    return "".join(event_bus.event_stream(limit=limit))
 
 
 def format_audit_log_message(project_memory: "ProjectMemory", limit: int = 10) -> str:
@@ -155,6 +207,8 @@ __all__ = [
     "EventMessage",
     "format_approval_required_message",
     "format_lifecycle_event_message",
+    "format_runtime_event_message",
+    "event_stream_response",
     "format_audit_log_message",
     "format_company_status_message",
     "format_coo_status_message",

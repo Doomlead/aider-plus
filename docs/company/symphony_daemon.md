@@ -168,10 +168,19 @@ Show status for existing run workspaces:
 aider company daemon --workflow AIDER_WORKFLOW.md --status
 ```
 
+Stream the shared Company EventBus while a daemon run executes:
+
+```bash
+aider company daemon --workflow AIDER_WORKFLOW.md --once --watch
+```
+
 A dry run creates the issue workspace, initializes Git, renders the Company Mode
 prompt, writes run state, and writes proof-of-work JSON. Production callers can
 attach a runner to `CompanyDaemon` to execute Aider headlessly and return changed
-files, check results, QA/review status, PR URL, and risk notes.
+files, check results, QA/review status, PR URL, and risk notes. The built-in
+runner publishes `daemon_run_progress` events to the shared typed EventBus, so
+CLI `--watch`, browser/desktop timelines, Discord forwarding, and future API/MCP
+streams see the same progress envelope.
 
 ## Safety model
 

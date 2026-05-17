@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Optional
 
 from aider.company.daemon import CompanyDaemonError, load_daemon
+from aider.company.events import CooActionTaken, EventBus, global_event_bus
 from aider.company.knowledge import KnowledgeManager
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.workflow import WorkflowError
@@ -62,11 +63,12 @@ BusEventHandler = Callable[[COOMessageBusEvent], Awaitable[None] | None]
 class COOMessageBus:
     """Small async bus that decouples user channels from company orchestration."""
 
-    def __init__(self, *, history_limit: int = 200):
+    def __init__(self, *, history_limit: int = 200, event_bus: EventBus | None = None):
         self.inbound: asyncio.Queue[COOMessage] = asyncio.Queue()
         self.outbound: asyncio.Queue[COOMessage] = asyncio.Queue()
         self.history_limit = history_limit
         self.events: list[COOMessageBusEvent] = []
+        self.event_bus = event_bus or global_event_bus
         self._handlers: list[BusEventHandler] = []
         self.stats = {
             "inbound_published": 0,
@@ -143,6 +145,21 @@ class COOMessageBus:
         self.events.append(event)
         if len(self.events) > self.history_limit:
             self.events = self.events[-self.history_limit :]
+        await self.event_bus.publish_async(
+            CooActionTaken(
+                session_id=message.session_key,
+                severity="warning" if event_type == "coo_error" else "info",
+                payload={
+                    "coo_event_type": event_type,
+                    "channel": message.channel,
+                    "role": message.role,
+                    "queue": queue,
+                    "queue_size": queue_size,
+                    "content": message.content,
+                    "metadata": metadata,
+                },
+            )
+        )
         for handler in list(self._handlers):
             result = handler(event)
             if asyncio.iscoroutine(result):
@@ -536,7 +553,7 @@ class NanobotCOO:
             coo_agent_loop if coo_agent_loop is not None else agent_loop
         )
         self.session_manager = session_manager or COOSessionManager(orchestrator.memory)
-        self.bus = bus or COOMessageBus()
+        self.bus = bus or COOMessageBus(event_bus=orchestrator.event_bus)
         self.default_target = default_target
         self.agent_config = orchestrator.company_config.get_department_config("coo")
         if self.coo_agent_loop is not None:

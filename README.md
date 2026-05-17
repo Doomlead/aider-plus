@@ -77,7 +77,7 @@ For non-interactive setup:
 ```bash
 aider company init \
   --warehouse ./AiderPlusWarehouse \
-  --template nextjs-app \
+  --template nextjs-saas \
   --github-repo owner/repo \
   --model gpt-5.5 \
   --enable-mcp \
@@ -114,7 +114,7 @@ Preview the generated Company brief without changing files:
 
 ```bash
 aider company create "Build a Stripe webhook API" \
-  --template python-fastapi-api \
+  --template fastapi-api \
   --dry-plan
 ```
 
@@ -208,7 +208,7 @@ Preview a new product without creating it:
 ```bash
 aider company new "Build a Stripe webhook API" \
   --name billing-hooks \
-  --template python-fastapi-api \
+  --template fastapi-api \
   --warehouse ~/AiderPlusWarehouse \
   --dry-plan
 ```
@@ -228,35 +228,32 @@ focus, engineering defaults, QA gates, and post-creation guidance.
 Current templates:
 
 - `nextjs-saas` — production-shaped SaaS app with onboarding, billing seams, settings, dashboards, and provider adapters.
-- `python-fastapi-api` — contract-first FastAPI API with routers, schemas, services, repositories, health checks, and tests.
-- `electron-desktop-app` — cross-platform desktop app with main/preload/renderer separation, IPC contracts, local data, and packaging seams.
-- `data-dashboard` — analytics dashboard with fixtures, metric definitions, charts, filters, exports, and data-quality checks.
-- `data-dashboard-streamlit` — Streamlit analytics dashboard with fixture-backed metrics, filters, chart/export seams, secrets notes, and deployment guidance.
-- `cli-tool-python` — Python package CLI with subcommands, config precedence, deterministic output, exit codes, packaging notes, and tests.
-- `saas-dashboard` — authenticated dashboard, metrics, CRUD workflows, and admin views.
-- `nextjs-app` — React/Next.js-style routes, components, state, and UI tests.
-- `fastapi-backend` — Python API with routes, schemas, services, persistence boundaries, and tests.
-- `cli-tool` — command-line product with subcommands, config, help text, and tests.
+- `fastapi-api` — contract-first FastAPI API with routers, schemas, services, repositories, health checks, and tests.
+- `python-cli` — Python package CLI with subcommands, config precedence, deterministic output, exit codes, packaging notes, and tests.
+- `electron-desktop` — cross-platform desktop app with main/preload/renderer separation, IPC contracts, local data, and packaging seams.
+- `streamlit-dashboard` — Streamlit analytics dashboard with fixture-backed metrics, filters, chart/export seams, secrets notes, and deployment guidance.
+- `data-dashboard` — analytics/data workflow with fixtures, metric definitions, charts, filters, exports, and data-quality checks.
 - `discord-bot` — bot commands, events, permissions, moderation/safety, and operations notes.
 - `browser-extension` — manifest, popup/options UI, content scripts, storage, and tests.
-- `data-app` — ingestion, transforms, charts, exports, fixtures, and validation checks.
 - `internal-admin` — back-office workflows, roles, audit, approvals, and operational safeguards.
+
+Template Aliases: older names such as `nextjs-app`, `python-fastapi-api`, `fastapi-backend`, `cli-tool-python`, `electron-desktop-app`, `data-dashboard-streamlit`, `saas-dashboard`, `cli-tool`, and `data-app` still work, but Company Mode prints a deprecation note and stores the canonical name.
 
 Example template-specific starts:
 
 ```bash
 aider company new "Build a founder revenue dashboard with CSV import and cohort charts" \
-  --template data-dashboard-streamlit \
+  --template streamlit-dashboard \
   --name founder-metrics \
   --warehouse ~/AiderPlusWarehouse
 
 aider company new "Build a Python CLI that exports reports from CSV files" \
-  --template cli-tool-python \
+  --template python-cli \
   --name report-exporter \
   --warehouse ~/AiderPlusWarehouse
 
 aider company new "Build a secure offline notes app with encrypted local files" \
-  --template electron-desktop-app \
+  --template electron-desktop \
   --name secure-notes \
   --warehouse ~/AiderPlusWarehouse
 ```

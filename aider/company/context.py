@@ -421,9 +421,9 @@ class ContextBuilder:
         return formatted
 
     def _item_usage_count(self, item_type: str, category: str, text: str) -> int:
-        recent = self.state.memory.data.get("knowledge", {}).get(
-            "recently_injected", []
-        )
+        memory = getattr(self.state, "memory", None)
+        memory_data = getattr(memory, "data", {})
+        recent = memory_data.get("knowledge", {}).get("recently_injected", [])
         if not isinstance(recent, list):
             return 0
         needle = f"{category} —" if item_type == "playbook" else text

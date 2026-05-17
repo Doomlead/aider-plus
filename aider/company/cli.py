@@ -14,6 +14,7 @@ from aider.company.templates import (
     get_template,
     list_templates,
     render_zero_to_mvp_prompt,
+    template_alias_note,
 )
 from aider.company.warehouse import (
     WarehouseError,
@@ -30,6 +31,7 @@ class CompanyCLICommand:
     action: str
     idea: str = ""
     template: str = DEFAULT_TEMPLATE_KEY
+    template_alias_note: str | None = None
     project_name: str | None = None
     dry_plan: bool = False
     warehouse_path: str | None = None
@@ -68,11 +70,11 @@ USAGE = """Usage:
   aider warehouse status [--warehouse PATH]
 
 Examples:
-  aider company init --warehouse ./AiderPlusWarehouse --template nextjs-app --product-idea "Build my MVP" --product-name my-mvp --yes
+  aider company init --warehouse ./AiderPlusWarehouse --template nextjs-saas --product-idea "Build my MVP" --product-name my-mvp --yes
   aider company templates
   aider company create "Build a habit tracker web app with login, dashboard, and streaks"
-  aider company new "Build a habit tracker" --name habit-tracker --template nextjs-app
-  aider company create "Build a Stripe webhook API" --template fastapi-backend -- --model gpt-5.5
+  aider company new "Build a habit tracker" --name habit-tracker --template nextjs-saas
+  aider company create "Build a Stripe webhook API" --template fastapi-api -- --model gpt-5.5
 """.strip()
 
 
@@ -153,8 +155,9 @@ def parse_company_cli(
         raise CompanyCLIError(
             f"`aider company {action}` requires a product idea.\n" + USAGE
         )
+    requested_template = template
     try:
-        template = get_template(template).key
+        template = get_template(requested_template).key
     except ValueError as exc:
         raise CompanyCLIError(str(exc) + "\n" + USAGE) from exc
 
@@ -163,6 +166,7 @@ def parse_company_cli(
             action=action,
             idea=idea,
             template=template,
+            template_alias_note=template_alias_note(requested_template),
             project_name=project_name,
             dry_plan=dry_plan,
             warehouse_path=warehouse_path,
@@ -235,13 +239,15 @@ def _parse_company_onboarding(action: str, args: Sequence[str]) -> CompanyCLICom
                 f"Unknown company {action} option: {token}.\n" + USAGE
             )
         index += 1
+    requested_template = template
     try:
-        template = get_template(template).key
+        template = get_template(requested_template).key
     except ValueError as exc:
         raise CompanyCLIError(str(exc) + "\n" + USAGE) from exc
     return CompanyCLICommand(
         action=action,
         template=template,
+        template_alias_note=template_alias_note(requested_template),
         warehouse_path=warehouse_path,
         repo=repo,
         github_token=github_token,
@@ -345,21 +351,41 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
 
 
 def format_template_list() -> str:
-    """Return a human-readable template catalog."""
+    """Return a human-readable template catalog as a compact table."""
 
-    lines = ["Aider Plus zero-to-MVP templates:"]
+    rows = []
     for template in list_templates():
-        lines.append(f"- {template.summary()}")
-        if template.recommended_skills:
-            lines.append("  skills: " + ", ".join(template.recommended_skills))
-        if template.all_qa_gates():
-            lines.append("  QA gates: " + "; ".join(template.all_qa_gates()[:2]))
-        if template.post_creation_steps():
-            lines.append(
-                "  post-create: " + "; ".join(template.post_creation_steps()[:2])
+        skills = ", ".join(template.recommended_skills or ["generalist"])
+        rows.append(
+            (
+                template.key,
+                template.description,
+                skills,
+                f'aider company new "Build my MVP" --template {template.key}',
             )
-        if template.example_prd_prompt:
-            lines.append(f"  PRD seed: {template.example_prd_prompt}")
+        )
+
+    headers = ("Name", "Description", "Recommended Skills", "Example Command")
+    widths = [
+        max(len(str(row[index])) for row in (headers, *rows))
+        for index in range(len(headers))
+    ]
+
+    def render_row(row: tuple[str, str, str, str]) -> str:
+        return " | ".join(value.ljust(widths[index]) for index, value in enumerate(row))
+
+    lines = [
+        "Aider Plus zero-to-MVP templates:",
+        render_row(headers),
+        "-+-".join("-" * width for width in widths),
+    ]
+    lines.extend(render_row(row) for row in rows)
+    lines.extend(
+        [
+            "",
+            "Template Aliases: old template names still work, but are deprecated and resolve to the canonical names shown above.",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -398,6 +424,8 @@ def handle_company_cli_pre_coder(command: CompanyCLICommand) -> int | None:
             print(
                 f"Product repo: {warehouse / 'products' / slugify_product_name(product_name)}"
             )
+        if command.template_alias_note:
+            print(command.template_alias_note)
         print(render_company_plan(command))
         return 0
     return None
@@ -566,6 +594,8 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
     )
     coder.io.tool_output(f"\n🚀 Aider Plus Company: {label}")
     coder.io.tool_output(f"Template: {command.template}")
+    if command.template_alias_note:
+        coder.io.tool_output(command.template_alias_note)
     if command.project_name:
         coder.io.tool_output(f"Project: {command.project_name}")
     if command.product_path:

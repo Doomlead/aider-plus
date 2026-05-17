@@ -8,9 +8,14 @@ import threading
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Literal
 
 EVENT_VERSION = 1
+SUPPORTED_EVENT_VERSIONS = (1,)
+DEPRECATED_EVENT_VERSIONS: tuple[int, ...] = ()
+EVENT_VERSION_DEPRECATIONS: dict[int, str] = {}
+EventSeverity = Literal["info", "warning", "error"]
+VALID_EVENT_SEVERITIES = {"info", "warning", "error"}
 
 
 def utc_now() -> str:
@@ -27,7 +32,11 @@ class CompanyEvent:
     timestamp: str = field(default_factory=utc_now)
     session_id: str = "company"
     payload: dict[str, Any] = field(default_factory=dict)
+    severity: EventSeverity = "info"
     version: int = EVENT_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "severity", normalize_severity(self.severity))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -44,8 +53,56 @@ class CompanyEvent:
             timestamp=str(data.get("timestamp") or utc_now()),
             session_id=str(data.get("session_id") or "company"),
             payload=dict(data.get("payload") or {}),
-            version=int(data.get("version") or EVENT_VERSION),
+            severity=normalize_severity(data.get("severity", "info")),
+            version=normalize_event_version(data.get("version")),
         )
+
+    @property
+    def is_deprecated(self) -> bool:
+        return self.version in DEPRECATED_EVENT_VERSIONS
+
+    @property
+    def deprecation_message(self) -> str | None:
+        return EVENT_VERSION_DEPRECATIONS.get(self.version)
+
+
+def normalize_severity(value: Any) -> EventSeverity:
+    severity = str(value or "info").lower()
+    if severity not in VALID_EVENT_SEVERITIES:
+        return "info"
+    return severity  # type: ignore[return-value]
+
+
+def normalize_event_version(value: Any) -> int:
+    try:
+        version = int(value or EVENT_VERSION)
+    except (TypeError, ValueError):
+        return EVENT_VERSION
+    if version in SUPPORTED_EVENT_VERSIONS or version in DEPRECATED_EVENT_VERSIONS:
+        return version
+    return EVENT_VERSION
+
+
+def event_version_deprecation_message(version: int) -> str | None:
+    return EVENT_VERSION_DEPRECATIONS.get(version)
+
+
+def infer_severity(
+    payload: dict[str, Any], metadata: dict[str, Any] | None = None
+) -> EventSeverity:
+    metadata = metadata or {}
+    explicit = payload.get("severity") or metadata.get("severity")
+    if explicit:
+        return normalize_severity(explicit)
+    status = str(payload.get("status") or metadata.get("status") or "").lower()
+    event_name = str(payload.get("name") or payload.get("event_type") or "").lower()
+    if status in {"failed", "failure", "error", "blocked"} or "error" in event_name:
+        return "error"
+    if status in {"warning", "needs_review", "partial_success"} or payload.get(
+        "warning"
+    ):
+        return "warning"
+    return "info"
 
 
 @dataclass(frozen=True)
@@ -109,6 +166,7 @@ class EventBus:
 
     def __init__(self, history_limit: int = 200, session_id: str = "company"):
         self.history_limit = max(1, int(history_limit))
+        self.pruned_count = 0
         self.session_id = session_id
         self._recent: deque[CompanyEvent] = deque(maxlen=self.history_limit)
         self._handlers: list[EventHandler] = []
@@ -120,7 +178,7 @@ class EventBus:
         if not isinstance(event, CompanyEvent):
             raise TypeError("EventBus.publish expects a CompanyEvent")
         with self._lock:
-            self._recent.append(event)
+            self._append_recent_locked(event)
             handlers = list(self._handlers)
         for handler in handlers:
             result = handler(event)
@@ -139,13 +197,29 @@ class EventBus:
         if not isinstance(event, CompanyEvent):
             raise TypeError("EventBus.publish_async expects a CompanyEvent")
         with self._lock:
-            self._recent.append(event)
+            self._append_recent_locked(event)
             handlers = list(self._handlers)
         for handler in handlers:
             result = handler(event)
             if asyncio.iscoroutine(result):
                 await result
         return event
+
+    def _append_recent_locked(self, event: CompanyEvent) -> None:
+        if len(self._recent) >= self.history_limit:
+            self.pruned_count += 1
+        self._recent.append(event)
+
+    def set_history_limit(self, history_limit: int) -> None:
+        """Resize the replay buffer and prune old events immediately."""
+
+        new_limit = max(1, int(history_limit))
+        with self._lock:
+            existing = list(self._recent)
+            pruned = max(0, len(existing) - new_limit)
+            self.history_limit = new_limit
+            self.pruned_count += pruned
+            self._recent = deque(existing[-new_limit:], maxlen=new_limit)
 
     def subscribe(
         self, handler: EventHandler, *, replay: bool = False
@@ -213,24 +287,31 @@ def event_from_legacy_message(
         payload.setdefault("task_id", task_id)
         if metadata:
             payload.setdefault("metadata", metadata)
-        return cls(event_type=event_type, session_id=session_id, payload=payload)
+        return cls(
+            event_type=event_type,
+            session_id=session_id,
+            payload=payload,
+            severity=infer_severity(payload, metadata),
+        )
 
     department = getattr(message, "department", None)
     if department is not None:
         event_type = (
             "deployment_completed" if department == "devops" else "department_event"
         )
+        event_payload = {
+            "task_id": task_id,
+            "department": department,
+            "status": getattr(message, "status", None),
+            "artifact_type": getattr(message, "artifact_type", None),
+            "payload": getattr(message, "payload", None),
+            "metadata": metadata,
+        }
         return EVENT_CLASSES.get(event_type, DepartmentEvent)(
             event_type=event_type,
             session_id=session_id,
-            payload={
-                "task_id": task_id,
-                "department": department,
-                "status": getattr(message, "status", None),
-                "artifact_type": getattr(message, "artifact_type", None),
-                "payload": getattr(message, "payload", None),
-                "metadata": metadata,
-            },
+            payload=event_payload,
+            severity=infer_severity(event_payload, metadata),
         )
 
     event_type = str(getattr(message, "event_type", "company_event"))
@@ -238,4 +319,5 @@ def event_from_legacy_message(
         event_type=event_type,
         session_id=session_id,
         payload={"message": str(message)},
+        severity=normalize_severity(getattr(message, "severity", "info")),
     )

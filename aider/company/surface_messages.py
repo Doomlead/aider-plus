@@ -86,14 +86,19 @@ def format_runtime_event_message(event: RuntimeCompanyEvent) -> str:
     department = (payload.get("metadata") or {}).get("department") or payload.get(
         "department"
     )
-    icon = {
-        "daemon_run_progress": "🛰️",
-        "coo_action_taken": "🤖",
-        "deployment_completed": "🚀",
-        "approval_required": "📋",
-        "project_blocked": "🚧",
-    }.get(event.event_type, "🔄")
+    icon = {"warning": "⚠️", "error": "❌"}.get(
+        event.severity,
+        {
+            "daemon_run_progress": "🛰️",
+            "coo_action_taken": "🤖",
+            "deployment_completed": "🚀",
+            "approval_required": "📋",
+            "project_blocked": "🚧",
+        }.get(event.event_type, "🔄"),
+    )
     details = []
+    if event.severity != "info":
+        details.append(f"Severity: `{event.severity}`")
     if department:
         details.append(f"Department: `{department}`")
     if status:

@@ -148,6 +148,7 @@ class COOMessageBus:
         await self.event_bus.publish_async(
             CooActionTaken(
                 session_id=message.session_key,
+                severity="warning" if event_type == "coo_error" else "info",
                 payload={
                     "coo_event_type": event_type,
                     "channel": message.channel,

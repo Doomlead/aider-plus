@@ -113,6 +113,7 @@ class CompanyDaemon:
         tracker: TrackerAdapter | None = None,
         workspace_manager: RunWorkspaceManager | None = None,
         runner: Callable[[str, Path, TrackerIssue], dict[str, Any]] | None = None,
+        runner_options: Any | None = None,
         orchestrator: Any | None = None,
         coo: Any | None = None,
     ):
@@ -121,8 +122,25 @@ class CompanyDaemon:
         root = workflow.workspace.root
         self.workspace_manager = workspace_manager or RunWorkspaceManager(root)
         self.runner = runner
+        self.runner_options = runner_options
         self.orchestrator = orchestrator
         self.coo = coo
+        self._default_runner = None
+
+    def configure_runner_options(
+        self,
+        *,
+        departments: tuple[str, ...] = (),
+        max_iterations: int | None = None,
+        dry_run: bool = False,
+    ) -> None:
+        from aider.company.daemon.runner import CompanyDaemonRunnerOptions
+
+        self.runner_options = CompanyDaemonRunnerOptions(
+            departments=departments,
+            max_iterations=max_iterations,
+            dry_run=dry_run,
+        )
         self._default_runner = None
 
     def run_once(self, *, dry_run: bool = False) -> list[ProofOfWork]:
@@ -340,12 +358,17 @@ class CompanyDaemon:
                 from aider.company.coo import NanobotCOO
 
                 self.coo = NanobotCOO(orchestrator=self.orchestrator)
-            from aider.company.daemon.runner import CompanyDaemonRunner
+            from aider.company.daemon.runner import (
+                CompanyDaemonRunner,
+                CompanyDaemonRunnerOptions,
+            )
 
+            options = self.runner_options or CompanyDaemonRunnerOptions()
             self._default_runner = CompanyDaemonRunner(
                 self.orchestrator,
                 self.coo,
                 timeout_seconds=max(self.workflow.hooks.timeout_seconds, 1),
+                options=options,
             )
         return self._default_runner
 
@@ -397,6 +420,7 @@ class CompanyDaemon:
             pr_url=result.get("pr_url"),
             summary=str(result.get("summary") or "Company daemon run completed."),
             changed_files=tuple(str(item) for item in result.get("changed_files", ())),
+            diff_summary=tuple(str(item) for item in result.get("diff_summary", ())),
             commit_messages=tuple(str(item) for item in result.get("commit_messages", ())),
             checks=tuple(dict(item) for item in result.get("checks", ())),
             qa_result=str(
@@ -411,6 +435,9 @@ class CompanyDaemon:
             diffs=tuple(dict(item) for item in result.get("diffs", ())),
             links=tuple(str(item) for item in result.get("links", ())),
             risk_notes=tuple(str(item) for item in result.get("risk_notes", ())),
+            completed_stages=tuple(str(item) for item in result.get("completed_stages", ())),
+            failed_stages=tuple(str(item) for item in result.get("failed_stages", ())),
+            partial_success=bool(result.get("partial_success", False)),
             human_review_required=bool(result.get("human_review_required", True)),
         )
 
@@ -524,6 +551,9 @@ def _format_tracker_comment(proof: ProofOfWork) -> str:
         f"Proof of work: {Path(proof.workspace) / '.aider' / 'company' / 'proof-of-work.json'}\n"
         f"Proof report: {Path(proof.workspace) / '.aider' / 'company' / 'proof-of-work.md'}\n"
         f"Checks: {checks}\n"
+        f"Partial success: {proof.partial_success}\n"
+        f"Completed stages: {', '.join(proof.completed_stages) or 'none'}\n"
+        f"Failed stages: {', '.join(proof.failed_stages) or 'none'}\n"
         f"Human review required: {proof.human_review_required}"
     )
 

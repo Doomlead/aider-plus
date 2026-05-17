@@ -278,11 +278,11 @@ Create or reuse a warehouse product repo, register it, scaffold the template, an
 run the Company implementation loop inside that product repo.
 
 ```bash
-aider company daemon --workflow PATH [--once] [--dry-run] [--status] [--run ISSUE_ID]
+aider company daemon --workflow PATH [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N]
 ```
 
 Run one issue-workflow daemon tick for an issue-backed workflow, preview it with
-`--dry-run`, trigger one issue with `--run ISSUE_ID`, or print run/workspace status with `--status`.
+`--dry-run`, trigger one issue with `--run ISSUE_ID`, restrict the runner with `--departments product,engineering,qa` and `--max-iterations N`, or print run/workspace status with `--status`.
 
 ### Warehouse commands
 
@@ -525,8 +525,10 @@ uses YAML front matter plus a prompt body. The daemon can:
 - run hooks such as `after_create`, `before_run`, `after_run`, and `before_remove`;
 - render issue placeholders into the Company prompt;
 - use the built-in `CompanyDaemonRunner` by default to execute Company Mode cycles across Product/UX, Engineering review, QA, Delivery, and DevOps departments when they are registered;
-- capture changed files, recent commit messages, QA checks, review feedback, Delivery handover data, DevOps build/deploy status, links, risks, and diffs as structured proof-of-work;
-- produce `.aider/company/run-state.json`, `.aider/company/proof-of-work.json`, and a human-readable `.aider/company/proof-of-work.md`;
+- capture changed files, concise diff summaries, JSON-stored diffs, recent commit messages, QA checks, review feedback, Delivery handover data, DevOps build/deploy status, links, risks, completed stages, failed stages, and partial-success state as structured proof-of-work;
+- continue through later departments when a stage fails where possible, marking `partial_success: true` for recoverable partial runs;
+- emit `daemon_run_progress` lifecycle events as stages start/finish so live surfaces can show long-running progress;
+- produce `.aider/company/run-state.json`, `.aider/company/proof-of-work.json`, and a human-readable `.aider/company/proof-of-work.md` with concise diff summaries;
 - expose `CompanyDaemon.get_status()` with running/idle state, last run, active
   workflows, pending proof-of-work, recent proof artifacts, hook timeout, and
   max-workspace safety limits for dashboards and COO inspection;
@@ -568,6 +570,7 @@ Run it:
 aider company daemon --workflow .aider/company/workflow.md --dry-run
 aider company daemon --workflow .aider/company/workflow.md --once
 aider company daemon --workflow .aider/company/workflow.md --run ISSUE-123
+aider company daemon --workflow .aider/company/workflow.md --run ISSUE-123 --departments engineering,qa --max-iterations 2
 aider company daemon --workflow .aider/company/workflow.md --status
 ```
 

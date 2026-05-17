@@ -38,6 +38,8 @@ class CompanyCLICommand:
     once: bool = False
     status: bool = False
     run_issue_id: str | None = None
+    runner_departments: tuple[str, ...] = ()
+    runner_max_iterations: int | None = None
 
 
 class CompanyCLIError(ValueError):
@@ -48,7 +50,7 @@ USAGE = """Usage:
   aider company templates
   aider company create <idea> [--template TEMPLATE] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
   aider company new <idea> [--template TEMPLATE] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
-  aider company daemon --workflow PATH [--once] [--dry-run] [--status] [--run ISSUE_ID]
+  aider company daemon --workflow PATH [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N]
   aider warehouse init [PATH]
   aider warehouse list [--warehouse PATH]
   aider warehouse open PRODUCT [--warehouse PATH]
@@ -160,6 +162,8 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
     once = False
     status = False
     run_issue_id: str | None = None
+    runner_departments: tuple[str, ...] = ()
+    runner_max_iterations: int | None = None
     rest = list(args)
     index = 0
     while index < len(rest):
@@ -180,6 +184,23 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
             if index >= len(rest):
                 raise CompanyCLIError("--run requires an issue id.\n" + USAGE)
             run_issue_id = rest[index]
+        elif token == "--departments":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--departments requires a comma-separated list.\n" + USAGE)
+            runner_departments = tuple(
+                item.strip().lower() for item in rest[index].split(",") if item.strip()
+            )
+        elif token == "--max-iterations":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--max-iterations requires a positive integer.\n" + USAGE)
+            try:
+                runner_max_iterations = int(rest[index])
+            except ValueError as exc:
+                raise CompanyCLIError("--max-iterations must be a positive integer.\n" + USAGE) from exc
+            if runner_max_iterations < 1:
+                raise CompanyCLIError("--max-iterations must be a positive integer.\n" + USAGE)
         else:
             raise CompanyCLIError(f"Unknown company daemon option: {token}.\n{USAGE}")
         index += 1
@@ -195,6 +216,8 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
         once=once,
         status=status,
         run_issue_id=run_issue_id,
+        runner_departments=runner_departments,
+        runner_max_iterations=runner_max_iterations,
     )
 
 
@@ -258,6 +281,11 @@ def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
         raise CompanyCLIError("`aider company daemon` requires --workflow PATH.")
     try:
         daemon = load_daemon(command.workflow_path)
+        daemon.configure_runner_options(
+            departments=command.runner_departments,
+            max_iterations=command.runner_max_iterations,
+            dry_run=command.dry_plan,
+        )
         if command.status:
             status = daemon.status()
             print(f"Workflow: {status['workflow']}")
@@ -303,6 +331,11 @@ def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
                 "Proof of work: "
                 f"{Path(proof.workspace) / '.aider' / 'company' / 'proof-of-work.json'}"
             )
+            print(f"Partial success: {proof.partial_success}")
+            if proof.completed_stages:
+                print("Completed stages: " + ", ".join(proof.completed_stages))
+            if proof.failed_stages:
+                print("Failed stages: " + ", ".join(proof.failed_stages))
             print(f"Human review required: {proof.human_review_required}")
         if not command.once:
             print(

@@ -4,6 +4,7 @@ from pathlib import Path
 from aider.company.cli import handle_company_cli_pre_coder, parse_company_cli
 from aider.company.daemon import (
     CompanyDaemon,
+    RunWorkspaceManager,
     sanitize_workspace_key,
 )
 from aider.company.tracker import LocalJsonTrackerAdapter
@@ -296,3 +297,121 @@ def test_builtin_daemon_runner_end_to_end_tracker_and_proof(tmp_path):
     raw = data["issues"][0]
     assert raw["status"] == "done"
     assert "Proof report:" in raw["comments"][0]["body"]
+
+
+def test_builtin_runner_partial_success_continues_and_emits_progress(tmp_path):
+    import asyncio
+
+    from aider.company.coo import NanobotCOO
+    from aider.company.daemon.runner import (
+        CompanyDaemonRunner,
+        CompanyDaemonRunnerOptions,
+    )
+    from aider.company.department import Department
+    from aider.company.orchestrator import CompanyOrchestrator
+    from aider.company.schemas import CompanyTask, Deliverable
+    from aider.company.tracker import TrackerIssue
+    from aider.memory import ProjectMemory
+
+    class PartialDepartment(Department):
+        def __init__(self, memory, name):
+            super().__init__(memory)
+            self.name = name
+
+        async def process(self, task: CompanyTask) -> Deliverable:
+            workspace = Path(task.context["workspace"])
+            if self.name == "engineering":
+                workspace.joinpath("partial.txt").write_text("partial", encoding="utf-8")
+            metadata = {"context": task.context}
+            if self.name == "qa":
+                metadata["command"] = "pytest failing-test"
+                status = "failure"
+                payload = "QA found a regression"
+            elif self.name == "delivery":
+                metadata["delivery_handover"] = {"ready_for_devops": False}
+                status = "success"
+                payload = "Delivery recorded follow-up blockers"
+            else:
+                status = "success"
+                payload = f"{self.name} complete"
+            return Deliverable(
+                task_id=task.task_id,
+                department=self.name,
+                artifact_type=task.artifact_type,
+                payload=payload,
+                status=status,
+                metadata=metadata,
+            )
+
+    async def run():
+        memory = ProjectMemory(str(tmp_path / "memory"))
+        orchestrator = CompanyOrchestrator(memory)
+        events = []
+
+        async def capture(message):
+            events.append(message)
+
+        orchestrator.on_deliverable(capture)
+        for name in ("engineering", "qa", "delivery"):
+            orchestrator.register(PartialDepartment(memory, name))
+        coo = NanobotCOO(orchestrator=orchestrator)
+        runner = CompanyDaemonRunner(
+            orchestrator,
+            coo,
+            timeout_seconds=5,
+            options=CompanyDaemonRunnerOptions(
+                departments=("engineering", "qa", "delivery"),
+                max_iterations=3,
+            ),
+        )
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        RunWorkspaceManager._ensure_git_repo(workspace)
+        result = await runner.execute(
+            "Implement a partial run",
+            workspace,
+            TrackerIssue(identifier="AP-5", title="Partial success"),
+        )
+        return result, events
+
+    result, events = asyncio.run(run())
+
+    assert result["partial_success"] is True
+    assert result["completed_stages"] == ["engineering", "qa", "delivery"]
+    assert result["failed_stages"] == ["qa"]
+    assert result["qa_result"] == "failure"
+    assert "partial.txt" in result["changed_files"]
+    assert any("partial.txt" in line for line in result["diff_summary"])
+    progress = [
+        event
+        for event in events
+        if isinstance(getattr(event, "payload", None), dict)
+        and event.payload.get("name") == "daemon_run_progress"
+    ]
+    assert progress
+    assert progress[-1].payload["status"] == "partial_success"
+
+
+def test_company_daemon_cli_parses_runner_options(tmp_path):
+    workflow_path = write_workflow(
+        tmp_path, tmp_path / "issues.json", tmp_path / "runs"
+    )
+    command, aider_args = parse_company_cli(
+        [
+            "company",
+            "daemon",
+            "--workflow",
+            str(workflow_path),
+            "--run",
+            "AP-6",
+            "--departments",
+            "product,engineering,qa",
+            "--max-iterations",
+            "2",
+        ]
+    )
+
+    assert aider_args == []
+    assert command.run_issue_id == "AP-6"
+    assert command.runner_departments == ("product", "engineering", "qa")
+    assert command.runner_max_iterations == 2

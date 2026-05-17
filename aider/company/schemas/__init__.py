@@ -752,6 +752,7 @@ class ProofOfWork:
     pr_url: str | None = None
     summary: str = ""
     changed_files: tuple[str, ...] = ()
+    diff_summary: tuple[str, ...] = ()
     commit_messages: tuple[str, ...] = ()
     checks: tuple[dict[str, Any], ...] = ()
     qa_result: str = "not-run"
@@ -762,6 +763,9 @@ class ProofOfWork:
     diffs: tuple[dict[str, str], ...] = ()
     links: tuple[str, ...] = ()
     risk_notes: tuple[str, ...] = ()
+    completed_stages: tuple[str, ...] = ()
+    failed_stages: tuple[str, ...] = ()
+    partial_success: bool = False
     human_review_required: bool = True
     markdown_path: str | None = None
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
@@ -775,6 +779,7 @@ class ProofOfWork:
             "pr_url": self.pr_url,
             "summary": self.summary,
             "changed_files": list(self.changed_files),
+            "diff_summary": list(self.diff_summary),
             "commit_messages": list(self.commit_messages),
             "checks": list(self.checks),
             "qa_result": self.qa_result,
@@ -785,6 +790,9 @@ class ProofOfWork:
             "diffs": list(self.diffs),
             "links": list(self.links),
             "risk_notes": list(self.risk_notes),
+            "completed_stages": list(self.completed_stages),
+            "failed_stages": list(self.failed_stages),
+            "partial_success": self.partial_success,
             "human_review_required": self.human_review_required,
             "markdown_path": self.markdown_path,
             "created_at": self.created_at,
@@ -800,6 +808,7 @@ class ProofOfWork:
             pr_url=str(data.get("pr_url")) if data.get("pr_url") else None,
             summary=str(data.get("summary", "")),
             changed_files=tuple(str(item) for item in data.get("changed_files", ())),
+            diff_summary=tuple(str(item) for item in data.get("diff_summary", ())),
             commit_messages=tuple(str(item) for item in data.get("commit_messages", ())),
             checks=tuple(dict(item) for item in data.get("checks", ())),
             qa_result=str(data.get("qa_result", "not-run")),
@@ -810,6 +819,9 @@ class ProofOfWork:
             diffs=tuple(dict(item) for item in data.get("diffs", ())),
             links=tuple(str(item) for item in data.get("links", ())),
             risk_notes=tuple(str(item) for item in data.get("risk_notes", ())),
+            completed_stages=tuple(str(item) for item in data.get("completed_stages", ())),
+            failed_stages=tuple(str(item) for item in data.get("failed_stages", ())),
+            partial_success=bool(data.get("partial_success", False)),
             human_review_required=bool(data.get("human_review_required", True)),
             markdown_path=(str(data.get("markdown_path")) if data.get("markdown_path") else None),
             created_at=str(data.get("created_at") or datetime.utcnow().isoformat()),
@@ -824,28 +836,35 @@ class ProofOfWork:
             command = check.get("command") or check.get("name") or "check"
             status = check.get("status") or check.get("result") or "unknown"
             checks.append(f"{command}: {status}")
-        diff_sections = []
-        for diff in self.diffs:
-            name = diff.get("file") or diff.get("name") or "diff"
-            body = str(diff.get("diff") or diff.get("content") or "")
-            if body:
-                diff_sections.append(f"### {name}\n```diff\n{body[:12000]}\n```")
+        diff_lines = list(self.diff_summary)
+        if not diff_lines and self.changed_files:
+            diff_lines = [f"{file} — changed" for file in self.changed_files]
         links = list(self.links)
         if self.pr_url and self.pr_url not in links:
             links.insert(0, self.pr_url)
         return f"""# Proof of Work: {self.issue}
 
-**Title:** {self.title}  
-**Created:** {self.created_at}  
-**Workspace:** `{self.workspace}`  
-**Branch:** {self.branch or "unknown"}  
+**Title:** {self.title}
+**Created:** {self.created_at}
+**Workspace:** `{self.workspace}`
+**Branch:** {self.branch or "unknown"}
 **Human review required:** {self.human_review_required}
+**Partial success:** {self.partial_success}
 
 ## Summary
 {self.summary or "No summary provided."}
 
+## Completed Stages
+{bullets(self.completed_stages)}
+
+## Failed Stages
+{bullets(self.failed_stages)}
+
 ## Changed Files
 {bullets(self.changed_files)}
+
+## Diff Summary
+{bullets(diff_lines)}
 
 ## Commits
 {bullets(self.commit_messages)}
@@ -877,7 +896,7 @@ class ProofOfWork:
 {bullets(self.risk_notes)}
 
 ## Diffs
-{chr(10).join(diff_sections) if diff_sections else "- No diff captured."}
+Full diffs are stored in the JSON proof artifact when available. This Markdown report keeps a concise diff summary to stay reviewable.
 """.strip() + "\n"
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -12,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from aider.company.schemas import ProofOfWork
 from aider.company.templates import DEFAULT_TEMPLATE_KEY, render_zero_to_mvp_prompt
 from aider.company.tracker import LocalJsonTrackerAdapter, TrackerAdapter, TrackerIssue
 from aider.company.warehouse import default_warehouse_path
@@ -28,6 +30,7 @@ class RunWorkspace:
     path: Path
     state_path: Path
     proof_path: Path
+    markdown_path: Path
 
 
 @dataclass
@@ -66,30 +69,6 @@ class RunState:
         )
 
 
-@dataclass(frozen=True)
-class ProofOfWork:
-    issue: str
-    title: str
-    workspace: str
-    branch: str | None = None
-    pr_url: str | None = None
-    summary: str = ""
-    changed_files: tuple[str, ...] = ()
-    checks: tuple[dict[str, Any], ...] = ()
-    qa_result: str = "not-run"
-    review_result: str = "not-run"
-    risk_notes: tuple[str, ...] = ()
-    human_review_required: bool = True
-    created_at: str = field(default_factory=lambda: _utc_now())
-
-    def to_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["changed_files"] = list(self.changed_files)
-        data["checks"] = list(self.checks)
-        data["risk_notes"] = list(self.risk_notes)
-        return data
-
-
 class RunWorkspaceManager:
     """Create one isolated, sanitized workspace for each tracker issue."""
 
@@ -112,6 +91,7 @@ class RunWorkspaceManager:
             path=path,
             state_path=state_dir / "run-state.json",
             proof_path=state_dir / "proof-of-work.json",
+            markdown_path=state_dir / "proof-of-work.md",
         )
 
     @staticmethod
@@ -133,12 +113,35 @@ class CompanyDaemon:
         tracker: TrackerAdapter | None = None,
         workspace_manager: RunWorkspaceManager | None = None,
         runner: Callable[[str, Path, TrackerIssue], dict[str, Any]] | None = None,
+        runner_options: Any | None = None,
+        orchestrator: Any | None = None,
+        coo: Any | None = None,
     ):
         self.workflow = workflow
         self.tracker = tracker or build_tracker(workflow)
         root = workflow.workspace.root
         self.workspace_manager = workspace_manager or RunWorkspaceManager(root)
         self.runner = runner
+        self.runner_options = runner_options
+        self.orchestrator = orchestrator
+        self.coo = coo
+        self._default_runner = None
+
+    def configure_runner_options(
+        self,
+        *,
+        departments: tuple[str, ...] = (),
+        max_iterations: int | None = None,
+        dry_run: bool = False,
+    ) -> None:
+        from aider.company.daemon.runner import CompanyDaemonRunnerOptions
+
+        self.runner_options = CompanyDaemonRunnerOptions(
+            departments=departments,
+            max_iterations=max_iterations,
+            dry_run=dry_run,
+        )
+        self._default_runner = None
 
     def run_once(self, *, dry_run: bool = False) -> list[ProofOfWork]:
         """Process at most max_concurrent_agents currently eligible issues."""
@@ -151,7 +154,7 @@ class CompanyDaemon:
         selected = issues[:available_slots]
         proofs: list[ProofOfWork] = []
         for issue in selected:
-            proofs.append(self.run_issue(issue, dry_run=dry_run))
+            proofs.append(self._run_issue_sync(issue, dry_run=dry_run))
         return proofs
 
     def status(self) -> dict[str, Any]:
@@ -243,7 +246,13 @@ class CompanyDaemon:
         proofs.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
         return proofs[: max(1, limit)]
 
-    def run_issue(self, issue: TrackerIssue, *, dry_run: bool = False) -> ProofOfWork:
+    async def run_issue(self, issue_id: str, *, dry_run: bool = False) -> ProofOfWork:
+        """Claim and run one tracker issue by identifier."""
+
+        issue = self._find_issue(issue_id)
+        return await asyncio.to_thread(self._run_issue_sync, issue, dry_run=dry_run)
+
+    def _run_issue_sync(self, issue: TrackerIssue, *, dry_run: bool = False) -> ProofOfWork:
         workspace = self.workspace_manager.prepare(
             issue, clean=self.workflow.workspace.clean
         )
@@ -332,6 +341,37 @@ class CompanyDaemon:
             self._write_proof(workspace, proof)
             return proof
 
+    def _find_issue(self, issue_id: str) -> TrackerIssue:
+        for issue in self.tracker.list_candidate_issues(()) + self.tracker.list_candidate_issues(self.workflow.tracker.labels):
+            if issue.identifier == issue_id:
+                return issue
+        raise CompanyDaemonError(f"Issue not found or not eligible: {issue_id}")
+
+    def _get_default_runner(self):
+        if self._default_runner is None:
+            if self.orchestrator is None:
+                from aider.company.orchestrator import CompanyOrchestrator
+                from aider.memory import ProjectMemory
+
+                self.orchestrator = CompanyOrchestrator(ProjectMemory(str(self.workspace_manager.root)))
+            if self.coo is None:
+                from aider.company.coo import NanobotCOO
+
+                self.coo = NanobotCOO(orchestrator=self.orchestrator)
+            from aider.company.daemon.runner import (
+                CompanyDaemonRunner,
+                CompanyDaemonRunnerOptions,
+            )
+
+            options = self.runner_options or CompanyDaemonRunnerOptions()
+            self._default_runner = CompanyDaemonRunner(
+                self.orchestrator,
+                self.coo,
+                timeout_seconds=max(self.workflow.hooks.timeout_seconds, 1),
+                options=options,
+            )
+        return self._default_runner
+
     def _build_company_prompt(self, issue: TrackerIssue) -> str:
         workflow_prompt = self.workflow.render_prompt(issue)
         template = self.workflow.company.template or DEFAULT_TEMPLATE_KEY
@@ -346,15 +386,16 @@ class CompanyDaemon:
     def _run_company_prompt(
         self, prompt: str, workspace: Path, issue: TrackerIssue, *, dry_run: bool
     ) -> dict[str, Any]:
-        if self.runner is not None and not dry_run:
-            return self.runner(prompt, workspace, issue)
+        if not dry_run:
+            runner = self.runner or self._get_default_runner()
+            return runner(prompt, workspace, issue)
         prompt_path = workspace / ".aider" / "company" / "daemon-prompt.md"
         prompt_path.write_text(prompt, encoding="utf-8")
         return {
             "summary": (
                 "Dry run prepared the workspace and rendered the Company Mode prompt."
                 if dry_run
-                else "Company prompt rendered; attach a runner to execute Aider headlessly."
+                else "Company prompt rendered by the built-in runner."
             ),
             "changed_files": _git_changed_files(workspace),
             "checks": [],
@@ -379,6 +420,8 @@ class CompanyDaemon:
             pr_url=result.get("pr_url"),
             summary=str(result.get("summary") or "Company daemon run completed."),
             changed_files=tuple(str(item) for item in result.get("changed_files", ())),
+            diff_summary=tuple(str(item) for item in result.get("diff_summary", ())),
+            commit_messages=tuple(str(item) for item in result.get("commit_messages", ())),
             checks=tuple(dict(item) for item in result.get("checks", ())),
             qa_result=str(
                 result.get("qa_result") or ("not-run" if dry_run else "unknown")
@@ -386,7 +429,15 @@ class CompanyDaemon:
             review_result=str(
                 result.get("review_result") or ("not-run" if dry_run else "unknown")
             ),
+            review_feedback=tuple(str(item) for item in result.get("review_feedback", ())),
+            delivery_handover=dict(result.get("delivery_handover") or {}),
+            devops_status=dict(result.get("devops_status") or {}),
+            diffs=tuple(dict(item) for item in result.get("diffs", ())),
+            links=tuple(str(item) for item in result.get("links", ())),
             risk_notes=tuple(str(item) for item in result.get("risk_notes", ())),
+            completed_stages=tuple(str(item) for item in result.get("completed_stages", ())),
+            failed_stages=tuple(str(item) for item in result.get("failed_stages", ())),
+            partial_success=bool(result.get("partial_success", False)),
             human_review_required=bool(result.get("human_review_required", True)),
         )
 
@@ -407,9 +458,11 @@ class CompanyDaemon:
         )
 
     def _write_proof(self, workspace: RunWorkspace, proof: ProofOfWork) -> ProofOfWork:
+        proof = ProofOfWork.from_dict({**proof.to_dict(), "markdown_path": str(workspace.markdown_path)})
         workspace.proof_path.write_text(
             json.dumps(proof.to_dict(), indent=2), encoding="utf-8"
         )
+        workspace.markdown_path.write_text(proof.to_markdown(), encoding="utf-8")
         return proof
 
     def _hook_env(self, issue: TrackerIssue, workspace: RunWorkspace) -> dict[str, str]:
@@ -496,7 +549,11 @@ def _format_tracker_comment(proof: ProofOfWork) -> str:
         f"Summary: {proof.summary}\n"
         f"Workspace: {proof.workspace}\n"
         f"Proof of work: {Path(proof.workspace) / '.aider' / 'company' / 'proof-of-work.json'}\n"
+        f"Proof report: {Path(proof.workspace) / '.aider' / 'company' / 'proof-of-work.md'}\n"
         f"Checks: {checks}\n"
+        f"Partial success: {proof.partial_success}\n"
+        f"Completed stages: {', '.join(proof.completed_stages) or 'none'}\n"
+        f"Failed stages: {', '.join(proof.failed_stages) or 'none'}\n"
         f"Human review required: {proof.human_review_required}"
     )
 

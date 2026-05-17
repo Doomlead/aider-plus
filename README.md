@@ -278,11 +278,11 @@ Create or reuse a warehouse product repo, register it, scaffold the template, an
 run the Company implementation loop inside that product repo.
 
 ```bash
-aider company daemon --workflow PATH [--once] [--dry-run] [--status]
+aider company daemon --workflow PATH [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N]
 ```
 
 Run one issue-workflow daemon tick for an issue-backed workflow, preview it with
-`--dry-run`, or print run/workspace status with `--status`.
+`--dry-run`, trigger one issue with `--run ISSUE_ID`, restrict the runner with `--departments product,engineering,qa` and `--max-iterations N`, or print run/workspace status with `--status`.
 
 ### Warehouse commands
 
@@ -524,7 +524,11 @@ uses YAML front matter plus a prompt body. The daemon can:
 - enforce max concurrent agents, turns, attempts, and hook timeouts;
 - run hooks such as `after_create`, `before_run`, `after_run`, and `before_remove`;
 - render issue placeholders into the Company prompt;
-- produce `.aider/company/run-state.json` and `.aider/company/proof-of-work.json`;
+- use the built-in `CompanyDaemonRunner` by default to execute Company Mode cycles across Product/UX, Engineering review, QA, Delivery, and DevOps departments when they are registered;
+- capture changed files, concise diff summaries, JSON-stored diffs, recent commit messages, QA checks, review feedback, Delivery handover data, DevOps build/deploy status, links, risks, completed stages, failed stages, and partial-success state as structured proof-of-work;
+- continue through later departments when a stage fails where possible, marking `partial_success: true` for recoverable partial runs;
+- emit `daemon_run_progress` lifecycle events as stages start/finish so live surfaces can show long-running progress;
+- produce `.aider/company/run-state.json`, `.aider/company/proof-of-work.json`, and a human-readable `.aider/company/proof-of-work.md` with concise diff summaries;
 - expose `CompanyDaemon.get_status()` with running/idle state, last run, active
   workflows, pending proof-of-work, recent proof artifacts, hook timeout, and
   max-workspace safety limits for dashboards and COO inspection;
@@ -565,12 +569,14 @@ Run it:
 ```bash
 aider company daemon --workflow .aider/company/workflow.md --dry-run
 aider company daemon --workflow .aider/company/workflow.md --once
+aider company daemon --workflow .aider/company/workflow.md --run ISSUE-123
+aider company daemon --workflow .aider/company/workflow.md --run ISSUE-123 --departments engineering,qa --max-iterations 2
 aider company daemon --workflow .aider/company/workflow.md --status
 ```
 
 If a repo has `AIDER_WORKFLOW.md` at its root, the browser and native desktop
 System Overview panels also show daemon status, last run, active workflows,
-pending proof-of-work, and recent proof artifact paths. The COO uses
+pending proof-of-work, recent daemon runs, and recent proof artifact paths/summaries. The COO uses
 `list_daemon_workflows()` to answer the same questions from chat/status surfaces.
 
 ---
@@ -589,7 +595,7 @@ and documentation/website examples that reflect those model capabilities.
 Useful checks:
 
 ```bash
-python -m py_compile aider/company/templates.py aider/company/warehouse.py aider/company/cli.py aider/company/daemon.py aider/company/workflow.py aider/company/tracker.py aider/main.py
+python -m py_compile aider/company/templates.py aider/company/warehouse.py aider/company/cli.py aider/company/daemon/__init__.py aider/company/daemon/runner.py aider/company/workflow.py aider/company/tracker.py aider/main.py
 python -m pytest tests/company/test_warehouse_cli.py tests/company/test_zero_to_mvp_cli.py tests/company/test_delivery_department.py
 ```
 
@@ -602,7 +608,7 @@ Important files:
 - `aider/company/orchestrator.py` — workflow, approvals, lifecycle, context, handoffs, and audit coordination.
 - `aider/company/schemas/` — structured PRD, design, Delivery handoff, build artifact, and deployment result contracts.
 - `aider/company/departments/` — Product, UX, Engineering, Reviewer, QA, Delivery, and DevOps implementations.
-- `aider/company/daemon.py` — issue daemon, run state, proof-of-work, and workspace handling.
+- `aider/company/daemon/` — issue daemon, built-in runner, run state, proof-of-work, and workspace handling.
 - `aider/company/workflow.py` — daemon workflow file parsing, hooks, and prompt rendering.
 - `aider/company/tracker.py` — tracker abstraction and local JSON tracker adapter.
 - `aider/company/skills.py` — role-scoped skill retrieval, usage tracking, and proposal approval.

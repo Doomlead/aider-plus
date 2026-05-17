@@ -1000,6 +1000,33 @@ class GUI:
             "Route chat through the Product → UX → Engineering → QA → DevOps "
             "workflow, or pause it for direct Aider chat."
         )
+        with st.expander("🚀 Onboarding / Quick Start", expanded=False):
+            st.write(
+                "Initialize the Company warehouse, write AIDER_WORKFLOW.md, and save "
+                "starter daemon/template/model preferences for this repository."
+            )
+            if st.button(
+                "Create Company quickstart files", key="company_onboarding_quickstart"
+            ):
+                from aider.company.onboarding import CompanyOnboarding, DEPARTMENTS
+                from aider.company.templates import DEFAULT_TEMPLATE_KEY
+                from aider.company.warehouse import default_warehouse_path
+
+                defaults = {
+                    "warehouse_path": default_warehouse_path(),
+                    "template": DEFAULT_TEMPLATE_KEY,
+                    "mcp_enabled": False,
+                    "model_preferences": {
+                        dept: {"model": "", "cache": True} for dept in DEPARTMENTS
+                    },
+                }
+                prompts = iter(["", ""])
+                onboarding = CompanyOnboarding(
+                    defaults=defaults, input_func=lambda _prompt: next(prompts, "")
+                )
+                result = onboarding.run_onboarding_flow()
+                st.success(f"Wrote quickstart guide: {result.workflow_guide_path}")
+            st.code("aider company init", language="bash")
 
         toggle_enabled = st.toggle(
             "Company Mode Toggle",

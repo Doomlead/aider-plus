@@ -43,6 +43,12 @@ class CompanyCLICommand:
     tracker_type: str | None = None
     repo: str | None = None
     watch: bool = False
+    github_token: str | None = None
+    model: str | None = None
+    mcp_enabled: bool | None = None
+    yes: bool = False
+    first_product_idea: str | None = None
+    first_product_name: str | None = None
 
 
 class CompanyCLIError(ValueError):
@@ -50,6 +56,8 @@ class CompanyCLIError(ValueError):
 
 
 USAGE = """Usage:
+  aider company init [--warehouse PATH] [--template TEMPLATE] [--github-repo OWNER/REPO] [--github-token TOKEN] [--model MODEL] [--enable-mcp|--skip-mcp] [--product-idea IDEA] [--product-name NAME] [--yes]
+  aider company setup [same options as init]
   aider company templates
   aider company create <idea> [--template TEMPLATE] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
   aider company new <idea> [--template TEMPLATE] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
@@ -60,6 +68,7 @@ USAGE = """Usage:
   aider warehouse status [--warehouse PATH]
 
 Examples:
+  aider company init --warehouse ./AiderPlusWarehouse --template nextjs-app --product-idea "Build my MVP" --product-name my-mvp --yes
   aider company templates
   aider company create "Build a habit tracker web app with login, dashboard, and streaks"
   aider company new "Build a habit tracker" --name habit-tracker --template nextjs-app
@@ -89,6 +98,9 @@ def parse_company_cli(
         marker = rest.index("--")
         aider_args = rest[marker + 1 :]
         rest = rest[:marker]
+
+    if action in {"init", "setup"}:
+        return _parse_company_onboarding(action, rest), aider_args
 
     if action == "templates":
         if rest:
@@ -156,6 +168,88 @@ def parse_company_cli(
             warehouse_path=warehouse_path,
         ),
         aider_args,
+    )
+
+
+def _parse_company_onboarding(action: str, args: Sequence[str]) -> CompanyCLICommand:
+    warehouse_path: str | None = None
+    template = DEFAULT_TEMPLATE_KEY
+    repo: str | None = None
+    github_token: str | None = None
+    model: str | None = None
+    mcp_enabled: bool | None = None
+    yes: bool = False
+    first_product_idea: str | None = None
+    first_product_name: str | None = None
+    rest = list(args)
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        if token == "--warehouse":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--warehouse requires a path.\n" + USAGE)
+            warehouse_path = rest[index]
+        elif token == "--template":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--template requires a template key.\n" + USAGE)
+            template = rest[index]
+        elif token == "--github-repo":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--github-repo requires owner/repo.\n" + USAGE)
+            repo = rest[index].strip()
+        elif token == "--github-token":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--github-token requires a token.\n" + USAGE)
+            github_token = rest[index]
+        elif token == "--model":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--model requires a model name.\n" + USAGE)
+            model = rest[index]
+        elif token == "--enable-mcp":
+            mcp_enabled = True
+        elif token == "--skip-mcp":
+            mcp_enabled = False
+        elif token == "--product-idea":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError(
+                    "--product-idea requires a product idea.\n" + USAGE
+                )
+            first_product_idea = rest[index]
+        elif token == "--product-name":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError(
+                    "--product-name requires a product name.\n" + USAGE
+                )
+            first_product_name = rest[index]
+        elif token == "--yes":
+            yes = True
+        else:
+            raise CompanyCLIError(
+                f"Unknown company {action} option: {token}.\n" + USAGE
+            )
+        index += 1
+    try:
+        template = get_template(template).key
+    except ValueError as exc:
+        raise CompanyCLIError(str(exc) + "\n" + USAGE) from exc
+    return CompanyCLICommand(
+        action=action,
+        template=template,
+        warehouse_path=warehouse_path,
+        repo=repo,
+        github_token=github_token,
+        model=model,
+        mcp_enabled=mcp_enabled,
+        yes=yes,
+        first_product_idea=first_product_idea,
+        first_product_name=first_product_name,
     )
 
 
@@ -282,6 +376,8 @@ def render_company_plan(command: CompanyCLICommand) -> str:
 def handle_company_cli_pre_coder(command: CompanyCLICommand) -> int | None:
     """Handle company commands that do not need a Coder instance."""
 
+    if command.action in {"init", "setup"}:
+        return handle_company_onboarding_cli(command)
     if command.action == "templates":
         print(format_template_list())
         return 0
@@ -305,6 +401,41 @@ def handle_company_cli_pre_coder(command: CompanyCLICommand) -> int | None:
         print(render_company_plan(command))
         return 0
     return None
+
+
+def handle_company_onboarding_cli(command: CompanyCLICommand) -> int:
+    """Run Company Mode onboarding without constructing a Coder."""
+
+    from aider.company.onboarding import CompanyOnboarding, DEPARTMENTS
+
+    defaults: dict[str, object] = {
+        "warehouse_path": command.warehouse_path or default_warehouse_path(),
+        "template": command.template,
+        "github_repo": command.repo or "",
+        "github_token": command.github_token or "",
+        "mcp_enabled": bool(command.mcp_enabled),
+    }
+    if command.model:
+        defaults["model"] = command.model
+    if command.first_product_idea:
+        defaults["first_product_idea"] = command.first_product_idea
+    if command.first_product_name:
+        defaults["first_product_name"] = command.first_product_name
+    if command.yes:
+        defaults["model_preferences"] = {
+            dept: {"model": command.model or "", "cache": True} for dept in DEPARTMENTS
+        }
+        defaults["first_product_now"] = True
+        prompts = iter(["", "", *("" for _ in range(20))])
+        input_func = lambda _prompt: next(prompts, "")
+    else:
+        input_func = None
+    onboarding = CompanyOnboarding(defaults=defaults, input_func=input_func)
+    result = onboarding.run_onboarding_flow()
+    print(f"Company onboarding config: {result.config_path}")
+    print(f"Workflow guide: {result.workflow_guide_path}")
+    print(f"Daemon workflow: {result.daemon_workflow_path}")
+    return 0
 
 
 def _load_daemon_for_command(command: CompanyCLICommand) -> CompanyDaemon:

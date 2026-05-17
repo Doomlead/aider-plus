@@ -809,6 +809,10 @@ DESKTOP_TAB_GUIDE = {
         "Explains every desktop tab, chat target, settings field, dashboard field, approval "
         "field, audit field, and the small Nanobot-style COO core shared with chat/API/MCP surfaces."
     ),
+    "Onboarding / Quick Start": (
+        "Initializes Company Mode defaults, writes AIDER_WORKFLOW.md, and points you "
+        "to the warehouse, templates, GitHub issue daemon, model caching, and MCP setup path."
+    ),
 }
 
 CHAT_TARGET_GUIDE = {
@@ -958,6 +962,17 @@ APPROVALS_FIELD_GUIDE = (
     ("Reject", "Rejects the selected gate and records the feedback/reason."),
 )
 
+ONBOARDING_FIELD_GUIDE = (
+    (
+        "Initialize quickstart",
+        "Creates the local Company onboarding config, default warehouse, daemon workflow file, and AIDER_WORKFLOW.md.",
+    ),
+    (
+        "CLI equivalent",
+        "Run `aider company init` for the fully interactive terminal onboarding flow.",
+    ),
+)
+
 AUDIT_FIELD_GUIDE = (
     ("Refresh Audit", "Reloads the latest audit records from project memory."),
     (
@@ -1040,6 +1055,7 @@ class AiderPlusDesktop:
         self.audit_frame = ttk.Frame(self.notebook, padding=8)
         self.settings_frame = ttk.Frame(self.notebook, padding=8)
         self.guide_frame = ttk.Frame(self.notebook, padding=8)
+        self.onboarding_frame = ttk.Frame(self.notebook, padding=8)
 
         self.notebook.add(self.chat_frame, text="💬 Chat")
         self.notebook.add(self.settings_frame, text="⚙ Settings")
@@ -1047,6 +1063,7 @@ class AiderPlusDesktop:
         self.notebook.add(self.approvals_frame, text="✅ Approvals")
         self.notebook.add(self.knowledge_frame, text="🧠 Knowledge")
         self.notebook.add(self.audit_frame, text="🧾 Audit")
+        self.notebook.add(self.onboarding_frame, text="🚀 Onboarding")
         self.notebook.add(self.guide_frame, text="📚 Guide")
 
         self._build_chat_tab()
@@ -1055,6 +1072,7 @@ class AiderPlusDesktop:
         self._build_approvals_tab()
         self._build_knowledge_tab()
         self._build_audit_tab()
+        self._build_onboarding_tab()
         self._build_guide_tab()
 
         self.status_label = ttk.Label(
@@ -1508,6 +1526,55 @@ class AiderPlusDesktop:
         self.audit_text = scrolledtext.ScrolledText(self.audit_frame, wrap=tk.WORD)
         self.audit_text.pack(fill="both", expand=True)
 
+    def _build_onboarding_tab(self):
+        self._add_tab_description(self.onboarding_frame, "Onboarding / Quick Start")
+        ttk.Label(
+            self.onboarding_frame,
+            text=(
+                "Use this first-launch helper to create the default Company warehouse, "
+                "daemon workflow, onboarding state, and AIDER_WORKFLOW.md quickstart guide."
+            ),
+            wraplength=900,
+            justify="left",
+        ).pack(fill="x", pady=(0, 8))
+        ttk.Button(
+            self.onboarding_frame,
+            text="Initialize Company quickstart files",
+            command=self.run_company_onboarding_quickstart,
+        ).pack(anchor="w", pady=(0, 8))
+        self._add_field_guide(
+            self.onboarding_frame, "Onboarding Fields", ONBOARDING_FIELD_GUIDE
+        )
+
+    def run_company_onboarding_quickstart(self):
+        from aider.company.onboarding import CompanyOnboarding, DEPARTMENTS
+        from aider.company.templates import DEFAULT_TEMPLATE_KEY
+        from aider.company.warehouse import default_warehouse_path
+
+        try:
+            root = Path(self.coder.root) if self.coder else Path.cwd()
+            defaults = {
+                "warehouse_path": default_warehouse_path(root),
+                "template": DEFAULT_TEMPLATE_KEY,
+                "mcp_enabled": False,
+                "model_preferences": {
+                    dept: {"model": "", "cache": True} for dept in DEPARTMENTS
+                },
+            }
+            onboarding = CompanyOnboarding(
+                root=root, defaults=defaults, input_func=lambda _prompt: ""
+            )
+            result = onboarding.run_onboarding_flow()
+        except Exception as err:
+            messagebox.showerror(APP_TITLE, f"Company onboarding failed: {err}")
+            return
+        messagebox.showinfo(
+            APP_TITLE,
+            "Company quickstart created.\n"
+            f"Workflow guide: {result.workflow_guide_path}\n"
+            f"Daemon workflow: {result.daemon_workflow_path}",
+        )
+
     def _build_guide_tab(self):
         self._add_tab_description(self.guide_frame, "Guide")
         canvas = tk.Canvas(self.guide_frame, highlightthickness=0)
@@ -1524,6 +1591,9 @@ class AiderPlusDesktop:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+        self._add_field_guide(
+            content, "Onboarding / Quick Start", ONBOARDING_FIELD_GUIDE
+        )
         self._add_field_guide(content, "Window Controls", DESKTOP_CHROME_GUIDE)
         self._add_field_guide(
             content, "Top-Level Tabs", tuple(DESKTOP_TAB_GUIDE.items())

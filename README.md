@@ -13,6 +13,24 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
 
 ---
 
+## First Time Setup
+
+Start with the guided Company Mode onboarding flow:
+
+```bash
+aider company init
+```
+
+The onboarding flow initializes a warehouse, chooses the default `aider company new --template ...` template, captures GitHub Issues settings for the Company daemon, records preferred models and prompt-caching choices per department, validates which provider API keys are currently available, optionally enables MCP, writes a tailored `.env.example`, and writes `AIDER_WORKFLOW.md` in the repo root. It ends by asking whether to create your first product repo immediately.
+
+For a non-interactive bootstrap, pass defaults explicitly:
+
+```bash
+aider company init --warehouse ./AiderPlusWarehouse --template nextjs-app --github-repo owner/repo --model gpt-5.5 --enable-mcp --product-idea "Build my MVP" --product-name my-mvp --yes
+```
+
+On first run, Aider Plus offers this setup automatically. Use `--skip-onboarding` if you want to start classic Aider without the Company quickstart prompt. The Streamlit browser UI and Tkinter desktop UI also include an **Onboarding / Quick Start** section that generates the same local quickstart files.
+
 ## What Aider Plus adds to upstream Aider
 
 - **Company Mode:** a Product → UX → Delivery → Engineering → Reviewer → QA →

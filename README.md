@@ -23,8 +23,8 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
   tagging, deployment, and release metadata capture.
 - **Operations assistant:** a CEO-facing assistant layer that can answer directly,
   ask clarifying questions, remember context, inspect project state, inspect
-  learned skills, list daemon workflow state, route work to departments, report
-  status, and surface queue/error telemetry.
+  institutional knowledge and learned skills, list daemon workflow state, route
+  work to departments, report status, and surface queue/error telemetry.
 - **Warehouse-backed product studio:** `aider company new` can create a named
   product repo inside a central warehouse, register it, scaffold starter files,
   and then run Company Mode against the new repo.
@@ -33,8 +33,8 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
   and internal admin tools.
 - **Browser and native desktop GUIs:** shared Company dashboards, direct chat,
   per-agent chat tabs, settings editors, approvals, audit views, memory views,
-  Delivery summaries, skill quick views, daemon status/proof-of-work panels, and
-  guide pages.
+  Knowledge views for playbooks/skills/proposals/COO memory, Delivery summaries,
+  skill quick views, daemon status/proof-of-work panels, and guide pages.
 - **Headless and chat-adapter operation:** `--headless`/`--bot-mode` supports
   scripted tasks, queues, CI, services, Discord, and future chat adapters.
 - **Durable local memory:** conversation summaries, project memory, retrieval,
@@ -377,7 +377,9 @@ aider --browser
 
 The Streamlit browser GUI exposes direct Aider chat, Company workflow controls,
 Company dashboard data, approvals, audit logs, project memory, settings, and guide
-pages.
+pages. Its **Knowledge** tab searches Playbooks, Skills, Skill Proposals, and COO
+Memory, shows Last Used timestamps for Skills/Proposals, lets operators
+approve/reject pending skill proposals, and exports Playbooks/Skills as Markdown.
 
 ### Desktop GUI
 
@@ -387,7 +389,9 @@ aider --desktop
 
 The native desktop app uses Tkinter only. It exposes Company workflow controls,
 background execution handling, approvals, audit/status panels, settings, and
-per-agent chat paths without requiring Streamlit or a browser.
+per-agent chat paths without requiring Streamlit or a browser. Its **Knowledge**
+tab provides a searchable Treeview/detail panel with Last Used timestamps, skill
+proposal approval, and Markdown export for Playbooks/Skills.
 
 ### Chat targets
 
@@ -578,6 +582,7 @@ Important files:
 - `aider/company/daemon.py` — issue daemon, run state, proof-of-work, and workspace handling.
 - `aider/company/workflow.py` — daemon workflow file parsing, hooks, and prompt rendering.
 - `aider/company/tracker.py` — tracker abstraction and local JSON tracker adapter.
+- `aider/company/knowledge.py` — unified Playbooks, Skills, Skill Proposals, COO Memory, search, approval, and Markdown export surface.
 - `aider/company/skills.py` — role-scoped skill retrieval, usage tracking, and proposal approval.
 - `aider/company/self_improvement.py` — skill proposal generation from successful patterns.
 - `aider/company/surface_messages.py` — shared lifecycle/status/approval/audit message formatting.

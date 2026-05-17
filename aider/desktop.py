@@ -30,6 +30,7 @@ from aider.company.audit import AuditLogViewer
 from aider.company.config import apply_agent_model_overrides_from_env
 from aider.company.coo import NanobotCOO
 from aider.company.daemon import CompanyDaemonError, load_daemon
+from aider.company.knowledge import KnowledgeManager
 from aider.company.departments.delivery import DeliveryDepartment
 from aider.company.departments.devops import DevOpsDepartment
 from aider.company.departments.engineering import EngineeringDepartment
@@ -130,7 +131,9 @@ class DesktopCompanySession:
             for task in pending:
                 task.cancel()
             if pending:
-                self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                self.loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
             self.loop.close()
 
     def _ensure_memories(self):
@@ -305,7 +308,10 @@ class DesktopCompanySession:
             future.cancel()
         if self.loop.is_running():
             self.loop.call_soon_threadsafe(self.loop.stop)
-        if self.loop_thread.is_alive() and threading.current_thread() is not self.loop_thread:
+        if (
+            self.loop_thread.is_alive()
+            and threading.current_thread() is not self.loop_thread
+        ):
             self.loop_thread.join(timeout=5)
         with _COMPANY_SESSIONS_LOCK:
             if _COMPANY_SESSIONS.get(self.repo_path) is self:
@@ -439,9 +445,9 @@ class DesktopCompanySession:
         return self.orchestrator.state.get_pending_approvals()
 
     def audit_log(self, limit: int = 10) -> str:
-        return AuditLogViewer.from_project_memory(self.coder.project_memory).render_text(
-            limit=limit
-        )
+        return AuditLogViewer.from_project_memory(
+            self.coder.project_memory
+        ).render_text(limit=limit)
 
     def company_status(self) -> str:
         return self.orchestrator.company_status()
@@ -468,6 +474,21 @@ class DesktopCompanySession:
         return CompanySkillManager(
             self.orchestrator.state, self.orchestrator.company_config.skill_learning
         ).dashboard_summary()
+
+    def get_knowledge_overview(self, query: str = "") -> dict[str, Any]:
+        return KnowledgeManager(
+            self.orchestrator.state, self.orchestrator.company_config.skill_learning
+        ).get_overview(query=query)
+
+    def export_knowledge_markdown(self) -> str:
+        return KnowledgeManager(
+            self.orchestrator.state, self.orchestrator.company_config.skill_learning
+        ).export_markdown()
+
+    def approve_skill_proposal(self, proposal_id: str) -> dict[str, Any]:
+        return KnowledgeManager(
+            self.orchestrator.state, self.orchestrator.company_config.skill_learning
+        ).approve_skill_proposal(proposal_id)
 
     def daemon_status(self) -> dict[str, Any]:
         workflow_path = Path(self.repo_path) / "AIDER_WORKFLOW.md"
@@ -500,7 +521,9 @@ class DesktopCompanySession:
 
     def system_overview(self) -> dict[str, Any]:
         pending = [
-            approval for approval in self.pending_approvals() if approval.get("status") == "pending"
+            approval
+            for approval in self.pending_approvals()
+            if approval.get("status") == "pending"
         ]
         try:
             coo_status = self.coo_status()
@@ -524,20 +547,29 @@ class DesktopCompanySession:
             getattr(deploy_result, "metadata", {}) or {}
         ).get("log_artifacts", [])
         last_build = {
-            "status": getattr(deploy_result, "status", "not run") if deploy_result else "not run",
-            "artifact": build_artifact.get("location") or deploy_payload.get("release_artifact"),
+            "status": (
+                getattr(deploy_result, "status", "not run")
+                if deploy_result
+                else "not run"
+            ),
+            "artifact": build_artifact.get("location")
+            or deploy_payload.get("release_artifact"),
             "artifact_type": build_artifact.get("artifact_type"),
             "git_tag": build_artifact.get("tag") or deploy_payload.get("git_tag"),
             "environment": (
-                deployment_result.get("environment") or deploy_payload.get("environment")
+                deployment_result.get("environment")
+                or deploy_payload.get("environment")
             ),
-            "deploy_url": deployment_result.get("deployed_url") or deploy_payload.get("deploy_url"),
+            "deploy_url": deployment_result.get("deployed_url")
+            or deploy_payload.get("deploy_url"),
             "logs_summary": (
                 deploy_payload.get("build_logs_summary")
                 or build_artifact.get("build_logs_summary")
                 or deployment_result.get("deployment_logs")
             ),
-            "log_artifacts": log_artifacts if isinstance(log_artifacts, list) else [log_artifacts],
+            "log_artifacts": (
+                log_artifacts if isinstance(log_artifacts, list) else [log_artifacts]
+            ),
         }
         delivery_plan = getattr(self.active_project, "delivery_plan", None)
         delivery_summary = (
@@ -555,7 +587,9 @@ class DesktopCompanySession:
         return {
             "caching": self.caching_status(),
             "coo_status": coo_status.get("status", "unknown"),
-            "coo_last_action": (coo_status.get("last_coo_action") or {}).get("action", "—"),
+            "coo_last_action": (coo_status.get("last_coo_action") or {}).get(
+                "action", "—"
+            ),
             "delivery_status": (
                 delivery_summary.get("overall_status")
                 or getattr(
@@ -648,13 +682,16 @@ class DesktopCompanySession:
             if label == "Deployment" and isinstance(payload, dict):
                 extras = {
                     "artifact_links": (
-                        payload.get("artifact_links") or [payload.get("release_artifact")]
+                        payload.get("artifact_links")
+                        or [payload.get("release_artifact")]
                     ),
                     "log_artifacts": (
-                        payload.get("log_artifacts") or metadata.get("log_artifacts", [])
+                        payload.get("log_artifacts")
+                        or metadata.get("log_artifacts", [])
                     ),
                     "logs_summary": (
-                        payload.get("build_logs_summary") or payload.get("deployment_logs_summary")
+                        payload.get("build_logs_summary")
+                        or payload.get("deployment_logs_summary")
                     ),
                 }
             deliverables.append(
@@ -671,7 +708,9 @@ class DesktopCompanySession:
 
     def dashboard_metrics(self, turns_this_session: int = 0) -> dict:
         pending = [
-            approval for approval in self.pending_approvals() if approval.get("status") == "pending"
+            approval
+            for approval in self.pending_approvals()
+            if approval.get("status") == "pending"
         ]
         return {
             "turns_this_session": turns_this_session,
@@ -724,6 +763,10 @@ DESKTOP_TAB_GUIDE = {
     "Approvals": (
         "Review human gates raised by Product, UX, Engineering, QA, DevOps, or the COO and "
         "approve, reject, or request changes with feedback."
+    ),
+    "Knowledge": (
+        "Inspect and search learned Playbooks, approved Skills, Skill Proposals, and COO Memory "
+        "from one shared control surface."
     ),
     "Audit": (
         "Read the repo-scoped audit log for Company workflow events, decisions, approvals, "
@@ -905,7 +948,9 @@ class AiderPlusDesktop:
         self.company: DesktopCompanySession | None = None
         self.turns_this_session = 0
         self.selected_approval_id: str | None = None
-        self._future_labels: dict[concurrent.futures.Future, tuple[str, str | None]] = {}
+        self._future_labels: dict[concurrent.futures.Future, tuple[str, str | None]] = (
+            {}
+        )
         self._ui_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._closing = False
         self.env_path: Path | None = None
@@ -943,9 +988,9 @@ class AiderPlusDesktop:
 
         header = ttk.Frame(outer)
         header.pack(fill="x", pady=(0, 8))
-        ttk.Label(header, text=f"{APP_TITLE} · Product Studio", style="Header.TLabel").pack(
-            side="left"
-        )
+        ttk.Label(
+            header, text=f"{APP_TITLE} · Product Studio", style="Header.TLabel"
+        ).pack(side="left")
         ttk.Button(header, text="⚙ Settings", command=self.open_settings).pack(
             side="left", padx=(12, 0)
         )
@@ -958,6 +1003,7 @@ class AiderPlusDesktop:
         self.chat_frame = ttk.Frame(self.notebook, padding=8)
         self.dashboard_frame = ttk.Frame(self.notebook, padding=8)
         self.approvals_frame = ttk.Frame(self.notebook, padding=8)
+        self.knowledge_frame = ttk.Frame(self.notebook, padding=8)
         self.audit_frame = ttk.Frame(self.notebook, padding=8)
         self.settings_frame = ttk.Frame(self.notebook, padding=8)
         self.guide_frame = ttk.Frame(self.notebook, padding=8)
@@ -966,6 +1012,7 @@ class AiderPlusDesktop:
         self.notebook.add(self.settings_frame, text="⚙ Settings")
         self.notebook.add(self.dashboard_frame, text="📊 Company Dashboard")
         self.notebook.add(self.approvals_frame, text="✅ Approvals")
+        self.notebook.add(self.knowledge_frame, text="🧠 Knowledge")
         self.notebook.add(self.audit_frame, text="🧾 Audit")
         self.notebook.add(self.guide_frame, text="📚 Guide")
 
@@ -973,10 +1020,13 @@ class AiderPlusDesktop:
         self._build_settings_tab()
         self._build_dashboard_tab()
         self._build_approvals_tab()
+        self._build_knowledge_tab()
         self._build_audit_tab()
         self._build_guide_tab()
 
-        self.status_label = ttk.Label(outer, text="Ready", anchor="w", style="Status.TLabel")
+        self.status_label = ttk.Label(
+            outer, text="Ready", anchor="w", style="Status.TLabel"
+        )
         self.status_label.pack(fill="x", pady=(8, 0))
 
     def _add_tab_description(self, parent, tab_name: str):
@@ -1018,7 +1068,9 @@ class AiderPlusDesktop:
             width=28,
         )
         self.quick_agent_switcher.pack(side="left", padx=(8, 0))
-        self.quick_agent_switcher.bind("<<ComboboxSelected>>", self._on_quick_agent_selected)
+        self.quick_agent_switcher.bind(
+            "<<ComboboxSelected>>", self._on_quick_agent_selected
+        )
         ttk.Label(
             toolbar,
             text="Ctrl/Cmd+Enter sends. Direct Aider, Workflow, and each agent keep separate transcripts.",
@@ -1055,8 +1107,12 @@ class AiderPlusDesktop:
         self.chat_entry = ttk.Entry(input_frame)
         self.chat_entry.pack(side="left", fill="x", expand=True)
         self.chat_entry.bind("<Return>", lambda _event: self.send_chat_message())
-        self.chat_entry.bind("<Control-Return>", lambda _event: self.send_chat_message())
-        self.chat_entry.bind("<Command-Return>", lambda _event: self.send_chat_message())
+        self.chat_entry.bind(
+            "<Control-Return>", lambda _event: self.send_chat_message()
+        )
+        self.chat_entry.bind(
+            "<Command-Return>", lambda _event: self.send_chat_message()
+        )
 
         self.send_button = ttk.Button(
             input_frame,
@@ -1087,7 +1143,9 @@ class AiderPlusDesktop:
 
         settings_tabs = ttk.Notebook(self.settings_frame)
         settings_tabs.pack(fill="both", expand=True)
-        section_frames = {name: ttk.Frame(settings_tabs, padding=8) for name in SETTINGS_SECTIONS}
+        section_frames = {
+            name: ttk.Frame(settings_tabs, padding=8) for name in SETTINGS_SECTIONS
+        }
         for name, frame in section_frames.items():
             settings_tabs.add(frame, text=name)
 
@@ -1106,13 +1164,17 @@ class AiderPlusDesktop:
             ),
             start=1,
         ):
-            ttk.Label(model_frame, text=label).grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Label(model_frame, text=label).grid(
+                row=row, column=0, sticky="w", pady=4
+            )
             var = tk.StringVar()
             self.model_vars[key] = var
             ttk.Entry(model_frame, textvariable=var, width=48).grid(
                 row=row, column=1, sticky="ew", padx=8, pady=4
             )
-            ttk.Label(model_frame, text=help_text).grid(row=row, column=2, sticky="w", pady=4)
+            ttk.Label(model_frame, text=help_text).grid(
+                row=row, column=2, sticky="w", pady=4
+            )
         self.apply_model_now_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             model_frame,
@@ -1196,16 +1258,20 @@ class AiderPlusDesktop:
         api_frame.columnconfigure(1, weight=1)
 
         advanced_frame = section_frames["Advanced (.env + .aider.conf)"]
-        ttk.Label(advanced_frame, text="Extra .env settings (KEY=value, one per line)").pack(
-            anchor="w"
+        ttk.Label(
+            advanced_frame, text="Extra .env settings (KEY=value, one per line)"
+        ).pack(anchor="w")
+        self.provider_keys_text = scrolledtext.ScrolledText(
+            advanced_frame, wrap=tk.WORD, height=5
         )
-        self.provider_keys_text = scrolledtext.ScrolledText(advanced_frame, wrap=tk.WORD, height=5)
         self.provider_keys_text.pack(fill="x", pady=(2, 8))
         ttk.Label(
             advanced_frame,
             text="Raw .aider.conf.yml (model fields above are merged on save)",
         ).pack(anchor="w")
-        self.conf_text = scrolledtext.ScrolledText(advanced_frame, wrap=tk.WORD, height=12)
+        self.conf_text = scrolledtext.ScrolledText(
+            advanced_frame, wrap=tk.WORD, height=12
+        )
         self.conf_text.pack(fill="both", expand=True, pady=(2, 0))
 
         preview_frame = ttk.LabelFrame(
@@ -1219,9 +1285,9 @@ class AiderPlusDesktop:
 
         actions = ttk.Frame(self.settings_frame)
         actions.pack(fill="x", pady=(8, 0))
-        ttk.Button(actions, text="Reload Settings", command=self.refresh_settings_fields).pack(
-            side="left"
-        )
+        ttk.Button(
+            actions, text="Reload Settings", command=self.refresh_settings_fields
+        ).pack(side="left")
         ttk.Button(actions, text="Preview changes", command=self.preview_settings).pack(
             side="left", padx=(8, 0)
         )
@@ -1238,9 +1304,9 @@ class AiderPlusDesktop:
     def _build_dashboard_tab(self):
         toolbar = ttk.Frame(self.dashboard_frame)
         toolbar.pack(fill="x", pady=(0, 8))
-        ttk.Button(toolbar, text="Refresh Dashboard", command=self.refresh_dashboard).pack(
-            side="right"
-        )
+        ttk.Button(
+            toolbar, text="Refresh Dashboard", command=self.refresh_dashboard
+        ).pack(side="right")
 
         metrics = ttk.Frame(self.dashboard_frame)
         metrics.pack(fill="x", pady=(0, 8))
@@ -1271,11 +1337,15 @@ class AiderPlusDesktop:
         panes.add(overview_frame, weight=1)
 
         status_frame = ttk.LabelFrame(panes, text="Company Status", padding=4)
-        self.dashboard_text = scrolledtext.ScrolledText(status_frame, wrap=tk.WORD, height=12)
+        self.dashboard_text = scrolledtext.ScrolledText(
+            status_frame, wrap=tk.WORD, height=12
+        )
         self.dashboard_text.pack(fill="both", expand=True)
         panes.add(status_frame, weight=3)
 
-        deliverables_frame = ttk.LabelFrame(panes, text="Recent Deliverables", padding=4)
+        deliverables_frame = ttk.LabelFrame(
+            panes, text="Recent Deliverables", padding=4
+        )
         self.deliverables_text = scrolledtext.ScrolledText(
             deliverables_frame, wrap=tk.WORD, height=8
         )
@@ -1283,7 +1353,9 @@ class AiderPlusDesktop:
         panes.add(deliverables_frame, weight=2)
 
         coo_frame = ttk.LabelFrame(panes, text="CEO/COO Activity", padding=4)
-        self.coo_status_text = scrolledtext.ScrolledText(coo_frame, wrap=tk.WORD, height=8)
+        self.coo_status_text = scrolledtext.ScrolledText(
+            coo_frame, wrap=tk.WORD, height=8
+        )
         self.coo_status_text.tag_configure(
             "coo_error", foreground="#B42318", font=("TkDefaultFont", 10, "bold")
         )
@@ -1293,9 +1365,9 @@ class AiderPlusDesktop:
     def _build_approvals_tab(self):
         toolbar = ttk.Frame(self.approvals_frame)
         toolbar.pack(fill="x", pady=(0, 8))
-        ttk.Button(toolbar, text="Refresh Approvals", command=self.refresh_approvals).pack(
-            side="right"
-        )
+        ttk.Button(
+            toolbar, text="Refresh Approvals", command=self.refresh_approvals
+        ).pack(side="right")
 
         columns = ("task", "department", "gate", "status")
         self.approvals_tree = ttk.Treeview(
@@ -1315,9 +1387,13 @@ class AiderPlusDesktop:
         self.approvals_tree.pack(fill="x")
         self.approvals_tree.bind("<<TreeviewSelect>>", self._on_approval_selected)
 
-        detail_frame = ttk.LabelFrame(self.approvals_frame, text="Approval Details", padding=4)
+        detail_frame = ttk.LabelFrame(
+            self.approvals_frame, text="Approval Details", padding=4
+        )
         detail_frame.pack(fill="both", expand=True, pady=8)
-        self.approval_detail = scrolledtext.ScrolledText(detail_frame, wrap=tk.WORD, height=12)
+        self.approval_detail = scrolledtext.ScrolledText(
+            detail_frame, wrap=tk.WORD, height=12
+        )
         self.approval_detail.pack(fill="both", expand=True)
 
         action_frame = ttk.Frame(self.approvals_frame)
@@ -1325,7 +1401,9 @@ class AiderPlusDesktop:
         ttk.Label(action_frame, text="Feedback:").pack(side="left")
         self.approval_feedback = ttk.Entry(action_frame)
         self.approval_feedback.pack(side="left", fill="x", expand=True, padx=8)
-        ttk.Button(action_frame, text="Approve", command=self.approve_selected).pack(side="right")
+        ttk.Button(action_frame, text="Approve", command=self.approve_selected).pack(
+            side="right"
+        )
         ttk.Button(
             action_frame, text="Request Changes", command=self.request_changes_selected
         ).pack(side="right", padx=(0, 8))
@@ -1333,10 +1411,63 @@ class AiderPlusDesktop:
             side="right", padx=(0, 8)
         )
 
+    def _build_knowledge_tab(self):
+        toolbar = ttk.Frame(self.knowledge_frame)
+        toolbar.pack(fill="x", pady=(0, 8))
+        ttk.Label(toolbar, text="Search:").pack(side="left")
+        self.knowledge_search_var = tk.StringVar()
+        search_entry = ttk.Entry(toolbar, textvariable=self.knowledge_search_var)
+        search_entry.pack(side="left", fill="x", expand=True, padx=8)
+        search_entry.bind("<Return>", lambda _event: self.refresh_knowledge())
+        ttk.Button(toolbar, text="Search", command=self.refresh_knowledge).pack(
+            side="left"
+        )
+        ttk.Button(
+            toolbar, text="Refresh Knowledge", command=self.refresh_knowledge
+        ).pack(side="right")
+        ttk.Button(
+            toolbar, text="Export as Markdown", command=self.export_knowledge_markdown
+        ).pack(side="right", padx=(0, 8))
+
+        panes = ttk.PanedWindow(self.knowledge_frame, orient=tk.HORIZONTAL)
+        panes.pack(fill="both", expand=True)
+
+        list_frame = ttk.LabelFrame(panes, text="Knowledge Items", padding=4)
+        columns = ("type", "title", "status", "last_used")
+        self.knowledge_tree = ttk.Treeview(
+            list_frame, columns=columns, show="headings", height=16
+        )
+        for col, heading, width in (
+            ("type", "Type", 130),
+            ("title", "Title", 360),
+            ("status", "Status", 120),
+            ("last_used", "Last Used", 180),
+        ):
+            self.knowledge_tree.heading(col, text=heading)
+            self.knowledge_tree.column(col, width=width, anchor="w")
+        self.knowledge_tree.pack(fill="both", expand=True)
+        self.knowledge_tree.bind("<<TreeviewSelect>>", self._on_knowledge_selected)
+        panes.add(list_frame, weight=2)
+
+        detail_frame = ttk.LabelFrame(panes, text="Details", padding=4)
+        self.knowledge_detail = scrolledtext.ScrolledText(detail_frame, wrap=tk.WORD)
+        self.knowledge_detail.pack(fill="both", expand=True)
+        action_frame = ttk.Frame(detail_frame)
+        action_frame.pack(fill="x", pady=(8, 0))
+        ttk.Button(
+            action_frame,
+            text="Approve Proposal",
+            command=self.approve_selected_knowledge,
+        ).pack(side="right")
+        panes.add(detail_frame, weight=3)
+        self.knowledge_items_by_id: dict[str, dict[str, Any]] = {}
+
     def _build_audit_tab(self):
         toolbar = ttk.Frame(self.audit_frame)
         toolbar.pack(fill="x", pady=(0, 8))
-        ttk.Button(toolbar, text="Refresh Audit", command=self.refresh_audit).pack(side="right")
+        ttk.Button(toolbar, text="Refresh Audit", command=self.refresh_audit).pack(
+            side="right"
+        )
 
         self.audit_text = scrolledtext.ScrolledText(self.audit_frame, wrap=tk.WORD)
         self.audit_text.pack(fill="both", expand=True)
@@ -1344,7 +1475,9 @@ class AiderPlusDesktop:
     def _build_guide_tab(self):
         self._add_tab_description(self.guide_frame, "Guide")
         canvas = tk.Canvas(self.guide_frame, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(self.guide_frame, orient="vertical", command=canvas.yview)
+        scrollbar = ttk.Scrollbar(
+            self.guide_frame, orient="vertical", command=canvas.yview
+        )
         content = ttk.Frame(canvas)
         content.bind(
             "<Configure>",
@@ -1356,9 +1489,13 @@ class AiderPlusDesktop:
         scrollbar.pack(side="right", fill="y")
 
         self._add_field_guide(content, "Window Controls", DESKTOP_CHROME_GUIDE)
-        self._add_field_guide(content, "Top-Level Tabs", tuple(DESKTOP_TAB_GUIDE.items()))
+        self._add_field_guide(
+            content, "Top-Level Tabs", tuple(DESKTOP_TAB_GUIDE.items())
+        )
         self._add_field_guide(content, "Chat Fields", CHAT_FIELD_GUIDE)
-        self._add_field_guide(content, "Chat Sub-Tabs", tuple(CHAT_TARGET_GUIDE.items()))
+        self._add_field_guide(
+            content, "Chat Sub-Tabs", tuple(CHAT_TARGET_GUIDE.items())
+        )
         self._add_field_guide(content, "Settings Fields", SETTINGS_FIELD_GUIDE)
         self._add_field_guide(content, "Dashboard Fields", DASHBOARD_FIELD_GUIDE)
         self._add_field_guide(content, "Approval Fields", APPROVALS_FIELD_GUIDE)
@@ -1438,7 +1575,9 @@ class AiderPlusDesktop:
         preview = build_settings_preview(form)
         self._write_text(self.settings_preview_text, preview.render())
         if not preview.valid:
-            messagebox.showerror("Settings", "Fix validation errors before applying settings.")
+            messagebox.showerror(
+                "Settings", "Fix validation errors before applying settings."
+            )
             return
         saved = persist_settings(self.env_path, self.conf_path, form)
         if saved.valid and form.apply_now:
@@ -1461,8 +1600,12 @@ class AiderPlusDesktop:
             return
         current_model = self.coder.main_model
         model_name = model_updates.get("model") or current_model.name
-        weak_model_name = model_updates.get("weak-model") or current_model.weak_model.name
-        editor_model_name = model_updates.get("editor-model") or current_model.editor_model.name
+        weak_model_name = (
+            model_updates.get("weak-model") or current_model.weak_model.name
+        )
+        editor_model_name = (
+            model_updates.get("editor-model") or current_model.editor_model.name
+        )
         if (
             model_name == current_model.name
             and weak_model_name == current_model.weak_model.name
@@ -1502,7 +1645,9 @@ class AiderPlusDesktop:
                 if not isinstance(coder, Coder):
                     raise ValueError(coder)
                 if not coder.repo:
-                    raise ValueError("The Tkinter desktop launcher must be run inside a git repo.")
+                    raise ValueError(
+                        "The Tkinter desktop launcher must be run inside a git repo."
+                    )
                 company = get_desktop_company_session(coder)
                 self._ui_queue.put(("backend_ready", (coder, company)))
             except Exception as err:
@@ -1523,7 +1668,9 @@ class AiderPlusDesktop:
             future = _submit_threaded(lambda: self.coder.run(with_message=prompt))
             self._track_future(future, "Aider response", target=target)
             self._set_busy(True, "Aider is responding…")
-        elif target == "Company Workflow" and self.company and self.company.orchestrator:
+        elif (
+            target == "Company Workflow" and self.company and self.company.orchestrator
+        ):
             self.turns_this_session += 1
             future = self.company.run_auto(prompt)
             self._track_future(future, "Company response", target=target)
@@ -1561,7 +1708,9 @@ class AiderPlusDesktop:
     def _append_chat(
         self, sender: str, message: str, tag: str = "aider", target: str | None = None
     ):
-        widget = self.chat_transcripts.get(target or self._current_chat_target(), self.chat_text)
+        widget = self.chat_transcripts.get(
+            target or self._current_chat_target(), self.chat_text
+        )
         widget.config(state="normal")
         label_tag = tag if tag in {"user", "aider", "system", "error"} else "aider"
         widget.insert(tk.END, f"{sender}: ", label_tag)
@@ -1569,14 +1718,133 @@ class AiderPlusDesktop:
         widget.see(tk.END)
         widget.config(state="disabled")
 
+    def export_knowledge_markdown(self):
+        if not self.company:
+            return
+        export_path = Path(self.company.repo_path) / ".aider" / "knowledge_export.md"
+        try:
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+            export_path.write_text(
+                self.company.export_knowledge_markdown(), encoding="utf-8"
+            )
+        except Exception as err:
+            messagebox.showerror(APP_TITLE, f"Could not export knowledge: {err}")
+            return
+        self._write_text(
+            self.knowledge_detail,
+            f"Exported Playbooks and Skills Markdown to:\n{export_path}",
+        )
+        messagebox.showinfo(APP_TITLE, f"Exported knowledge to {export_path}")
+
+    def refresh_knowledge(self):
+        if not self.company:
+            return
+        query = (
+            self.knowledge_search_var.get()
+            if hasattr(self, "knowledge_search_var")
+            else ""
+        )
+        overview = self.company.get_knowledge_overview(query=query)
+        items = overview.get("search_results") if query else None
+        if not items:
+            items = []
+            items.extend(overview.get("playbooks") or [])
+            items.extend(overview.get("skills") or [])
+            items.extend(overview.get("proposals") or [])
+            items.extend((overview.get("coo_memory") or {}).get("entries") or [])
+        self.knowledge_items_by_id = {}
+        self.knowledge_tree.delete(*self.knowledge_tree.get_children())
+        for idx, item in enumerate(items):
+            item_id = str(item.get("id") or item.get("proposal_id") or idx)
+            if item_id in self.knowledge_items_by_id:
+                item_id = f"{item_id}:{idx}"
+            self.knowledge_items_by_id[item_id] = item
+            title = (
+                item.get("title")
+                or item.get("name")
+                or item.get("proposal_id")
+                or item.get("summary")
+                or item_id
+            )
+            status = (
+                item.get("status") or item.get("memory_type") or item.get("type") or ""
+            )
+            last_used = (
+                item.get("last_used_at")
+                or item.get("created_at")
+                or item.get("updated_at")
+                or ""
+            )
+            self.knowledge_tree.insert(
+                "",
+                tk.END,
+                iid=item_id,
+                values=(
+                    item.get(
+                        "type", "proposal" if item.get("proposal_id") else "knowledge"
+                    ),
+                    str(title)[:120],
+                    str(status)[:80],
+                    str(last_used)[:80],
+                ),
+            )
+        counts = overview.get("counts", {})
+        self._write_text(
+            self.knowledge_detail,
+            "Select a knowledge item to inspect.\n\n"
+            f"Playbooks: {counts.get('playbooks', 0)}\n"
+            f"Skills: {counts.get('skills', 0)}\n"
+            f"Pending proposals: {counts.get('pending_proposals', 0)}\n"
+            f"COO memory entries: {counts.get('coo_memory_entries', 0)}",
+        )
+
+    def _on_knowledge_selected(self, _event=None):
+        selected = (
+            self.knowledge_tree.selection() if hasattr(self, "knowledge_tree") else []
+        )
+        if not selected:
+            return
+        item = self.knowledge_items_by_id.get(selected[0], {})
+        self._write_text(
+            self.knowledge_detail, json.dumps(item, indent=2, ensure_ascii=False)
+        )
+
+    def approve_selected_knowledge(self):
+        if not self.company:
+            return
+        selected = (
+            self.knowledge_tree.selection() if hasattr(self, "knowledge_tree") else []
+        )
+        if not selected:
+            messagebox.showinfo(APP_TITLE, "Select a pending skill proposal first.")
+            return
+        item = self.knowledge_items_by_id.get(selected[0], {})
+        proposal_id = item.get("proposal_id")
+        if not proposal_id or item.get("status") != "pending":
+            messagebox.showinfo(
+                APP_TITLE, "The selected item is not a pending skill proposal."
+            )
+            return
+        try:
+            self.company.approve_skill_proposal(proposal_id)
+        except Exception as err:
+            messagebox.showerror(APP_TITLE, f"Could not approve proposal: {err}")
+            return
+        self.refresh_knowledge()
+        messagebox.showinfo(APP_TITLE, f"Approved skill proposal {proposal_id}.")
+
     def refresh_dashboard(self):
         if not self.company:
             self._write_text(self.dashboard_text, "Company backend is not ready yet.")
             self._write_text(self.coo_status_text, "Company backend is not ready yet.")
             if hasattr(self, "system_overview_text"):
-                self._write_text(self.system_overview_text, "Company backend is not ready yet.")
+                self._write_text(
+                    self.system_overview_text, "Company backend is not ready yet."
+                )
             return
-        metrics = self.company.dashboard_metrics(turns_this_session=self.turns_this_session)
+        metrics = self.company.dashboard_metrics(
+            turns_this_session=self.turns_this_session
+        )
         for key, label in self.metric_labels.items():
             label.config(text=str(metrics.get(key, "—")))
         overview = self.company.system_overview()
@@ -1642,7 +1910,9 @@ class AiderPlusDesktop:
                     f"Last build logs: {str(overview['last_build_logs_summary'])[:240]}",
                     "Last build log artifacts: "
                     + (
-                        ", ".join(map(str, overview.get("last_build_log_artifacts") or []))
+                        ", ".join(
+                            map(str, overview.get("last_build_log_artifacts") or [])
+                        )
                         or "none"
                     ),
                     f"Active warehouse products: {overview['active_warehouse_products']}",
@@ -1775,6 +2045,7 @@ class AiderPlusDesktop:
     def refresh_all(self):
         self.refresh_dashboard()
         self.refresh_approvals()
+        self.refresh_knowledge()
         self.refresh_audit()
 
     def approve_selected(self):
@@ -1801,7 +2072,9 @@ class AiderPlusDesktop:
             label = f"Reject {self.selected_approval_id}"
         else:
             if not feedback:
-                messagebox.showinfo("Approvals", "Add feedback before requesting changes.")
+                messagebox.showinfo(
+                    "Approvals", "Add feedback before requesting changes."
+                )
                 return
             future = self.company.request_changes(self.selected_approval_id, feedback)
             label = f"Request changes {self.selected_approval_id}"
@@ -1838,7 +2111,9 @@ class AiderPlusDesktop:
         for item in deliverables:
             files = item.get("files") or []
             files_text = ", ".join(map(str, files)) if files else "No files listed"
-            artifacts = [artifact for artifact in item.get("artifact_links") or [] if artifact]
+            artifacts = [
+                artifact for artifact in item.get("artifact_links") or [] if artifact
+            ]
             logs = [path for path in item.get("log_artifacts") or [] if path]
             extra_lines = [f"Files: {files_text}"]
             if artifacts:
@@ -1877,7 +2152,9 @@ class AiderPlusDesktop:
                 self.coder, self.company = payload
                 repo = Path(self.coder.root).name
                 self.repo_label.config(text=f"Repo: {repo}")
-                self._append_chat("System", "Aider Company Mode is ready.", tag="system")
+                self._append_chat(
+                    "System", "Aider Company Mode is ready.", tag="system"
+                )
                 self._set_busy(False, "Ready")
                 self.refresh_settings_fields()
                 self.refresh_all()
@@ -1894,10 +2171,14 @@ class AiderPlusDesktop:
         events, _version = self.company.drain_events()
         for event in events:
             message = (
-                getattr(event, "message", None) or getattr(event, "payload", None) or str(event)
+                getattr(event, "message", None)
+                or getattr(event, "payload", None)
+                or str(event)
             )
             department = (
-                getattr(event, "department", None) or getattr(event, "origin", None) or "Company"
+                getattr(event, "department", None)
+                or getattr(event, "origin", None)
+                or "Company"
             )
             self._append_chat(company_label(department), str(message), tag="aider")
         if events:
@@ -1915,13 +2196,19 @@ class AiderPlusDesktop:
         try:
             result = future.result()
         except concurrent.futures.CancelledError:
-            self._append_chat("System", f"{label} was cancelled.", tag="system", target=target)
+            self._append_chat(
+                "System", f"{label} was cancelled.", tag="system", target=target
+            )
         except Exception as err:
-            self._append_chat("Error", f"{label} failed: {err}", tag="error", target=target)
+            self._append_chat(
+                "Error", f"{label} failed: {err}", tag="error", target=target
+            )
             self._set_busy(False, f"{label} failed")
         else:
             if result:
-                self._append_chat("Aider", _format_result(result), tag="aider", target=target)
+                self._append_chat(
+                    "Aider", _format_result(result), tag="aider", target=target
+                )
             self._set_busy(False, "Ready")
             self.refresh_all()
 
@@ -1991,13 +2278,17 @@ def _strip_desktop_args(argv: list[str] | None) -> list[str] | None:
 
 
 def _submit_threaded(fn):
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="aider-tk")
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="aider-tk"
+    )
     future = executor.submit(fn)
     future.add_done_callback(lambda _done: executor.shutdown(wait=False))
     return future
 
 
-def launch_desktop_gui(args=None, write_streamlit_credentials=None, debug: bool = False):
+def launch_desktop_gui(
+    args=None, write_streamlit_credentials=None, debug: bool = False
+):
     """Launch the zero-dependency native Tkinter desktop."""
     app = AiderPlusDesktop(argv=args)
     app.run()

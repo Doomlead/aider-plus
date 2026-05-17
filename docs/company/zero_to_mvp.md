@@ -11,8 +11,8 @@ projects. The `aider company new` command adds a thin warehouse manager for new
 product work: it creates or reuses a Git-backed repo under the warehouse
 `products/` directory, records it in `warehouse.json`, scaffolds a coherent MVP
 starter structure from `aider/company/templates.py`, writes Company metadata,
-placeholder skills, and post-creation hooks, then runs the same
-template-grounded Company brief through Aider's repo-aware implementation loop
+placeholder skills, post-creation hooks, QA gates, and an initial scaffold commit,
+then runs the same template-grounded Company brief through Aider's repo-aware implementation loop
 so the result remains reviewable, testable, and ready for future iteration.
 
 ## Command
@@ -33,7 +33,7 @@ aider company create "Build a webhook API for Stripe events" --template python-f
 Pass normal Aider options after `--`:
 
 ```bash
-aider company create "Build a CLI for exporting reports" --template cli-tool -- --model gpt-5.5
+aider company create "Build a CLI for exporting reports" --template cli-tool-python -- --model gpt-5.5
 ```
 
 Preview the generated Company brief without calling a model:
@@ -68,7 +68,7 @@ normal Git tooling.
 
 The built-in templates ground Product, UX, Engineering, Delivery, QA, DevOps,
 and iteration prompts for common MVP shapes. Each template includes recommended
-skills, starter files, post-creation instructions, and an example PRD prompt seed.
+skills, starter files, QA gates, post-creation instructions, and an example PRD prompt seed.
 
 - `nextjs-saas` — SaaS onboarding, workspace dashboard, billing seams, settings,
   and auth/analytics/data provider adapters.
@@ -78,6 +78,10 @@ skills, starter files, post-creation instructions, and an example PRD prompt see
   secure IPC, local data, offline behavior, and packaging seams.
 - `data-dashboard` — dashboard with fixtures, metric definitions, charts,
   filters, exports, and data-quality checks.
+- `data-dashboard-streamlit` — Streamlit dashboard with fixture-backed metrics,
+  filters, chart/export seams, secrets notes, and deployment guidance.
+- `cli-tool-python` — Python package CLI with subcommands, config precedence,
+  deterministic output, exit codes, packaging notes, and tests.
 - `saas-dashboard` — authenticated dashboard app with metrics, CRUD workflows,
   and admin views.
 - `cli-tool` — command-line product with subcommands, config, help text, and
@@ -98,14 +102,15 @@ skills, starter files, post-creation instructions, and an example PRD prompt see
 Example starts:
 
 ```bash
-aider company new "Build a founder revenue dashboard with cohort charts" --template data-dashboard --name founder-metrics --warehouse ~/AiderPlusWarehouse
+aider company new "Build a founder revenue dashboard with cohort charts" --template data-dashboard-streamlit --name founder-metrics --warehouse ~/AiderPlusWarehouse
+aider company new "Build a Python CLI that exports reports from CSV files" --template cli-tool-python --name report-exporter --warehouse ~/AiderPlusWarehouse
 aider company new "Build a secure offline notes desktop app" --template electron-desktop-app --name secure-notes --warehouse ~/AiderPlusWarehouse
 ```
 
 Generated starter repos include:
 
 ```text
-.aider/company/product.json        # template metadata and PRD seed
+.aider/company/product.json        # template metadata, skills, QA gates, and PRD seed
 .aider/company/post-creation.md    # first-run hooks for the selected template
 .aider/skills/<skill>/SKILL.md     # placeholder skill notes for future runs
 docs/company-mode.md              # Product → UX → Engineering → Delivery → DevOps handoff guide

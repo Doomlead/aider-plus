@@ -13,167 +13,96 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
 
 ---
 
-## First Time Setup
+## Architecture Overview
 
-Start with the guided Company Mode onboarding flow:
+New contributors should start with the [First Code Tour](docs/architecture/first-code-tour.md). It walks from `aider/main.py` through the Coder, `NanobotCOO`, `CompanyOrchestrator`, departments, shared memory/skills/EventBus services, daemon workspaces, templates, warehouse-backed product repos, and the DevOps release path.
 
-```bash
-aider company init
+At a glance:
+
+```text
+User / issue / GUI / chat adapter
+  -> aider/main.py
+  -> Coder or NanobotCOO
+  -> CompanyOrchestrator
+  -> Product -> UX -> Delivery -> Engineering -> Reviewer -> QA -> Delivery -> DevOps
+  -> Git-backed repo + proof-of-work + audit + release metadata
 ```
 
-The onboarding flow initializes a warehouse, chooses the default `aider company new --template ...` template, captures GitHub Issues settings for the Company daemon, records preferred models and prompt-caching choices per department, validates which provider API keys are currently available, optionally enables MCP, writes a tailored `.env.example`, and writes `AIDER_WORKFLOW.md` in the repo root. It ends by asking whether to create your first product repo immediately.
+Core implementation files to know first:
 
-For a non-interactive bootstrap, pass defaults explicitly:
+- `aider/main.py` — CLI entry point and Company/Warehouse/onboarding routing.
+- `aider/coders/base_coder.py` — repo-native Aider editing loop.
+- `aider/company/coo.py` — operations assistant, memory/status lookup, routing, and escalation.
+- `aider/company/orchestrator.py` — canonical Company workflow runtime.
+- `aider/company/departments/` — Product, UX, Delivery, Engineering, Reviewer, QA, and DevOps implementations.
+- `aider/company/events.py` — shared typed EventBus for GUI, daemon, Discord, and future API/MCP surfaces.
+- `aider/company/daemon/` — issue-driven workspaces and proof-of-work.
+- `aider/company/templates.py` and `aider/company/warehouse.py` — zero-to-MVP templates and Git-backed product registry.
 
-```bash
-aider company init --warehouse ./AiderPlusWarehouse --template nextjs-app --github-repo owner/repo --model gpt-5.5 --enable-mcp --product-idea "Build my MVP" --product-name my-mvp --yes
-```
+## Core Concepts
 
-On first run, Aider Plus offers this setup automatically. Use `--skip-onboarding` if you want to start classic Aider without the Company quickstart prompt. The Streamlit browser UI and Tkinter desktop UI also include an **Onboarding / Quick Start** section that generates the same local quickstart files.
-
-## What Aider Plus adds to upstream Aider
-
-- **Company Mode:** a Product → UX → Delivery → Engineering → Reviewer → QA →
-  Delivery → DevOps workflow for turning ideas, issues, or chat requests into
-  implementation plans, code changes, validation notes, release execution, and
-  audit trails. Delivery owns timelines, milestones, blockers, release readiness,
-  and the explicit DevOps handoff; DevOps executes validated builds, packaging,
-  tagging, deployment, and release metadata capture.
-- **Operations assistant:** a CEO-facing assistant layer that can answer directly,
-  ask clarifying questions, remember context, inspect project state, inspect
-  learned skills, list daemon workflow state, route work to departments, report
-  status, and surface queue/error telemetry.
-- **Warehouse-backed product studio:** `aider company new` can create a named
-  product repo inside a central warehouse, register it, scaffold starter files,
-  and then run Company Mode against the new repo.
-- **Zero-to-MVP templates:** richer templates for Next.js SaaS apps, Python
-  FastAPI APIs, Electron desktop apps, Streamlit/data dashboards, Python CLI
-  tools, SaaS dashboards, Discord bots, browser extensions, and internal admin
-  tools. Templates now include recommended skills, starter files, QA gates, post-creation hooks, and PRD
-  prompt seeds.
-- **Browser and native desktop GUIs:** shared Company dashboards, direct chat,
-  per-agent chat tabs, settings editors, approvals, audit views, memory views,
-  Delivery summaries, skill quick views, daemon status/proof-of-work panels, and
-  guide pages.
-- **Headless and chat-adapter operation:** `--headless`/`--bot-mode` supports
-  scripted tasks, queues, CI, services, Discord, and future chat adapters.
-- **Durable local memory:** conversation summaries, project memory, retrieval,
-  playbook pattern extraction, audit history, COO session history, and warehouse
-  COO memory are kept as inspectable local files.
-- **Procedural skills:** role-scoped `SKILL.md` workflows can be retrieved for
-  relevant tasks, usage is tracked, and approval-gated skill proposals can be
-  generated from successful audit/playbook patterns.
-- **MCP integration:** department agent loops can use Model Context Protocol
-  tools through approval-aware adapters and manager configuration.
-- **Company daemon:** an issue workflow daemon can pull eligible issues from a
-  local JSON tracker or GitHub Issues, prepare per-issue workspaces, run Company
-  prompts, write proof-of-work artifacts, update tracker state, attach PRs, and
-  require human review.
-- **Focused Company seam tests:** Company Mode now has targeted tests for
-  Delivery → DevOps handoff readiness, UX DesignSpecV2 schema-gate retry flows,
-  skill retrieval/injection, skill proposal approval, daemon partial-success
-  runner behavior, mocked GitHub tracker round trips, and shared GUI/desktop/
-  Discord event streaming.
-
-
-## Company daemon with GitHub Issues
-
-The daemon can use GitHub Issues as its tracker without extra service setup:
-
-```bash
-export GITHUB_TOKEN=ghp_your_token
-export GITHUB_REPO=owner/repo
-aider company daemon --workflow AIDER_WORKFLOW.md --tracker github --repo owner/repo --once
-```
-
-For production, prefer GitHub App installation credentials when available. Install the optional GitHub extra first if you need GitHub App JWT signing:
-
-```bash
-python -m pip install -e '.[github]'
-export GITHUB_APP_ID=12345
-export GITHUB_APP_INSTALLATION_ID=67890
-export GITHUB_APP_PRIVATE_KEY_PATH=/secure/path/aider-company.private-key.pem
-export GITHUB_REPO=owner/repo
-```
-
-Workflow files can declare `tracker.kind: github`, `tracker.labels`, and a
-`tracker.github` section for cache/retry controls and label mappings. The daemon
-lists labeled open issues, claims them with an `in_progress` label, posts
-progress/proof comments, attaches PR links, retries rate-limited GitHub API
-calls, briefly caches issue lists for frequent ticks, and marks completed work as
-`done`.
-
----
-
-## Core principles
-
-- **Repo-native first.** Aider Plus augments Aider; it does not replace Git,
-  tests, local tooling, or ordinary reviewable commits.
-- **One orchestration path.** CLI, browser, desktop, API/MCP, Discord, and daemon
-  entry points should delegate to the same Company runtime instead of duplicating
-  Product, QA, approval, audit, deployment, or memory logic.
-- **Warehouse as registry.** Warehouses discover and register product repos, but
-  each product remains a normal Git repo under `products/<slug>/`.
-- **Human-visible state.** Memory, approvals, audit events, lifecycle state,
-  skill proposals, daemon proof files, and tracker updates are local and
-  inspectable.
-- **Thin adapters.** Discord and similar chat integrations normalize messages and
-  session identity, then hand off to the shared runtime.
-- **Approval by default for risky work.** Tool use, lifecycle gates, release
-  decisions, MCP requests, and deployment/recovery guidance are designed to keep
-  humans in the loop.
-
----
+- **COO / `NanobotCOO`** — the CEO-facing operations assistant. It answers, clarifies, remembers, inspects status, routes work, delegates to Company workflow, and escalates when humans are needed.
+- **Company Mode** — the multi-department product workflow layered on top of normal Aider rather than a replacement runtime.
+- **Department** — a role-specific agent loop that consumes tasks and emits structured deliverables. Current departments are Product, UX, Delivery, Engineering, Reviewer, QA, and DevOps.
+- **Delivery** — the coordination and readiness owner. Delivery tracks milestones, blockers, validation confidence, and the explicit handoff into DevOps.
+- **DevOps** — the release execution layer. It validates Delivery handoffs, runs approved build/package/deploy steps, captures logs, and records deployment/rollback metadata.
+- **Skills vs. Playbooks** — skills are role-scoped `SKILL.md` procedures retrieved for a task; playbooks are reusable lessons/patterns extracted from prior successful work.
+- **Memory** — local, inspectable project, conversation, COO, warehouse, and retrieval context used to make later runs less stateless.
+- **EventBus** — the versioned in-process runtime stream for lifecycle, department, approval, daemon, COO, and deployment events.
+- **Approval gate** — an explicit human decision point for risky actions such as deployments, recovery, skill proposals, or sensitive tool use.
+- **ProofOfWork** — daemon-run evidence that records changed files, diffs, checks, review/QA feedback, handoffs, release status, and partial-success details.
+- **Warehouse** — a registry of normal product Git repositories under `products/<slug>/`, plus shared COO memory. It is not a custom VCS.
+- **Template** — a zero-to-MVP starter shape with recommended skills, starter files, QA gates, post-creation notes, and PRD prompt seeds.
 
 ## Quickstart
 
-### Install for local development
+### 1. Install for local development
 
 ```bash
 python -m pip install -e '.[browser]'
 ```
 
-The browser GUI uses the `browser` extra. The desktop GUI uses Tkinter from the
-Python standard library.
+The `browser` extra enables the Streamlit UI. The desktop UI uses Tkinter from the Python standard library.
 
-### Run classic Aider
+### 2. Run the guided Company setup
+
+```bash
+aider company init
+```
+
+The setup flow initializes a warehouse, chooses a default template, captures optional GitHub Issues daemon settings, records preferred models and prompt-caching choices, validates available provider API keys, optionally enables MCP, writes a tailored `.env.example`, and writes `AIDER_WORKFLOW.md`.
+
+For non-interactive setup:
+
+```bash
+aider company init \
+  --warehouse ./AiderPlusWarehouse \
+  --template nextjs-app \
+  --github-repo owner/repo \
+  --model gpt-5.5 \
+  --enable-mcp \
+  --product-idea "Build my MVP" \
+  --product-name my-mvp \
+  --yes
+```
+
+On first run, Aider Plus offers this setup automatically. Use `--skip-onboarding` when you want classic Aider without the Company quickstart prompt.
+
+### 3. Run classic Aider when you just want pair-programming
 
 ```bash
 aider --model gpt-5.5
 ```
 
-Run one non-interactive task:
+Run one non-interactive task for scripts, queues, service wrappers, chat workers, or CI:
 
 ```bash
 aider --headless --model gpt-5.5 --msg "Refactor the parser and add tests"
 ```
 
-`--headless` is also available as `--bot-mode`; it disables interactive chat
-assumptions and is intended for scripts, queues, service wrappers, chat workers,
-and CI jobs.
+`--bot-mode` is an alias for `--headless`.
 
-### Start onboarding
-
-```bash
-aider onboard
-# or
-aider init
-```
-
-Onboarding can help create first-run config, select default models, and capture
-integration secrets such as a Discord bot token.
-
----
-
-## Company Mode quickstart
-
-### See available product templates
-
-```bash
-aider company templates
-```
-
-### Run Company Mode in the current repo
+### 4. Start Company Mode in the current repo
 
 ```bash
 aider company create "Build a habit tracker with login, streaks, and a dashboard" \
@@ -181,10 +110,7 @@ aider company create "Build a habit tracker with login, streaks, and a dashboard
   --name habit-tracker
 ```
 
-This renders a zero-to-MVP Company brief and runs the normal Aider coding loop in
-the current Git repo. Use this when you already have the product repository open.
-
-### Preview a Company plan without changing files
+Preview the generated Company brief without changing files:
 
 ```bash
 aider company create "Build a Stripe webhook API" \
@@ -192,8 +118,32 @@ aider company create "Build a Stripe webhook API" \
   --dry-plan
 ```
 
-Dry plans print the Company brief and exit before creating product files or
-invoking the coder.
+### 5. Browse templates
+
+```bash
+aider company templates
+```
+
+## What Aider Plus adds to upstream Aider
+
+- **Company Mode:** a Product → UX → Delivery → Engineering → Reviewer → QA → Delivery → DevOps workflow for turning ideas, issues, or chat requests into implementation plans, code changes, validation notes, release execution, and audit trails.
+- **Operations assistant:** a CEO-facing assistant layer that can answer directly, ask clarifying questions, remember context, inspect project state, inspect learned skills, list daemon workflow state, route work to departments, report status, and surface queue/error telemetry.
+- **Warehouse-backed product studio:** `aider company new` can create a named product repo inside a central warehouse, register it, scaffold starter files, and then run Company Mode against the new repo.
+- **Zero-to-MVP templates:** templates for Next.js SaaS apps, FastAPI APIs, Electron desktop apps, Streamlit/data dashboards, Python CLI tools, SaaS dashboards, Discord bots, browser extensions, and internal admin tools.
+- **Browser and desktop GUIs:** shared Company dashboards, direct chat, per-agent tabs, settings, approvals, audit views, memory views, Delivery summaries, daemon status/proof panels, and guide pages.
+- **Headless and chat-adapter operation:** `--headless`/`--bot-mode` supports scripted tasks, queues, CI, services, Discord, and future chat adapters.
+- **Durable local memory and procedural skills:** local memory, playbook extraction, role-scoped `SKILL.md` retrieval, skill usage tracking, and approval-gated skill proposals.
+- **MCP integration:** department loops can use Model Context Protocol tools through approval-aware adapters and manager configuration.
+- **Company daemon:** an issue workflow daemon can pull eligible issues, prepare per-issue workspaces, run Company prompts, write proof-of-work artifacts, update tracker state, attach PRs, and require human review.
+
+## Core principles
+
+- **Repo-native first.** Aider Plus augments Aider; it does not replace Git, tests, local tooling, or ordinary reviewable commits.
+- **One orchestration path.** CLI, browser, desktop, API/MCP, Discord, and daemon entry points should delegate to the same Company runtime.
+- **Warehouse as registry.** Warehouses discover and register product repos, but each product remains a normal Git repo under `products/<slug>/`.
+- **Human-visible state.** Memory, approvals, audit events, lifecycle state, skill proposals, daemon proof files, and tracker updates are local and inspectable.
+- **Thin adapters.** Discord and similar integrations normalize messages and session identity, then hand off to the shared runtime.
+- **Approval by default for risky work.** Tool use, lifecycle gates, release decisions, MCP requests, and deployment/recovery guidance are designed to keep humans in the loop.
 
 ---
 
@@ -372,6 +322,8 @@ aider --bot-mode       # alias for --headless
 ---
 
 ## Architecture
+
+For a contributor-friendly walkthrough of this diagram and the files behind it, read the [First Code Tour](docs/architecture/first-code-tour.md).
 
 ```text
 User / CEO

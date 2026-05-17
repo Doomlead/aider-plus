@@ -690,6 +690,10 @@ python -m py_compile aider/company/templates.py aider/company/warehouse.py aider
 python -m pytest tests/company/test_warehouse_cli.py tests/company/test_zero_to_mvp_cli.py tests/company/test_delivery_department.py
 ```
 
+The targeted release/deployment seam tests live in `tests/company/test_release_deployment.py`; run them when changing
+Delivery → DevOps handoffs, build detection, deployment provider commands,
+high-risk approval gates, artifact metadata, or rollback handling.
+
 Important files:
 
 - `aider/company/templates.py` — zero-to-MVP prompts and template starter structures.

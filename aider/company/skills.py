@@ -59,7 +59,9 @@ class SkillProposal:
     source_audit_events: list[str] = field(default_factory=list)
     confidence: float = 0.5
     status: str = "pending"
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -75,12 +77,18 @@ class SkillProposal:
 class CompanySkillManager:
     """Role-aware skill retrieval and approval-gated procedural memory."""
 
-    def __init__(self, state: CompanyStateManager, config: Optional[SkillLearningConfig] = None):
+    def __init__(
+        self, state: CompanyStateManager, config: Optional[SkillLearningConfig] = None
+    ):
         self.state = state
         self.config = config or SkillLearningConfig()
         root = Path(state.memory.repo_path) / ".aider" / "skills"
-        self.manager = SkillManager(root, max_skills_per_scope=self.config.max_skills_per_role)
-        self.proposals_root = Path(state.memory.repo_path) / ".aider" / "skill_proposals"
+        self.manager = SkillManager(
+            root, max_skills_per_scope=self.config.max_skills_per_role
+        )
+        self.proposals_root = (
+            Path(state.memory.repo_path) / ".aider" / "skill_proposals"
+        )
 
     def scopes_for_role(self, role: str | None) -> list[str]:
         scopes = ["shared"]
@@ -89,7 +97,9 @@ class CompanySkillManager:
             scopes.append(normalized)
         return scopes
 
-    def query_for_task(self, task: CompanyTask, *, role: str | None = None) -> list[SkillSummary]:
+    def query_for_task(
+        self, task: CompanyTask, *, role: str | None = None
+    ) -> list[SkillSummary]:
         query = self._task_query(task)
         return self.manager.query_skills(
             query,
@@ -102,7 +112,9 @@ class CompanySkillManager:
         guidance: list[str] = []
         for skill in skills:
             summary = skill.description or skill.title or "No summary available"
-            guidance.append(f"{skill.scope}/{skill.name}: {skill.title} — {summary}".strip())
+            guidance.append(
+                f"{skill.scope}/{skill.name}: {skill.title} — {summary}".strip()
+            )
         return guidance
 
     def record_skill_usage(
@@ -120,9 +132,12 @@ class CompanySkillManager:
             recent = []
         now = datetime.now(timezone.utc).isoformat()
         existing = {
-            (item.get("scope"), item.get("name")): item for item in recent if isinstance(item, dict)
+            (item.get("scope"), item.get("name")): item
+            for item in recent
+            if isinstance(item, dict)
         }
         for skill in used:
+            previous = existing.get((skill.scope, skill.name), {})
             existing[(skill.scope, skill.name)] = {
                 "scope": skill.scope,
                 "name": skill.name,
@@ -130,6 +145,7 @@ class CompanySkillManager:
                 "description": skill.description,
                 "role": role,
                 "last_used_at": now,
+                "usage_count": int(previous.get("usage_count") or 0) + 1,
             }
         skill_data["recently_used"] = sorted(
             existing.values(),
@@ -157,7 +173,9 @@ class CompanySkillManager:
         recent = []
         if isinstance(skill_data, dict):
             recent = [
-                item for item in skill_data.get("recently_used", []) if isinstance(item, dict)
+                item
+                for item in skill_data.get("recently_used", [])
+                if isinstance(item, dict)
             ][:recent_limit]
         return {"available": available, "recently_used": recent}
 
@@ -166,7 +184,9 @@ class CompanySkillManager:
     ) -> dict[str, Any]:
         """Return UI/COO-friendly detail about approved and recently used skills."""
 
-        summary = self.dashboard_summary(available_limit=available_limit, recent_limit=recent_limit)
+        summary = self.dashboard_summary(
+            available_limit=available_limit, recent_limit=recent_limit
+        )
         proposals = self.list_proposals(status="pending")
         return {
             "enabled": self.config.enabled,
@@ -182,7 +202,9 @@ class CompanySkillManager:
         scope_dir = self.proposals_root / proposal.scope
         scope_dir.mkdir(parents=True, exist_ok=True)
         path = scope_dir / f"{proposal.proposal_id}.json"
-        path.write_text(json.dumps(proposal.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+        path.write_text(
+            json.dumps(proposal.to_dict(), indent=2, sort_keys=True), encoding="utf-8"
+        )
         self._record_proposal_index(proposal)
         return path
 
@@ -220,7 +242,9 @@ class CompanySkillManager:
         else:
             raise ValueError(f"Unsupported proposal action: {proposal.action}")
         proposal.status = "approved"
-        path.write_text(json.dumps(proposal.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+        path.write_text(
+            json.dumps(proposal.to_dict(), indent=2, sort_keys=True), encoding="utf-8"
+        )
         self._record_proposal_index(proposal)
         return proposal
 

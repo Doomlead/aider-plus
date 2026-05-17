@@ -6,6 +6,7 @@ from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.schemas import CompanyTask
+from aider.company.knowledge import KnowledgeManager
 from aider.company.skills import CompanySkillManager, SkillProposal
 from aider.memory import ProjectMemory
 
@@ -75,16 +76,21 @@ def test_skill_retrieval_injects_product_reviewer_and_devops_contexts(tmp_path):
     memory = ProjectMemory(str(tmp_path))
     orchestrator = CompanyOrchestrator(memory)
     create_company_skills(orchestrator.state)
-    builder = ContextBuilder(orchestrator.state, orchestrator.company_config.skill_learning)
+    builder = ContextBuilder(
+        orchestrator.state, orchestrator.company_config.skill_learning
+    )
 
     product_context = builder.build(
-        make_task("product"), ProductDepartment(memory, FakeAgentLoop()).get_context_requirements()
+        make_task("product"),
+        ProductDepartment(memory, FakeAgentLoop()).get_context_requirements(),
     )
     assert any(
         "shared/accessible-rollout-checklist" in item
         for item in product_context["skill_guidance"]
     )
-    assert any("product/invite-prd-scope" in item for item in product_context["skill_guidance"])
+    assert any(
+        "product/invite-prd-scope" in item for item in product_context["skill_guidance"]
+    )
 
     engineering_task = make_task("engineering", artifact_type="code")
     engineering_context = builder.build(
@@ -123,7 +129,9 @@ def test_skill_retrieval_injects_product_reviewer_and_devops_contexts(tmp_path):
     assert {item["role"] for item in recent} >= {"product", "engineering", "devops"}
 
 
-def test_skill_proposal_approval_flow_creates_approved_skill_and_updates_index(tmp_path):
+def test_skill_proposal_approval_flow_creates_approved_skill_and_updates_index(
+    tmp_path,
+):
     memory = ProjectMemory(str(tmp_path))
     orchestrator = CompanyOrchestrator(memory)
     manager = CompanySkillManager(orchestrator.state)
@@ -156,3 +164,106 @@ def test_skill_proposal_approval_flow_creates_approved_skill_and_updates_index(t
     assert doc.metadata["confidence"] == 0.91
     assert all_proposals[0].status == "approved"
     assert memory.data["skill_proposals"][-1]["status"] == "approved"
+
+
+def test_context_builder_ranks_memories_and_explains_recent_injection(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    orchestrator = CompanyOrchestrator(memory)
+    memory.update(
+        {
+            "playbook": {
+                "coding_standards": [
+                    {
+                        "text": "Tune button spacing and visual hierarchy for marketing pages."
+                    },
+                    {
+                        "text": (
+                            "Invite rollout code needs rollback notes, smoke checks, "
+                            "and pytest coverage."
+                        )
+                    },
+                    {"text": "Database backup jobs should verify retention windows."},
+                    {
+                        "text": (
+                            "Invite acceptance criteria should include recovery "
+                            "and regression tests."
+                        )
+                    },
+                    {
+                        "text": "Payment reconciliation jobs need daily ledger snapshots."
+                    },
+                    {
+                        "text": (
+                            "For invite releases, prefer feature flags and "
+                            "accessible form validation."
+                        )
+                    },
+                    {
+                        "text": "Mobile animation polish should preserve reduced motion settings."
+                    },
+                ]
+            }
+        }
+    )
+    memory.persist()
+
+    builder = ContextBuilder(
+        orchestrator.state, orchestrator.company_config.skill_learning
+    )
+    context = builder.build(make_task("engineering"), ["playbook.coding_standards"])
+
+    guidance = context["playbook_guidance"]
+    assert 1 <= len(guidance) <= 5
+    assert any(
+        "Invite rollout" in item or "invite releases" in item for item in guidance
+    )
+    assert all("Payment reconciliation" not in item for item in guidance)
+    assert context["playbook_retrieval_explanations"]
+    assert "Why this was included" in context["playbook_retrieval_explanations"][0]
+
+    overview = KnowledgeManager(orchestrator.state).get_overview()
+    recent = overview["recently_injected"]
+    assert recent[0]["type"] == "playbook"
+    assert "Why this was included" in recent[0]["explanation"]
+
+
+def test_skill_ranking_explanation_generation_and_prompt_injection(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    orchestrator = CompanyOrchestrator(memory)
+    manager = create_company_skills(orchestrator.state)
+    for idx in range(6):
+        manager.manager.create_skill(
+            scope="engineering",
+            name=f"billing-ledger-{idx}",
+            content=(
+                f"# Billing Ledger {idx}\n"
+                "Description: Reconcile invoices, ledgers, payments, and finance exports.\n"
+            ),
+        )
+
+    builder = ContextBuilder(
+        orchestrator.state, orchestrator.company_config.skill_learning
+    )
+    task = make_task("engineering", artifact_type="code")
+    context = builder.build(
+        task, EngineeringDepartment(memory, FakeAgentLoop()).get_context_requirements()
+    )
+
+    assert 1 <= len(context["skills"]) <= 5
+    assert context["skills"][0]["name"] == "accessible-rollout-checklist"
+    assert any(
+        skill["name"] == "invite-review-checklist" for skill in context["skills"]
+    )
+    assert all("billing-ledger" not in item for item in context["skill_guidance"])
+    assert all("Why included:" in item for item in context["skill_guidance"])
+    assert all("retrieval_explanation" in skill for skill in context["skills"])
+
+    explanations = KnowledgeManager(orchestrator.state).explain_retrieval(
+        "invite rollout smoke checks", context["skills"]
+    )
+    assert explanations
+    assert all("Why this was included" in explanation for explanation in explanations)
+    assert any(
+        "invite" in explanation or "rollout" in explanation
+        for explanation in explanations
+    )

@@ -69,6 +69,59 @@ class KnowledgeManager:
             normalized.append(payload)
         return normalized
 
+    def get_recently_injected(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        knowledge = self.memory.data.get("knowledge", {})
+        if not isinstance(knowledge, dict):
+            return []
+        recent = knowledge.get("recently_injected", [])
+        if not isinstance(recent, list):
+            return []
+        items = [dict(item) for item in recent if isinstance(item, dict)]
+        return sorted(
+            items, key=lambda item: item.get("injected_at", ""), reverse=True
+        )[:limit]
+
+    def explain_retrieval(self, query: str, context_items) -> list[str]:
+        """Explain why memories or skills were selected for a query."""
+        explanations: list[str] = []
+        if isinstance(context_items, dict):
+            candidates = []
+            for value in context_items.values():
+                candidates.extend(value if isinstance(value, list) else [value])
+        else:
+            candidates = list(context_items or [])
+        terms = {
+            term for term in str(query or "").lower().replace("-", " ").split() if term
+        }
+        for item in candidates:
+            if isinstance(item, str) and "Why this was included:" in item:
+                explanations.append(item)
+                continue
+            if isinstance(item, dict) and item.get("retrieval_explanation"):
+                explanations.append(str(item["retrieval_explanation"]))
+                continue
+            text = (
+                json.dumps(item, default=str, ensure_ascii=False)
+                if isinstance(item, dict)
+                else str(item)
+            )
+            matches = sorted(term for term in terms if term and term in text.lower())[
+                :3
+            ]
+            label = self._item_label(item)
+            if matches:
+                reason = (
+                    f"{label} — Why this was included: "
+                    f"matches keyword(s) {', '.join(matches)}."
+                )
+            else:
+                reason = (
+                    f"{label} — Why this was included: it was selected as one of "
+                    "the strongest available knowledge matches."
+                )
+            explanations.append(reason)
+        return explanations
+
     def get_skill_proposals(self, *, status: str | None = None) -> list[dict[str, Any]]:
         proposals: list[SkillProposal] = []
         for proposal_status in ([status] if status else ["pending", "approved"]):
@@ -105,6 +158,7 @@ class KnowledgeManager:
         playbooks = self.get_all_playbooks()
         skills = self.get_all_skills()
         recent_skills = self.get_recent_skills()
+        recently_injected = self.get_recently_injected()
         proposals = self.get_skill_proposals()
         coo_memory = self.get_coo_memory_summary()
         search_results = self.search_knowledge(query) if query else []
@@ -112,6 +166,7 @@ class KnowledgeManager:
             "playbooks": playbooks,
             "skills": skills,
             "recent_skills": recent_skills,
+            "recently_injected": recently_injected,
             "proposals": proposals,
             "pending_proposals": [p for p in proposals if p.get("status") == "pending"],
             "approved_proposals": [
@@ -123,6 +178,7 @@ class KnowledgeManager:
                 "playbooks": len(playbooks),
                 "skills": len(skills),
                 "recent_skills": len(recent_skills),
+                "recently_injected": len(recently_injected),
                 "proposals": len(proposals),
                 "pending_proposals": len(
                     [p for p in proposals if p.get("status") == "pending"]
@@ -139,6 +195,7 @@ class KnowledgeManager:
         candidates.extend(self.get_all_playbooks())
         candidates.extend(self.get_all_skills())
         candidates.extend(self.get_recent_skills())
+        candidates.extend(self.get_recently_injected())
         candidates.extend(self.get_skill_proposals())
         candidates.extend(self.get_coo_memory_summary().get("entries", []))
 
@@ -229,6 +286,19 @@ class KnowledgeManager:
             "created_at": timestamp,
             "metadata": metadata,
         }
+
+    @staticmethod
+    def _item_label(item: Any) -> str:
+        if isinstance(item, dict):
+            return str(
+                item.get("title")
+                or item.get("name")
+                or item.get("proposal_id")
+                or item.get("id")
+                or item.get("explanation")
+                or "knowledge item"
+            )
+        return str(item)[:80]
 
     @staticmethod
     def _skill_to_dict(skill: Any) -> dict[str, Any]:

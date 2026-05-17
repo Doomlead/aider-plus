@@ -112,3 +112,53 @@ def test_legacy_conversion_infers_warning_and_error_severity():
     assert warning_event.severity == "warning"
     assert error_event.severity == "error"
     assert "Severity: `error`" in format_runtime_event_message(error_event)
+
+
+def test_gui_desktop_and_discord_receive_same_runtime_events():
+    from aider.company.events import DeploymentCompleted
+    from aider.integrations.discord import subscribe_discord_event_forwarder
+
+    bus = EventBus(session_id="surface-test")
+    gui_events = []
+    desktop_events = []
+    discord_messages = []
+
+    async def record_gui(event):
+        gui_events.append(event)
+
+    async def record_desktop(event):
+        desktop_events.append(event)
+
+    async def forward_discord(message):
+        discord_messages.append(message)
+
+    bus.subscribe(record_gui)
+    bus.subscribe(record_desktop)
+    subscribe_discord_event_forwarder(
+        bus,
+        forward_discord,
+        event_types={"daemon_run_progress", "deployment_completed"},
+    )
+
+    progress = bus.publish(
+        DaemonRunProgress(
+            session_id="surface-test",
+            payload={"issue_id": "AP-9", "stage": "qa", "status": "running"},
+        )
+    )
+    deployment = bus.publish(
+        DeploymentCompleted(
+            session_id="surface-test",
+            payload={"issue_id": "AP-9", "environment": "staging", "status": "success"},
+        )
+    )
+
+    assert gui_events == [progress, deployment]
+    assert desktop_events == [progress, deployment]
+    assert [event.event_type for event in gui_events] == [
+        event.event_type for event in desktop_events
+    ]
+    assert len(discord_messages) == 2
+    assert "Daemon Run Progress" in discord_messages[0]
+    assert "Deployment Completed" in discord_messages[1]
+    assert "AP-9" in discord_messages[0]

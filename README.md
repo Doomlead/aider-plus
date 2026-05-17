@@ -51,6 +51,11 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
   local JSON tracker or GitHub Issues, prepare per-issue workspaces, run Company
   prompts, write proof-of-work artifacts, update tracker state, attach PRs, and
   require human review.
+- **Focused Company seam tests:** Company Mode now has targeted tests for
+  Delivery → DevOps handoff readiness, UX DesignSpecV2 schema-gate retry flows,
+  skill retrieval/injection, skill proposal approval, daemon partial-success
+  runner behavior, mocked GitHub tracker round trips, and shared GUI/desktop/
+  Discord event streaming.
 
 
 ## Company daemon with GitHub Issues

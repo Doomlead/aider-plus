@@ -11,6 +11,8 @@ from aider.company.events import (
 from aider.company.schemas import CompanyEvent as LegacyCompanyEvent, EventMessage
 from aider.company.surface_messages import (
     event_stream_response,
+    format_daemon_progress,
+    format_deployment_event,
     format_runtime_event_message,
 )
 
@@ -162,3 +164,81 @@ def test_gui_desktop_and_discord_receive_same_runtime_events():
     assert "Daemon Run Progress" in discord_messages[0]
     assert "Deployment Completed" in discord_messages[1]
     assert "AP-9" in discord_messages[0]
+
+
+def test_event_bus_get_recent_events_filters_and_replays_since_timestamp():
+    bus = EventBus(history_limit=5, session_id="replay")
+    first = bus.publish(
+        LifecycleEvent(
+            timestamp="2026-05-17T00:00:00+00:00",
+            payload={"task_id": "T-1", "status": "running"},
+        )
+    )
+    second = bus.publish(
+        DaemonRunProgress(
+            timestamp="2026-05-17T00:01:00+00:00",
+            payload={"issue_id": "AP-10", "stage": "qa", "status": "running"},
+        )
+    )
+    third = bus.publish(
+        CooActionTaken(
+            timestamp="2026-05-17T00:02:00+00:00",
+            payload={"action": "route"},
+        )
+    )
+
+    assert bus.get_recent_events(filter_by_type="daemon_run_progress") == [second]
+    assert bus.get_recent_events(
+        filter_by_type={"daemon_run_progress", "coo_action_taken"}, limit=5
+    ) == [second, third]
+
+    replayed = []
+    count = bus.replay_to_subscriber(
+        replayed.append, since_timestamp="2026-05-17T00:01:00+00:00"
+    )
+
+    assert count == 2
+    assert replayed == [second, third]
+    assert first not in replayed
+
+
+def test_rich_formatters_support_success_warning_error_and_compact_modes():
+    progress = DaemonRunProgress(
+        payload={
+            "issue_id": "AP-11",
+            "stage": "devops",
+            "status": "partial_success",
+            "completed_count": 3,
+            "total_stages": 5,
+            "failed_stages": ["qa"],
+        },
+        severity="warning",
+    )
+    deployment = CompanyEvent.from_dict(
+        {
+            "event_type": "deployment_completed",
+            "payload": {
+                "issue_id": "AP-11",
+                "environment": "staging",
+                "status": "success",
+                "deploy_url": "https://example.test",
+            },
+        }
+    )
+    failure = DaemonRunProgress(
+        payload={
+            "issue_id": "AP-12",
+            "stage": "qa",
+            "status": "failed",
+            "error": "boom",
+        },
+        severity="error",
+    )
+
+    assert "⚠️" in format_daemon_progress(progress)
+    assert "Progress: 3/5" in format_daemon_progress(progress)
+    assert "✅" in format_deployment_event(deployment)
+    assert "https://example.test" in format_deployment_event(deployment)
+    assert "❌" in format_runtime_event_message(failure, compact=True)
+    assert "AP-12" in format_runtime_event_message(failure, compact=True)
+    assert "\033[" in format_runtime_event_message(failure, ansi=True)

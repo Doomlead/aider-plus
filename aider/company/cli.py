@@ -45,6 +45,7 @@ class CompanyCLICommand:
     tracker_type: str | None = None
     repo: str | None = None
     watch: bool = False
+    event_filter: str | None = None
     github_token: str | None = None
     model: str | None = None
     mcp_enabled: bool | None = None
@@ -63,7 +64,7 @@ USAGE = """Usage:
   aider company templates
   aider company create <idea> [--template TEMPLATE] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
   aider company new <idea> [--template TEMPLATE] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
-  aider company daemon --workflow PATH [--tracker TYPE] [--repo OWNER/REPO] [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N] [--watch]
+  aider company daemon --workflow PATH [--tracker TYPE] [--repo OWNER/REPO] [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N] [--watch] [--filter EVENT_TYPE]
   aider warehouse init [PATH]
   aider warehouse list [--warehouse PATH]
   aider warehouse open PRODUCT [--warehouse PATH]
@@ -270,6 +271,7 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
     tracker_type: str | None = None
     repo: str | None = None
     watch: bool = False
+    event_filter: str | None = None
     rest = list(args)
     index = 0
     while index < len(rest):
@@ -297,6 +299,11 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
             status = True
         elif token == "--watch":
             watch = True
+        elif token == "--filter":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--filter requires an event type.\n" + USAGE)
+            event_filter = rest[index].strip()
         elif token == "--run":
             index += 1
             if index >= len(rest):
@@ -347,6 +354,7 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
         tracker_type=tracker_type,
         repo=repo,
         watch=watch,
+        event_filter=event_filter,
     )
 
 
@@ -505,7 +513,9 @@ def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
             from aider.company.surface_messages import format_runtime_event_message
 
             def _print_event(event):
-                print(format_runtime_event_message(event), flush=True)
+                if command.event_filter and event.event_type != command.event_filter:
+                    return
+                print(format_runtime_event_message(event, ansi=True), flush=True)
 
             event_bus = getattr(
                 getattr(daemon, "orchestrator", None), "event_bus", None

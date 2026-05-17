@@ -181,14 +181,7 @@ class EventBus:
             self._append_recent_locked(event)
             handlers = list(self._handlers)
         for handler in handlers:
-            result = handler(event)
-            if asyncio.iscoroutine(result):
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    asyncio.run(result)
-                else:
-                    loop.create_task(result)
+            self._deliver_to_handler(handler, event)
         return event
 
     async def publish_async(self, event: CompanyEvent) -> CompanyEvent:
@@ -230,14 +223,7 @@ class EventBus:
             self._handlers.append(handler)
             replay_events = list(self._recent) if replay else []
         for event in replay_events:
-            result = handler(event)
-            if asyncio.iscoroutine(result):
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    asyncio.run(result)
-                else:
-                    loop.create_task(result)
+            self._deliver_to_handler(handler, event)
 
         def unsubscribe() -> None:
             with self._lock:
@@ -246,12 +232,67 @@ class EventBus:
 
         return unsubscribe
 
+    def _deliver_to_handler(self, handler: EventHandler, event: CompanyEvent) -> None:
+        result = handler(event)
+        if asyncio.iscoroutine(result):
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(result)
+            else:
+                loop.create_task(result)
+
     def get_recent(self, limit: int = 50) -> list[CompanyEvent]:
         """Return recent events in chronological order."""
 
+        return self.get_recent_events(limit=limit)
+
+    def get_recent_events(
+        self, filter_by_type: str | Iterable[str] | None = None, limit: int = 50
+    ) -> list[CompanyEvent]:
+        """Return recent events, optionally filtered by one or more event types."""
+
+        max_events = max(0, int(limit))
         with self._lock:
             events = list(self._recent)
-        return events[-max(0, int(limit)) :]
+        if filter_by_type is not None:
+            if isinstance(filter_by_type, str):
+                selected = {filter_by_type}
+            else:
+                selected = {str(event_type) for event_type in filter_by_type}
+            events = [event for event in events if event.event_type in selected]
+        return events[-max_events:] if max_events else []
+
+    def replay_to_subscriber(
+        self,
+        subscriber: EventHandler,
+        since_timestamp: str | datetime | None = None,
+        *,
+        filter_by_type: str | Iterable[str] | None = None,
+        limit: int | None = None,
+    ) -> int:
+        """Replay retained events to a late-joining subscriber and return count sent."""
+
+        with self._lock:
+            events = list(self._recent)
+        if since_timestamp is not None:
+            since = (
+                since_timestamp.isoformat()
+                if isinstance(since_timestamp, datetime)
+                else str(since_timestamp)
+            )
+            events = [event for event in events if event.timestamp >= since]
+        if filter_by_type is not None:
+            if isinstance(filter_by_type, str):
+                selected = {filter_by_type}
+            else:
+                selected = {str(event_type) for event_type in filter_by_type}
+            events = [event for event in events if event.event_type in selected]
+        if limit is not None:
+            events = events[-max(0, int(limit)) :]
+        for event in events:
+            self._deliver_to_handler(subscriber, event)
+        return len(events)
 
     def event_stream(self, limit: int = 50) -> Iterable[str]:
         """Yield server-sent-event lines for the recent replay buffer."""

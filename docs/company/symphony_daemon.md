@@ -193,6 +193,7 @@ Stream the shared Company EventBus while a daemon run executes:
 
 ```bash
 aider company daemon --workflow AIDER_WORKFLOW.md --once --watch
+aider company daemon --workflow AIDER_WORKFLOW.md --once --watch --filter deployment_completed
 ```
 
 A dry run creates the issue workspace, initializes Git, renders the Company Mode
@@ -202,7 +203,11 @@ files, check results, QA/review status, PR URL, and risk notes. The built-in
 runner publishes `daemon_run_progress` events to the shared typed EventBus. Each
 progress payload includes completed/failed counts plus retry count and last-error
 fields, so CLI `--watch`, browser/desktop timelines, Discord forwarding, and
-future API/MCP streams see the same observable progress envelope.
+future API/MCP streams see the same observable progress envelope. The watcher uses
+the shared rich renderer with severity icons/colors and accepts `--filter
+EVENT_TYPE` when an operator only wants deployment, approval, or daemon progress
+events. Late-opening surfaces can call EventBus replay APIs to render retained
+activity before subscribing live.
 
 ## Safety model
 

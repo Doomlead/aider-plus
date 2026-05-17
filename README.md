@@ -342,7 +342,9 @@ CompanyOrchestrator
   |
   +--> shared typed EventBus (lifecycle, daemon progress, COO actions, approvals)
   |       |
-  |       +--> Browser GUI / Desktop GUI / Discord / daemon --watch / future API+MCP streams
+  |       +--> shared rich renderers (severity icons, compact/detailed modes, replay)
+  |       |       |
+  |       |       +--> Browser GUI / Desktop GUI / Discord / daemon --watch / future API+MCP streams
   |
   v
 Product -> UX -> Delivery -> Engineering -> Reviewer -> QA -> Delivery -> DevOps
@@ -355,12 +357,14 @@ The orchestrator is the canonical product-building path. It publishes structured
 versioned runtime events through `aider.company.events.EventBus`, so surfaces
 should send messages in and render shared EventBus results out rather than
 reimplementing department, approval, lifecycle, audit, status, or deployment
-behavior. `surface_messages.py` contains the shared formatting layer for these
-events and the simple server-sent-event payload used by future API/MCP streams.
-Each event carries `version: 1` and `severity` (`info`, `warning`, or `error`),
-with explicit constants for supported/deprecated versions so future breaking
-schema changes can be introduced with a compatibility window. The in-memory bus
-keeps a bounded replay buffer and automatically prunes old events during
+behavior. `surface_messages.py` contains the shared severity-aware formatting
+layer for these events, including compact/detailed render modes, lifecycle,
+daemon-progress, deployment, and Discord embed-style blocks. Each event carries
+`version: 1` and `severity` (`info`, `warning`, or `error`), with explicit
+constants for supported/deprecated versions so future breaking schema changes can
+be introduced with a compatibility window. The in-memory bus keeps a bounded
+replay buffer, supports type-filtered `get_recent_events()`, can replay retained
+events to late-joining subscribers, and automatically prunes old events during
 long-running sessions.
 
 ---

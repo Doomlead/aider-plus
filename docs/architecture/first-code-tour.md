@@ -263,7 +263,11 @@ QA confidence + evidence
   transitions, skill proposals, and recovery decisions should be explicit,
   inspectable, and recoverable from persisted state.
 - **Shared EventBus.** Surfaces should subscribe to the same typed event stream
-  instead of inventing parallel status protocols.
+  instead of inventing parallel status protocols. Late joiners use
+  `get_recent_events()` or `replay_to_subscriber()` for retained activity, then
+  render through `surface_messages.py` so lifecycle, daemon, deployment,
+  approvals, Discord, Streamlit, Tkinter, and CLI `--watch` views share severity
+  icons, compact/detailed modes, and progress visualizations.
 - **Repo-native output.** The end product is a real Git repo with diffs, commits,
   tests, local artifacts, and reviewable release notes.
 - **Thin adapters.** CLI, browser, desktop, Discord, daemon, MCP, and future API

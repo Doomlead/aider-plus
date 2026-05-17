@@ -592,14 +592,26 @@ filesystem, network, deployment, ticketing, or production-adjacent tools.
 
 ## Discord and other chat adapters
 
-Discord is intentionally a thin adapter. It can accept chat text, associate it
-with a session, and forward it to headless Aider or Company Mode, but it should
-not own dashboards, lifecycle buttons, approval gates, audit logs, COO status
-semantics, or product workflow behavior.
+Discord is intentionally a thin adapter. It now subclasses
+`aider.integrations.adapters.ThinAdapter`, which normalizes inbound chat/webhook
+payloads into `AdapterMessage`, delegates user text to headless Aider or Company
+Mode, and subscribes to the shared EventBus for rendered status/approval updates.
+Adapters should not own dashboards, lifecycle buttons, approval gates, audit
+logs, COO status semantics, or product workflow behavior.
 
-This makes Discord replaceable with Slack, Matrix, webhooks, queues, or custom
-chat apps: normalize message/channel/session identity, then call the shared
-runtime.
+This makes Discord replaceable with Slack, Matrix, webhooks, queues, CI comment
+bots, or custom chat apps. To add a surface, subclass `ThinAdapter`, implement
+transport-specific auth/receive/send code, call `normalize_message()` for inbound
+payloads, call `handle_user_input()` to delegate to the shared runtime, and call
+`subscribe_to_bus()` so `surface_messages.py` renders lifecycle/status/approval
+output consistently. `aider.integrations.slack.SlackAdapter` is a dependency-free
+Slack/webhook example and can also be imported as `WebhookAdapter`.
+
+Enable adapter configuration from CLI/config with repeated flags such as:
+
+```bash
+aider --adapter slack --adapter webhook --headless
+```
 
 Install the optional dependency when running the Discord adapter directly:
 

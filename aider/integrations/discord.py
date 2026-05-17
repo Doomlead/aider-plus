@@ -15,6 +15,7 @@ from typing import Awaitable, Callable, Dict, Optional, Set
 
 from aider.coders import Coder
 from aider.company.events import CompanyEvent as RuntimeCompanyEvent, EventBus
+from aider.integrations.adapters import HIGH_PRIORITY_EVENT_TYPES, ThinAdapter
 from aider.company.surface_messages import (
     format_approval_required_message,
     format_audit_log_message,
@@ -27,14 +28,6 @@ from aider.company.surface_messages import (
 from aider.main import main as aider_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
 
-HIGH_PRIORITY_EVENT_TYPES = {
-    "approval_required",
-    "project_blocked",
-    "daemon_run_progress",
-    "deployment_completed",
-    "coo_action_taken",
-}
-
 
 def subscribe_discord_event_forwarder(
     event_bus: EventBus,
@@ -44,21 +37,16 @@ def subscribe_discord_event_forwarder(
 ):
     """Forward selected high-priority Company EventBus events to Discord."""
 
-    selected = set(event_types or HIGH_PRIORITY_EVENT_TYPES)
-
-    async def handler(event: RuntimeCompanyEvent):
-        if event.event_type not in selected:
-            return
-        formatter = (
-            format_discord_event_block
+    adapter = ThinAdapter(
+        event_bus=event_bus,
+        forward=forward,
+        event_formatter=lambda event: (
+            format_discord_event_block(event)
             if event.event_type in HIGH_PRIORITY_EVENT_TYPES or event.severity != "info"
-            else format_runtime_event_message
-        )
-        result = forward(formatter(event))
-        if asyncio.iscoroutine(result):
-            await result
-
-    return event_bus.subscribe(handler)
+            else format_runtime_event_message(event)
+        ),
+    )
+    return adapter.subscribe_to_bus(event_types=event_types)
 
 
 @dataclass(frozen=True)
@@ -140,7 +128,7 @@ class DiscordSessionManager:
         return list(self._sessions.keys())
 
 
-class DiscordAiderBot:
+class DiscordAiderBot(ThinAdapter):
     """Thin async façade for Discord chat messages.
 
     This adapter only turns Discord text into a headless Aider chat request and
@@ -149,7 +137,10 @@ class DiscordAiderBot:
     browser GUI, desktop GUI, CLI, API, or MCP layers.
     """
 
-    def __init__(self, config: Optional[DiscordAiderConfig] = None):
+    surface_name = "discord"
+
+    def __init__(self, config: Optional[DiscordAiderConfig] = None, **adapter_kwargs):
+        super().__init__(**adapter_kwargs)
         self.config = config or DiscordAiderConfig()
         self.sessions = DiscordSessionManager()
 
@@ -229,6 +220,14 @@ class DiscordAiderBot:
         callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
     ):
         """Run one Discord chat message through classic headless Aider."""
+        normalized = self.normalize_message(
+            prompt,
+            user_id=user_id,
+            channel_id=key.channel_id,
+            thread_id=key.channel_id,
+            repo_path=repo_path,
+        )
+        prompt = normalized.text
         self.check_access(user_id)
         if len(prompt) > self.config.max_prompt_chars:
             raise ValueError("Prompt too large")

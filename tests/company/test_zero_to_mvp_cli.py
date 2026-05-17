@@ -13,13 +13,14 @@ def test_company_templates_catalog_includes_requested_product_shapes():
     catalog = format_template_list()
 
     for key in [
-        "saas-dashboard",
-        "cli-tool",
-        "fastapi-backend",
-        "nextjs-app",
+        "nextjs-saas",
+        "fastapi-api",
+        "python-cli",
+        "electron-desktop",
+        "streamlit-dashboard",
+        "data-dashboard",
         "discord-bot",
         "browser-extension",
-        "data-app",
         "internal-admin",
     ]:
         assert key in catalog
@@ -36,7 +37,7 @@ def test_parse_company_create_strips_aider_args_after_double_dash():
             "webhook",
             "API",
             "--template",
-            "fastapi-backend",
+            "fastapi-api",
             "--name",
             "Billing Hooks",
             "--",
@@ -47,7 +48,7 @@ def test_parse_company_create_strips_aider_args_after_double_dash():
 
     assert command.action == "create"
     assert command.idea == "Build a Stripe webhook API"
-    assert command.template == "fastapi-backend"
+    assert command.template == "fastapi-api"
     assert command.project_name == "Billing Hooks"
     assert aider_args == ["--model", "gpt-5.5"]
 
@@ -59,7 +60,7 @@ def test_company_create_dry_plan_renders_iteration_focused_brief():
             "create",
             "Build a habit tracker with streaks",
             "--template",
-            "nextjs-app",
+            "nextjs-saas",
             "--dry-plan",
         ]
     )
@@ -67,7 +68,7 @@ def test_company_create_dry_plan_renders_iteration_focused_brief():
 
     assert command.dry_plan is True
     assert "Build a habit tracker with streaks" in plan
-    assert "Product template: Next.js app (nextjs-app)" in plan
+    assert "Product template: Next.js SaaS (nextjs-saas)" in plan
     assert "Product -> UX -> Engineering -> QA -> DevOps" in plan
     assert "The goal is not a one-shot code dump" in plan
     assert "keep evolving" in plan

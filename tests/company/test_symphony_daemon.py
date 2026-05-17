@@ -25,7 +25,7 @@ agent:
   max_concurrent_agents: 2
   max_attempts: 2
 company:
-  template: cli-tool
+  template: python-cli
 hooks:
   after_create: |
     echo created > hook.txt
@@ -117,7 +117,7 @@ def test_daemon_dry_run_creates_workspace_prompt_state_and_proof(tmp_path):
         encoding="utf-8"
     )
     assert "AP-123/unsafe chars" in prompt
-    assert "Product template: CLI tool (cli-tool)" in prompt
+    assert "Product template: Python CLI (python-cli)" in prompt
 
 
 def test_daemon_runner_updates_tracker_and_status(tmp_path):

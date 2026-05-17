@@ -25,7 +25,7 @@ def test_parse_company_new_accepts_warehouse_and_aider_args():
             "--name",
             "Habit Tracker",
             "--template",
-            "nextjs-app",
+            "nextjs-saas",
             "--warehouse",
             "/tmp/products",
             "--",
@@ -37,7 +37,7 @@ def test_parse_company_new_accepts_warehouse_and_aider_args():
     assert command.action == "new"
     assert command.idea == "Build a habit tracker"
     assert command.project_name == "Habit Tracker"
-    assert command.template == "nextjs-app"
+    assert command.template == "nextjs-saas"
     assert command.warehouse_path == "/tmp/products"
     assert aider_args == ["--model", "gpt-5.5"]
 
@@ -64,7 +64,7 @@ def test_prepare_company_workspace_creates_git_backed_product_repo(
         assert Path.cwd() == product_path
         assert product_path.joinpath(".git").exists()
         assert product_path.joinpath("docs", "product-brief.md").exists()
-        assert product_path.joinpath("src", "app", "README.md").exists()
+        assert product_path.joinpath("app", "(app)", "dashboard", "README.md").exists()
         assert command.product_path == str(product_path)
         registry = WarehouseManager(tmp_path / "products").get_product("habit-tracker")
         assert registry.name == "Habit Tracker"
@@ -79,7 +79,7 @@ def test_warehouse_cli_init_and_list(tmp_path, capsys):
 
     manager = WarehouseManager(tmp_path / "products")
     manager.create_product(
-        name="Billing API", idea="Build billing", template="fastapi-backend"
+        name="Billing API", idea="Build billing", template="fastapi-api"
     )
 
     command, _ = parse_warehouse_cli(
@@ -88,7 +88,7 @@ def test_warehouse_cli_init_and_list(tmp_path, capsys):
     assert handle_warehouse_cli(command) == 0
     out = capsys.readouterr().out
     assert "billing-api" in out
-    assert "fastapi-backend" in out
+    assert "fastapi-api" in out
 
 
 def test_warehouse_root_contains_products_directory(tmp_path):
@@ -96,14 +96,14 @@ def test_warehouse_root_contains_products_directory(tmp_path):
     manager.init()
 
     record = manager.create_product(
-        name="Habit Tracker", idea="Build habits", template="nextjs-app"
+        name="Habit Tracker", idea="Build habits", template="nextjs-saas"
     )
 
     product_path = tmp_path / "AiderPlusWarehouse" / "products" / "habit-tracker"
     assert manager.products_dir == tmp_path / "AiderPlusWarehouse" / "products"
     assert record.path == str(product_path)
     assert product_path.joinpath("README.md").exists()
-    assert product_path.joinpath("app", "README.md").exists()
+    assert product_path.joinpath("app", "(app)", "dashboard", "README.md").exists()
     assert product_path.joinpath(".aider", "company", "product.json").exists()
 
 

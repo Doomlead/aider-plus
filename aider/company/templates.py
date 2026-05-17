@@ -74,98 +74,6 @@ class ProjectTemplate:
 
 
 TEMPLATES: dict[str, ProjectTemplate] = {
-    "saas-dashboard": ProjectTemplate(
-        key="saas-dashboard",
-        label="SaaS dashboard",
-        description="Authenticated web app with dashboard metrics, CRUD workflows, and admin views.",
-        discovery_focus=(
-            "target account/user roles and permission boundaries",
-            "core dashboard objects, metrics, and empty states",
-            "billing/subscription or trial expectations if in scope",
-        ),
-        engineering_defaults=(
-            "choose a simple app structure before adding dependencies",
-            "include authentication/session placeholders when real auth is not configured",
-            "keep dashboard data contracts explicit and easy to replace with real backends",
-        ),
-        qa_focus=(
-            "navigation, authentication guards, CRUD happy paths, and empty/error states",
-            "unit coverage for data transforms and permission checks",
-        ),
-        iteration_hooks=(
-            "track requested metric/card changes as playbook guidance",
-            "preserve extension points for billing, roles, and integrations after v0",
-        ),
-    ),
-    "cli-tool": ProjectTemplate(
-        key="cli-tool",
-        label="CLI tool",
-        description="Command-line product with subcommands, config, help text, and tests.",
-        discovery_focus=(
-            "primary command verbs and input/output contracts",
-            "configuration sources, environment variables, and defaults",
-            "failure modes and exit-code expectations",
-        ),
-        engineering_defaults=(
-            "use a small command dispatcher or the repo's existing CLI framework",
-            "include --help-friendly names, validation, and deterministic output",
-            "avoid network calls in tests unless explicitly requested",
-        ),
-        qa_focus=(
-            "argument parsing, exit codes, invalid inputs, and golden output snapshots",
-            "smoke tests for each documented subcommand",
-        ),
-        iteration_hooks=(
-            "capture user feedback about flags and defaults in project memory",
-            "keep command handlers small so future subcommands are easy to add",
-        ),
-    ),
-    "fastapi-backend": ProjectTemplate(
-        key="fastapi-backend",
-        label="FastAPI backend",
-        description="Python API service with routes, schemas, persistence boundaries, and tests.",
-        discovery_focus=(
-            "API consumers, resource model, and authentication expectations",
-            "persistence choice and migration expectations",
-            "OpenAPI/schema compatibility requirements",
-        ),
-        engineering_defaults=(
-            "separate routers, schemas, service logic, and persistence adapters",
-            "include health check and clear error response shapes",
-            "prefer dependency-injected stores so tests can run without external services",
-        ),
-        qa_focus=(
-            "route tests for success, validation errors, auth boundaries, and not-found cases",
-            "schema assertions for request/response contracts",
-        ),
-        iteration_hooks=(
-            "record API contract changes and backwards-compatibility notes",
-            "keep persistence adapters swappable for later database integration",
-        ),
-    ),
-    "nextjs-app": ProjectTemplate(
-        key="nextjs-app",
-        label="Next.js app",
-        description="Modern React/Next.js product with routes, components, state, and UI tests.",
-        discovery_focus=(
-            "primary pages/routes and conversion or engagement goals",
-            "component states, responsive behavior, and accessibility needs",
-            "data-fetching model and deployment target",
-        ),
-        engineering_defaults=(
-            "model routes/components before styling detail",
-            "keep data-loading boundaries explicit and mockable",
-            "include accessible labels, keyboard states, and loading/error states",
-        ),
-        qa_focus=(
-            "component rendering, route smoke tests, accessibility-critical states",
-            "data fetching and empty/error/loading states",
-        ),
-        iteration_hooks=(
-            "store UX preferences from approvals and QA in the playbook",
-            "leave clear seams for analytics, auth, and backend integration after v0",
-        ),
-    ),
     "discord-bot": ProjectTemplate(
         key="discord-bot",
         label="Discord bot",
@@ -210,29 +118,6 @@ TEMPLATES: dict[str, ProjectTemplate] = {
         iteration_hooks=(
             "track permission/privacy review notes as release gates",
             "keep selectors configurable where target pages change often",
-        ),
-    ),
-    "data-app": ProjectTemplate(
-        key="data-app",
-        label="Data app",
-        description="Interactive data workflow with ingestion, transforms, charts, and exports.",
-        discovery_focus=(
-            "data sources, freshness, volume, and sensitive fields",
-            "core questions the app must answer and chart types needed",
-            "export/sharing requirements and refresh cadence",
-        ),
-        engineering_defaults=(
-            "separate ingestion, transformation, and presentation layers",
-            "include sample data or fixtures when real data is unavailable",
-            "make chart/data contracts explicit and testable",
-        ),
-        qa_focus=(
-            "transform correctness, missing/dirty data, chart contract snapshots, and export paths",
-            "tests using small representative fixtures",
-        ),
-        iteration_hooks=(
-            "capture recurring data-quality issues in the playbook",
-            "leave room for new sources and metrics without rewriting charts",
         ),
     ),
     "internal-admin": ProjectTemplate(
@@ -303,9 +188,9 @@ TEMPLATES: dict[str, ProjectTemplate] = {
         ],
         example_prd_prompt="Draft a PRD for a B2B SaaS MVP with onboarding, a workspace dashboard, role-aware settings, and mocked billing seams.",
     ),
-    "python-fastapi-api": ProjectTemplate(
-        key="python-fastapi-api",
-        label="Python FastAPI API",
+    "fastapi-api": ProjectTemplate(
+        key="fastapi-api",
+        label="FastAPI API",
         description="Contract-first Python API with routers, schemas, services, persistence adapters, and operational checks.",
         discovery_focus=(
             "API consumers, resource lifecycle, idempotency, and auth expectations",
@@ -349,8 +234,8 @@ TEMPLATES: dict[str, ProjectTemplate] = {
         ],
         example_prd_prompt="Draft a PRD for a Python FastAPI MVP covering resources, endpoint contracts, auth boundaries, and local test fixtures.",
     ),
-    "electron-desktop-app": ProjectTemplate(
-        key="electron-desktop-app",
+    "electron-desktop": ProjectTemplate(
+        key="electron-desktop",
         label="Electron desktop app",
         description="Cross-platform desktop MVP with main/preload/renderer separation, local data, and packaging seams.",
         discovery_focus=(
@@ -438,9 +323,9 @@ TEMPLATES: dict[str, ProjectTemplate] = {
         example_prd_prompt="Draft a PRD for a data dashboard MVP covering audiences, metric definitions, source fixtures, charts, filters, and exports.",
     ),
 
-    "data-dashboard-streamlit": ProjectTemplate(
-        key="data-dashboard-streamlit",
-        label="Streamlit data dashboard",
+    "streamlit-dashboard": ProjectTemplate(
+        key="streamlit-dashboard",
+        label="Streamlit dashboard",
         description="Streamlit analytics MVP with fixtures, metric contracts, interactive filters, and export-ready views.",
         discovery_focus=(
             "dashboard audience, metric glossary, source freshness, and data sensitivity",
@@ -466,7 +351,7 @@ TEMPLATES: dict[str, ProjectTemplate] = {
 
 $idea
 
-Aider Plus scaffolded this as a Streamlit data dashboard MVP with deterministic fixtures and metric contracts.
+Aider Plus scaffolded this as a Streamlit dashboard MVP with deterministic fixtures and metric contracts.
 
 ## Suggested Structure
 - `app.py` — thin Streamlit entrypoint and page composition
@@ -507,9 +392,9 @@ if __name__ == \"__main__\":
         ],
         example_prd_prompt="Draft a PRD for a Streamlit dashboard MVP covering audiences, metric glossary, fixture data, filters, chart views, exports, and deployment notes.",
     ),
-    "cli-tool-python": ProjectTemplate(
-        key="cli-tool-python",
-        label="Python CLI tool",
+    "python-cli": ProjectTemplate(
+        key="python-cli",
+        label="Python CLI",
         description="Python package CLI MVP with subcommands, config, deterministic output, docs, and test seams.",
         discovery_focus=(
             "primary command verbs, inputs, outputs, and automation workflows",
@@ -646,125 +531,6 @@ from the current product state.
 }
 
 TEMPLATE_STARTER_FILES: dict[str, dict[str, str]] = {
-    "saas-dashboard": {
-        "README.md": """# $project_name
-
-$idea
-
-Aider Plus scaffolded this as a SaaS dashboard MVP. Start with the product brief
-in `docs/product-brief.md`, then evolve the app with Company Mode inside this
-normal Git repository.
-
-## Suggested MVP Structure
-- `src/app/` — pages, routes, and dashboard shell
-- `src/components/` — reusable UI components
-- `src/lib/` — data contracts, permissions, and service adapters
-- `tests/` — smoke and unit checks for critical flows
-
-## Local Development
-Document the selected framework commands here after the first implementation
-pass, for example install, test, lint, and run commands.
-""",
-        "src/app/README.md": """# App shell
-
-Define routes, layouts, dashboard states, and authenticated/unauthenticated
-boundaries here.
-""",
-        "src/components/README.md": """# Components
-
-Keep metric cards, tables, forms, empty states, and dialogs reusable and
-accessible.
-""",
-        "src/lib/README.md": """# Product logic
-
-Keep data contracts, permission helpers, and mock service adapters here so the
-MVP can later connect to real auth, billing, and persistence.
-""",
-        "tests/README.md": """# Tests
-
-Add smoke tests for navigation, auth guards, CRUD paths, and dashboard empty or
-error states.
-""",
-    },
-    "nextjs-app": {
-        "README.md": """# $project_name
-
-$idea
-
-Aider Plus scaffolded this as a Next.js-style MVP workspace while keeping the
-repo Git-native and dependency-light until implementation choices are confirmed.
-
-## Suggested MVP Structure
-- `app/` — routes and page-level data boundaries
-- `components/` — accessible UI components and states
-- `lib/` — product data, service adapters, and pure helpers
-- `tests/` — route/component smoke tests
-
-## Local Development
-After Company Mode selects concrete dependencies, document install, run, lint,
-and test commands here.
-""",
-        "app/README.md": """# Routes
-
-Model primary routes, loading/error/empty states, and conversion or engagement
-flows here.
-""",
-        "components/README.md": """# Components
-
-Build accessible components with explicit props for loading, disabled, error,
-and responsive states.
-""",
-        "lib/README.md": """# Product data and helpers
-
-Keep fetch boundaries, mocked data, and reusable transformations isolated from
-UI components.
-""",
-        "tests/README.md": """# Tests
-
-Add component rendering, route smoke, accessibility-critical, and data state
-checks here.
-""",
-    },
-    "fastapi-backend": {
-        "README.md": """# $project_name
-
-$idea
-
-Aider Plus scaffolded this as a FastAPI backend MVP. Keep route contracts,
-service logic, and persistence boundaries separate as the API evolves.
-
-## Suggested MVP Structure
-- `app/main.py` — API entrypoint and health route
-- `app/routers/` — resource routes
-- `app/schemas/` — request/response contracts
-- `app/services/` — business logic
-- `app/repositories/` — persistence adapters
-- `tests/` — route and schema tests
-""",
-        "app/main.py": """\"\"\"$project_name API entrypoint.\"\"\"\n\n\ndef health() -> dict[str, str]:\n    return {\"status\": \"ok\", \"product\": \"$project_slug\"}\n""",
-        "app/routers/README.md": "Route modules live here. Keep transport concerns thin.\n",
-        "app/schemas/README.md": "Request and response models live here.\n",
-        "app/services/README.md": "Business logic lives here, outside route handlers.\n",
-        "app/repositories/README.md": "Persistence adapters live here and should be swappable in tests.\n",
-        "tests/README.md": "Add route, validation, auth boundary, and not-found tests here.\n",
-    },
-    "cli-tool": {
-        "README.md": """# $project_name
-
-$idea
-
-Aider Plus scaffolded this as a CLI MVP.
-
-## Suggested MVP Structure
-- `src/$python_package/cli.py` — argument parsing and command dispatch
-- `src/$python_package/commands/` — small command handlers
-- `tests/` — parser, exit-code, and golden-output checks
-""",
-        "src/$python_package/__init__.py": '"""$project_name package."""\n',
-        "src/$python_package/cli.py": """\"\"\"CLI entrypoint for $project_name.\"\"\"\n\n\ndef main(argv: list[str] | None = None) -> int:\n    \"\"\"Run the CLI. Replace this placeholder during implementation.\"\"\"\n    return 0\n""",
-        "src/$python_package/commands/README.md": "Keep command handlers small and testable.\n",
-        "tests/README.md": "Add argument parsing, exit code, invalid input, and golden-output tests here.\n",
-    },
     "discord-bot": {
         "README.md": """# $project_name
 
@@ -815,26 +581,6 @@ Aider Plus scaffolded this as a browser extension MVP.
         "src/README.md": "Reusable extension logic separated from browser APIs lives here.\n",
         "tests/README.md": "Add manifest, permission, selector, and pure-logic tests here.\n",
     },
-    "data-app": {
-        "README.md": """# $project_name
-
-$idea
-
-Aider Plus scaffolded this as a data app MVP.
-
-## Suggested MVP Structure
-- `data/sample/` — representative fixtures
-- `src/ingestion/` — source readers and refresh boundaries
-- `src/transforms/` — pure transformations and metrics
-- `src/presentation/` — charts, views, and export contracts
-- `tests/` — fixture-driven transform and chart contract tests
-""",
-        "data/sample/README.md": "Place small representative sample data fixtures here.\n",
-        "src/ingestion/README.md": "Source readers and freshness checks live here.\n",
-        "src/transforms/README.md": "Pure transforms and metric definitions live here.\n",
-        "src/presentation/README.md": "Chart contracts, views, and export adapters live here.\n",
-        "tests/README.md": "Add fixture-driven transform, dirty data, and export contract tests here.\n",
-    },
     "internal-admin": {
         "README.md": """# $project_name
 
@@ -858,25 +604,70 @@ Aider Plus scaffolded this as an internal admin MVP.
 }
 
 
-DEFAULT_TEMPLATE_KEY = "saas-dashboard"
+DEFAULT_TEMPLATE_KEY = "nextjs-saas"
+
+CANONICAL_TEMPLATE_KEYS: tuple[str, ...] = (
+    "browser-extension",
+    "data-dashboard",
+    "discord-bot",
+    "electron-desktop",
+    "fastapi-api",
+    "internal-admin",
+    "nextjs-saas",
+    "python-cli",
+    "streamlit-dashboard",
+)
+
+TEMPLATE_ALIASES: Mapping[str, str] = MappingProxyType(
+    {
+        "cli-tool": "python-cli",
+        "cli-tool-python": "python-cli",
+        "data-app": "data-dashboard",
+        "data-dashboard-streamlit": "streamlit-dashboard",
+        "electron-desktop-app": "electron-desktop",
+        "fastapi-backend": "fastapi-api",
+        "nextjs-app": "nextjs-saas",
+        "python-fastapi-api": "fastapi-api",
+        "saas-dashboard": "nextjs-saas",
+    }
+)
+
+
+def resolve_template_key(key: str | None) -> tuple[str, str | None]:
+    """Return ``(canonical_key, alias_used)`` for a template key."""
+
+    requested = (key or DEFAULT_TEMPLATE_KEY).strip().lower()
+    canonical = TEMPLATE_ALIASES.get(requested, requested)
+    return canonical, (requested if requested != canonical else None)
+
+
+def template_alias_note(key: str | None) -> str | None:
+    """Return a deprecation note when ``key`` is an old template alias."""
+
+    canonical, alias = resolve_template_key(key)
+    if not alias:
+        return None
+    return f"Template alias '{alias}' is deprecated; use '{canonical}' instead."
 
 
 def list_templates() -> list[ProjectTemplate]:
-    """Return templates in display order."""
+    """Return canonical templates in display order."""
 
-    return [TEMPLATES[key] for key in sorted(TEMPLATES)]
+    return [TEMPLATES[key] for key in CANONICAL_TEMPLATE_KEYS]
 
 
 def get_template(key: str | None) -> ProjectTemplate:
-    """Return a template by key, raising ValueError for unknown keys."""
+    """Return a template by canonical key or alias, raising ValueError for unknown keys."""
 
-    resolved = (key or DEFAULT_TEMPLATE_KEY).strip().lower()
+    resolved, _alias = resolve_template_key(key)
     try:
         return TEMPLATES[resolved]
     except KeyError as exc:
-        choices = ", ".join(sorted(TEMPLATES))
+        choices = ", ".join(CANONICAL_TEMPLATE_KEYS)
+        aliases = ", ".join(sorted(TEMPLATE_ALIASES))
         raise ValueError(
-            f"Unknown project template '{key}'. Available templates: {choices}"
+            f"Unknown project template '{key}'. Available templates: {choices}. "
+            f"Deprecated aliases still accepted: {aliases}"
         ) from exc
 
 

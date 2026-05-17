@@ -49,7 +49,7 @@ The `CompanyOnboarding` flow walks through the core studio setup:
 The same helper is exposed in the Streamlit browser UI and the native Tkinter desktop UI under **Onboarding / Quick Start**. Use `--skip-onboarding` on normal `aider` launches when you do not want the first-run offer.
 
 ```bash
-aider company init --warehouse ~/AiderPlusWarehouse --template nextjs-app --github-repo owner/repo --model gpt-5.5 --enable-mcp --product-idea "Build my MVP" --product-name my-mvp --yes
+aider company init --warehouse ~/AiderPlusWarehouse --template nextjs-saas --github-repo owner/repo --model gpt-5.5 --enable-mcp --product-idea "Build my MVP" --product-name my-mvp --yes
 ```
 
 ## Command
@@ -64,13 +64,13 @@ aider company new "Build a simple habit tracker web app with login, dashboard, a
 Choose a product shape with `--template`:
 
 ```bash
-aider company create "Build a webhook API for Stripe events" --template python-fastapi-api
+aider company create "Build a webhook API for Stripe events" --template fastapi-api
 ```
 
 Pass normal Aider options after `--`:
 
 ```bash
-aider company create "Build a CLI for exporting reports" --template cli-tool-python -- --model gpt-5.5
+aider company create "Build a CLI for exporting reports" --template python-cli -- --model gpt-5.5
 ```
 
 Preview the generated Company brief without calling a model:
@@ -109,39 +109,35 @@ skills, starter files, QA gates, post-creation instructions, and an example PRD 
 
 - `nextjs-saas` — SaaS onboarding, workspace dashboard, billing seams, settings,
   and auth/analytics/data provider adapters.
-- `python-fastapi-api` — contract-first API with routes, schemas, services,
+- `fastapi-api` — contract-first API with routes, schemas, services,
   repositories, health/readiness checks, and OpenAPI/test guidance.
-- `electron-desktop-app` — desktop MVP with main/preload/renderer separation,
-  secure IPC, local data, offline behavior, and packaging seams.
-- `data-dashboard` — dashboard with fixtures, metric definitions, charts,
-  filters, exports, and data-quality checks.
-- `data-dashboard-streamlit` — Streamlit dashboard with fixture-backed metrics,
-  filters, chart/export seams, secrets notes, and deployment guidance.
-- `cli-tool-python` — Python package CLI with subcommands, config precedence,
+- `python-cli` — Python package CLI with subcommands, config precedence,
   deterministic output, exit codes, packaging notes, and tests.
-- `saas-dashboard` — authenticated dashboard app with metrics, CRUD workflows,
-  and admin views.
-- `cli-tool` — command-line product with subcommands, config, help text, and
-  tests.
-- `fastapi-backend` — Python API service with routes, schemas, persistence
-  boundaries, and tests.
-- `nextjs-app` — React/Next.js product with routes, components, state, and UI
-  tests.
+- `electron-desktop` — desktop MVP with main/preload/renderer separation,
+  secure IPC, local data, offline behavior, and packaging seams.
+- `streamlit-dashboard` — Streamlit dashboard with fixture-backed metrics,
+  filters, chart/export seams, secrets notes, and deployment guidance.
+- `data-dashboard` — dashboard/data workflow with fixtures, metric definitions,
+  charts, filters, exports, and data-quality checks.
 - `discord-bot` — bot with commands, event handling, permissions, and
   operational safeguards.
 - `browser-extension` — extension with manifest, popup/options UI, content
   scripts, and permissions.
-- `data-app` — interactive data workflow with ingestion, transforms, charts,
-  and exports.
 - `internal-admin` — back-office UI with roles, workflows, destructive-action
   safeguards, and auditability.
+
+Template Aliases: legacy names such as `nextjs-app`, `python-fastapi-api`,
+`fastapi-backend`, `cli-tool-python`, `electron-desktop-app`,
+`data-dashboard-streamlit`, `saas-dashboard`, `cli-tool`, and `data-app` remain
+accepted for backward compatibility. They resolve to the canonical names above
+and produce a deprecation note.
 
 Example starts:
 
 ```bash
-aider company new "Build a founder revenue dashboard with cohort charts" --template data-dashboard-streamlit --name founder-metrics --warehouse ~/AiderPlusWarehouse
-aider company new "Build a Python CLI that exports reports from CSV files" --template cli-tool-python --name report-exporter --warehouse ~/AiderPlusWarehouse
-aider company new "Build a secure offline notes desktop app" --template electron-desktop-app --name secure-notes --warehouse ~/AiderPlusWarehouse
+aider company new "Build a founder revenue dashboard with cohort charts" --template streamlit-dashboard --name founder-metrics --warehouse ~/AiderPlusWarehouse
+aider company new "Build a Python CLI that exports reports from CSV files" --template python-cli --name report-exporter --warehouse ~/AiderPlusWarehouse
+aider company new "Build a secure offline notes desktop app" --template electron-desktop --name secure-notes --warehouse ~/AiderPlusWarehouse
 ```
 
 Generated starter repos include:

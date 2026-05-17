@@ -14,16 +14,33 @@ def test_template_catalog_lists_hardened_product_templates():
 
     for key in [
         "nextjs-saas",
-        "python-fastapi-api",
-        "electron-desktop-app",
+        "fastapi-api",
+        "electron-desktop",
         "data-dashboard",
-        "data-dashboard-streamlit",
-        "cli-tool-python",
+        "streamlit-dashboard",
+        "python-cli",
     ]:
         assert key in catalog
 
-    assert "skills:" in catalog
-    assert "PRD seed:" in catalog
+    assert "Name" in catalog
+    assert "Description" in catalog
+    assert "Recommended Skills" in catalog
+    assert "Example Command" in catalog
+    assert "Template Aliases" in catalog
+
+
+def test_template_aliases_resolve_to_canonical_names():
+    assert get_template("nextjs-app").key == "nextjs-saas"
+    assert get_template("python-fastapi-api").key == "fastapi-api"
+    assert get_template("cli-tool-python").key == "python-cli"
+
+    command, _ = parse_company_cli(
+        ["company", "new", "Build legacy", "--template", "nextjs-app"]
+    )
+    assert command.template == "nextjs-saas"
+    assert command.template_alias_note == (
+        "Template alias 'nextjs-app' is deprecated; use 'nextjs-saas' instead."
+    )
 
 
 def test_template_model_exposes_richer_metadata():
@@ -58,11 +75,11 @@ def test_render_template_starter_files_generates_company_scaffold():
 def test_prompt_enhancement_injects_template_guidance():
     prompt = render_zero_to_mvp_prompt(
         idea="Build a secure note-taking desktop app",
-        template_key="electron-desktop-app",
+        template_key="electron-desktop",
         project_name="Secure Notes",
     )
 
-    assert "Product template: Electron desktop app (electron-desktop-app)" in prompt
+    assert "Product template: Electron desktop app (electron-desktop)" in prompt
     assert "Recommended skills to activate or emulate" in prompt
     assert "secure IPC" in prompt
     assert "Post-creation instructions" in prompt
@@ -83,11 +100,11 @@ def test_warehouse_applies_template_post_creation_hooks(tmp_path):
     record = manager.create_product(
         name="Desktop Notes",
         idea="Build secure notes",
-        template="electron-desktop-app",
+        template="electron-desktop",
     )
 
     product_path = tmp_path / "warehouse" / "products" / "desktop-notes"
-    assert record.template == "electron-desktop-app"
+    assert record.template == "electron-desktop"
     assert product_path.joinpath(".aider", "company", "post-creation.md").exists()
     assert product_path.joinpath("electron", "preload", "README.md").exists()
     assert product_path.joinpath(".aider", "skills", "desktop", "SKILL.md").exists()
@@ -97,7 +114,7 @@ def test_warehouse_applies_template_post_creation_hooks(tmp_path):
 def test_new_high_value_templates_seed_expected_files():
     streamlit_files = render_template_starter_files(
         idea="Build a KPI dashboard",
-        template_key="data-dashboard-streamlit",
+        template_key="streamlit-dashboard",
         project_name="KPI Studio",
         project_slug="kpi-studio",
     )
@@ -107,7 +124,7 @@ def test_new_high_value_templates_seed_expected_files():
 
     cli_files = render_template_starter_files(
         idea="Build a report exporter",
-        template_key="cli-tool-python",
+        template_key="python-cli",
         project_name="Report Exporter",
         project_slug="report-exporter",
     )

@@ -191,7 +191,9 @@ class WarehouseManager:
             slug=str(record.get("slug", "")),
             path=str(record.get("path", "")),
             template=(
-                str(record["template"]) if record.get("template") is not None else None
+                get_template(str(record["template"])).key
+                if record.get("template") is not None
+                else None
             ),
             idea=(str(record["idea"]) if record.get("idea") is not None else None),
             created_at=(

@@ -15,7 +15,7 @@ def test_onboarding_flow_writes_state_workflow_and_guide(tmp_path, monkeypatch):
     prompts = _blank_prompts()
     defaults = {
         "warehouse_path": tmp_path / "warehouse",
-        "template": "nextjs-app",
+        "template": "nextjs-saas",
         "github_repo": "octo/demo",
         "github_token": "gh-test",
         "mcp_enabled": True,
@@ -39,7 +39,7 @@ def test_onboarding_flow_writes_state_workflow_and_guide(tmp_path, monkeypatch):
     assert (tmp_path / "warehouse" / "warehouse.json").exists()
 
     state = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
-    assert state["default_template"] == "nextjs-app"
+    assert state["default_template"] == "nextjs-saas"
     assert state["github_repo"] == "octo/demo"
     assert state["github_token_configured"] is True
     assert state["mcp_enabled"] is True
@@ -61,7 +61,7 @@ def test_onboarding_flow_prompts_department_models(tmp_path):
     answers = iter(
         [
             "",  # warehouse default
-            "fastapi-backend",
+            "fastapi-api",
             "",  # github repo
             "",  # github token
             *sum(([f"model-{dept}", "n"] for dept in DEPARTMENTS), []),
@@ -78,7 +78,7 @@ def test_onboarding_flow_prompts_department_models(tmp_path):
 
     result = onboarding.run_onboarding_flow()
 
-    assert result.template == "fastapi-backend"
+    assert result.template == "fastapi-api"
     assert result.mcp_enabled is True
     assert result.model_preferences["product"] == {
         "model": "model-product",
@@ -101,7 +101,7 @@ def test_company_init_cli_parses_and_runs_non_interactive(
             "--warehouse",
             str(tmp_path / "warehouse"),
             "--template",
-            "nextjs-app",
+            "nextjs-saas",
             "--github-repo",
             "octo/demo",
             "--model",

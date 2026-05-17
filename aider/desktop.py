@@ -569,6 +569,21 @@ class DesktopCompanySession:
             ),
             "deploy_url": deployment_result.get("deployed_url")
             or deploy_payload.get("deploy_url"),
+            "provider": (
+                (deployment_result.get("target") or {}).get("provider")
+                if isinstance(deployment_result.get("target"), dict)
+                else (
+                    (deploy_payload.get("deployment_target") or {}).get("provider")
+                    if isinstance(deploy_payload.get("deployment_target"), dict)
+                    else "local"
+                )
+            ),
+            "logs_url": deployment_result.get("logs_url")
+            or deploy_payload.get("logs_url"),
+            "rollback_command": (
+                deployment_result.get("rollback_command")
+                or deploy_payload.get("rollback_command")
+            ),
             "logs_summary": (
                 deploy_payload.get("build_logs_summary")
                 or build_artifact.get("build_logs_summary")
@@ -625,6 +640,10 @@ class DesktopCompanySession:
                 last_build.get("logs_summary") or "No build logs captured yet."
             ),
             "last_build_log_artifacts": last_build.get("log_artifacts", []),
+            "last_deployment_provider": last_build.get("provider", "local"),
+            "last_deployment_url": last_build.get("deploy_url"),
+            "last_deployment_logs_url": last_build.get("logs_url"),
+            "last_deployment_rollback_command": last_build.get("rollback_command"),
             "active_warehouse_products": active_products,
             "mcp_status": (
                 f"enabled ({len(getattr(mcp_config, 'servers', {}) or {})} servers)"
@@ -1315,6 +1334,13 @@ class AiderPlusDesktop:
         ttk.Button(
             toolbar, text="Refresh Dashboard", command=self.refresh_dashboard
         ).pack(side="right")
+        self.rollback_button = ttk.Button(
+            toolbar,
+            text="Rollback",
+            command=self.show_rollback_command,
+            state="disabled",
+        )
+        self.rollback_button.pack(side="right", padx=(0, 8))
 
         metrics = ttk.Frame(self.dashboard_frame)
         metrics.pack(fill="x", pady=(0, 8))
@@ -1875,6 +1901,12 @@ class AiderPlusDesktop:
             )
         else:
             proof_lines.append("- none yet")
+        rollback_command = overview.get("last_deployment_rollback_command")
+        if hasattr(self, "rollback_button"):
+            self.rollback_button.config(
+                state="normal" if rollback_command else "disabled"
+            )
+        self._last_rollback_command = rollback_command
         self._write_text(
             self.system_overview_text,
             "\n".join(
@@ -1898,6 +1930,15 @@ class AiderPlusDesktop:
                     f"Daemon active workflows: {overview['daemon_active_workflows']}",
                     f"Daemon pending proof-of-work: {overview['daemon_pending_proof_of_work']}",
                     f"Last build status: {overview['last_build_status']}",
+                    f"Last deployment provider: [{overview.get('last_deployment_provider', 'local')}]",
+                    f"Last deployment URL: {overview.get('last_deployment_url') or 'n/a'}",
+                    f"Last deployment logs URL: {overview.get('last_deployment_logs_url') or 'n/a'}",
+                    "Rollback button: "
+                    + (
+                        "enabled"
+                        if overview.get("last_deployment_rollback_command")
+                        else "no safe rollback command recorded"
+                    ),
                     f"Last build artifact: {overview['last_build_artifact']}",
                     f"Last build logs: {str(overview['last_build_logs_summary'])[:240]}",
                     "Last build log artifacts: "
@@ -1924,6 +1965,22 @@ class AiderPlusDesktop:
             start = self.coo_status_text.search("Recent COO errors:", "1.0", tk.END)
             if start:
                 self.coo_status_text.tag_add("coo_error", start, tk.END)
+
+    def show_rollback_command(self):
+        command = getattr(self, "_last_rollback_command", None)
+        if not command:
+            messagebox.showinfo(
+                APP_TITLE,
+                "No safe rollback command is recorded for the last deployment.",
+            )
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(command)
+        messagebox.showinfo(
+            APP_TITLE,
+            "Rollback command copied to clipboard. Review and run it from an approved shell gate:\n\n"
+            + command,
+        )
 
     def _format_coo_status(self) -> str:
         if not self.company:

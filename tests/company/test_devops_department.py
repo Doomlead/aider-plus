@@ -86,7 +86,9 @@ def test_devops_refuses_unready_delivery_handover(tmp_path):
 
     assert deliverable.status == "failure"
     assert deliverable.metadata["handoff_to"] == "delivery"
-    assert deliverable.metadata["delivery_handover"]["critical_blockers"] == ["qa_report"]
+    assert deliverable.metadata["delivery_handover"]["critical_blockers"] == [
+        "qa_report"
+    ]
 
 
 def test_devops_blocks_high_risk_deploy_without_approval(tmp_path):
@@ -125,7 +127,10 @@ def test_devops_schema_round_trips_build_and_deployment_result():
     handover = DeliveryHandover.from_dict(ready_handover())
 
     assert BuildArtifact.from_dict(artifact.to_dict()).to_dict() == artifact.to_dict()
-    assert DeploymentResult.from_dict(deployment.to_dict()).to_dict() == deployment.to_dict()
+    assert (
+        DeploymentResult.from_dict(deployment.to_dict()).to_dict()
+        == deployment.to_dict()
+    )
     assert handover.ready_for_devops is True
     assert handover.environment == "staging"
 
@@ -156,7 +161,8 @@ def test_devops_uses_configurable_fallback_and_captures_logs(tmp_path):
     assert build["log_artifacts"]
     assert "fallback build ok" in build["build_logs_summary"]
     assert all(
-        (tmp_path in __import__("pathlib").Path(path).parents) for path in build["log_artifacts"]
+        (tmp_path in __import__("pathlib").Path(path).parents)
+        for path in build["log_artifacts"]
     )
     assert deliverable.payload["log_artifacts"]
 
@@ -193,3 +199,118 @@ def test_devops_retries_transient_build_failure(tmp_path):
     assert calls["count"] == 2
     assert "ok after retry" in deliverable.payload["build_logs_summary"]
     assert "devops_command_retry" in [event.payload["name"] for event in events]
+
+
+def test_devops_generates_vercel_command_with_approval(tmp_path):
+    commands = []
+    department = DevOpsDepartment(ProjectMemory(str(tmp_path)))
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        department._validate_command(command, high_risk_allowed=high_risk_allowed)
+        commands.append((command, high_risk_allowed))
+        return f"$ {command}\nexit_code=0\nvercel deployed"
+
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(
+        tmp_path,
+        deployment_commands=[],
+        deployment_target={
+            "provider": "vercel",
+            "environment": "production",
+            "config": {"project": "invite-flow", "scope": "acme"},
+        },
+        devops_high_risk_approved=True,
+    )
+
+    deliverable = asyncio.run(department.process(task))
+
+    assert deliverable.status == "success"
+    deployment = deliverable.payload["deployment_result"]
+    assert deployment["target"]["provider"] == "vercel"
+    assert deployment["deployed_url"] == "https://invite-flow.vercel.app"
+    assert deployment["rollback_command"] == "vercel rollback"
+    assert commands[-1] == ("vercel deploy --yes --prod --scope acme", True)
+
+
+def test_devops_provider_deploy_requires_approval(tmp_path):
+    department = DevOpsDepartment(ProjectMemory(str(tmp_path)))
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        department._validate_command(command, high_risk_allowed=high_risk_allowed)
+        return f"$ {command}\nexit_code=0\nshould not deploy"
+
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(
+        tmp_path,
+        deployment_commands=[],
+        deployment_target={
+            "provider": "railway",
+            "environment": "staging",
+            "config": {"service": "web"},
+        },
+    )
+
+    deliverable = asyncio.run(department.process(task))
+
+    assert deliverable.status == "failure"
+    assert "High-risk DevOps command requires approval" in deliverable.payload["error"]
+    assert (
+        "railway up --detach --service web --environment staging"
+        in deliverable.payload["error"]
+    )
+
+
+def test_devops_blocks_disabled_provider(tmp_path):
+    from aider.company.config import DepartmentConfig
+
+    department = DevOpsDepartment(
+        ProjectMemory(str(tmp_path)),
+        config=DepartmentConfig(
+            name="devops",
+            devops_deployment_providers=["local", "vercel"],
+        ),
+    )
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        return f"$ {command}\nexit_code=0\nok"
+
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(
+        tmp_path,
+        deployment_commands=[],
+        deployment_target={
+            "provider": "fly",
+            "environment": "production",
+            "config": {},
+        },
+        devops_high_risk_approved=True,
+    )
+
+    deliverable = asyncio.run(department.process(task))
+
+    assert deliverable.status == "failure"
+    assert "Deployment provider 'fly' is not enabled" in deliverable.payload["error"]
+
+
+def test_devops_logs_url_uses_configured_artifact_upload_target(tmp_path):
+    from aider.company.config import DepartmentConfig
+
+    department = DevOpsDepartment(
+        ProjectMemory(str(tmp_path)),
+        config=DepartmentConfig(
+            name="devops",
+            devops_artifact_upload_target="s3://aider-deploy-logs/releases",
+        ),
+    )
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        return f"$ {command}\nexit_code=0\nok"
+
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(tmp_path)
+
+    deliverable = asyncio.run(department.process(task))
+
+    deployment = deliverable.payload["deployment_result"]
+    assert deployment["logs_url"].startswith("s3://aider-deploy-logs/releases/local/")
+    assert deliverable.payload["logs_url"] == deployment["logs_url"]

@@ -233,7 +233,9 @@ class DesignSpec:
             else "None defined"
         )
         style_text = (
-            _json.dumps(self.visual_style, indent=2) if self.visual_style else "Default theme"
+            _json.dumps(self.visual_style, indent=2)
+            if self.visual_style
+            else "Default theme"
         )
         combined_notes = self.accessibility_notes + self.technical_requirements
         return (
@@ -423,7 +425,9 @@ class Timeline:
             summary=str(d.get("summary", "Delivery timeline")),
             start=str(d.get("start")) if d.get("start") is not None else None,
             target_release=(
-                str(d.get("target_release")) if d.get("target_release") is not None else None
+                str(d.get("target_release"))
+                if d.get("target_release") is not None
+                else None
             ),
             cadence=str(d.get("cadence", "daily async check-in")),
             milestones=[Milestone.from_dict(m) for m in d.get("milestones", [])],
@@ -456,7 +460,9 @@ class ProjectPlan:
     def to_markdown(self) -> str:
         milestones = "\n\n".join(m.to_markdown() for m in self.milestones) or "- TBD"
         risks = "\n\n".join(r.to_markdown() for r in self.risks) or "- None identified"
-        timeline = self.timeline.to_markdown() if self.timeline else "## Timeline\n- TBD"
+        timeline = (
+            self.timeline.to_markdown() if self.timeline else "## Timeline\n- TBD"
+        )
         return f"""# Delivery Plan: {self.title}
 **Version:** {self.version}  **Status:** {self.status}  **Weighted completion:** {self.weighted_completion or self.completion_percentage}%
 
@@ -500,7 +506,8 @@ class ProjectPlan:
             "overall_status": self.overall_status or self.status,
             "status": self.status,
             "completion_percentage": self.completion_percentage,
-            "weighted_completion": self.weighted_completion or self.completion_percentage,
+            "weighted_completion": self.weighted_completion
+            or self.completion_percentage,
             "executive_summary": self.executive_summary,
             "next_milestone": self.next_milestone or "TBD",
             "critical_blockers": list(self.critical_blockers),
@@ -522,7 +529,8 @@ class ProjectPlan:
             "status": self.status,
             "overall_status": self.overall_status,
             "completion_percentage": self.completion_percentage,
-            "weighted_completion": self.weighted_completion or self.completion_percentage,
+            "weighted_completion": self.weighted_completion
+            or self.completion_percentage,
             "executive_summary": self.executive_summary,
             "critical_blockers": self.critical_blockers,
             "next_milestone": self.next_milestone,
@@ -538,7 +546,9 @@ class ProjectPlan:
             objective=str(d.get("objective", "Coordinate delivery.")),
             milestones=[Milestone.from_dict(m) for m in d.get("milestones", [])],
             risks=[RiskRegister.from_dict(r) for r in d.get("risks", [])],
-            timeline=(Timeline.from_dict(timeline) if isinstance(timeline, dict) else None),
+            timeline=(
+                Timeline.from_dict(timeline) if isinstance(timeline, dict) else None
+            ),
             dependencies=list(d.get("dependencies", [])),
             key_dependencies=list(d.get("key_dependencies", d.get("dependencies", []))),
             cross_department_alignment=list(d.get("cross_department_alignment", [])),
@@ -551,7 +561,9 @@ class ProjectPlan:
             executive_summary=str(d.get("executive_summary", "")),
             critical_blockers=list(d.get("critical_blockers", [])),
             next_milestone=(
-                str(d.get("next_milestone")) if d.get("next_milestone") is not None else None
+                str(d.get("next_milestone"))
+                if d.get("next_milestone") is not None
+                else None
             ),
             progress_summary=str(d.get("progress_summary", "")),
             version=str(d.get("version", "1.0")),
@@ -620,6 +632,37 @@ class BuildArtifact:
 
 
 @dataclass
+class DeploymentTarget:
+    """Provider/environment/config tuple for DevOps deployment execution."""
+
+    provider: str
+    environment: str = "production"
+    config: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.provider = str(self.provider or "local")
+        self.environment = str(self.environment or "production")
+        self.config = dict(self.config or {})
+
+    def to_dict(self) -> dict:
+        return {
+            "provider": self.provider,
+            "environment": self.environment,
+            "config": dict(self.config),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "DeploymentTarget":
+        data = d or {}
+        config = data.get("config") or {}
+        return cls(
+            provider=str(data.get("provider") or "local"),
+            environment=str(data.get("environment") or "production"),
+            config=dict(config) if isinstance(config, dict) else {},
+        )
+
+
+@dataclass
 class DeploymentResult:
     """Result of DevOps deployment execution for a built artifact."""
 
@@ -628,15 +671,25 @@ class DeploymentResult:
     build_artifact: BuildArtifact
     deployed_url: Optional[str] = None
     rollback_url: Optional[str] = None
+    target: Optional[DeploymentTarget] = None
+    logs_url: Optional[str] = None
+    rollback_command: Optional[str] = None
     deployment_logs: str = ""
     log_artifacts: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.target, dict):
+            self.target = DeploymentTarget.from_dict(self.target)
 
     def to_dict(self) -> dict:
         return {
             "environment": self.environment,
             "status": self.status,
+            "target": self.target.to_dict() if self.target else None,
             "deployed_url": self.deployed_url,
+            "logs_url": self.logs_url,
             "rollback_url": self.rollback_url,
+            "rollback_command": self.rollback_command,
             "build_artifact": self.build_artifact.to_dict(),
             "deployment_logs": self.deployment_logs,
             "log_artifacts": list(self.log_artifacts),
@@ -645,17 +698,37 @@ class DeploymentResult:
     @classmethod
     def from_dict(cls, d: dict) -> "DeploymentResult":
         artifact = d.get("build_artifact") or {}
+        target = d.get("target")
         return cls(
             environment=str(d.get("environment", "production")),
             status=str(d.get("status", "failed")),
+            target=(
+                DeploymentTarget.from_dict(target)
+                if isinstance(target, dict)
+                else target
+            ),
             deployed_url=(
-                str(d.get("deployed_url")) if d.get("deployed_url") is not None else None
+                str(d.get("deployed_url"))
+                if d.get("deployed_url") is not None
+                else None
+            ),
+            logs_url=(
+                str(d.get("logs_url")) if d.get("logs_url") is not None else None
             ),
             rollback_url=(
-                str(d.get("rollback_url")) if d.get("rollback_url") is not None else None
+                str(d.get("rollback_url"))
+                if d.get("rollback_url") is not None
+                else None
+            ),
+            rollback_command=(
+                str(d.get("rollback_command"))
+                if d.get("rollback_command") is not None
+                else None
             ),
             build_artifact=(
-                BuildArtifact.from_dict(artifact) if isinstance(artifact, dict) else artifact
+                BuildArtifact.from_dict(artifact)
+                if isinstance(artifact, dict)
+                else artifact
             ),
             deployment_logs=str(d.get("deployment_logs", "")),
             log_artifacts=list(d.get("log_artifacts", []) or []),
@@ -676,6 +749,11 @@ class DeliveryHandover:
     release_notes_draft: str = ""
     rollback_plan: str = ""
     environment: str = "production"
+    deployment_target: Optional[DeploymentTarget] = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.deployment_target, dict):
+            self.deployment_target = DeploymentTarget.from_dict(self.deployment_target)
 
     def to_dict(self) -> dict:
         return {
@@ -689,15 +767,21 @@ class DeliveryHandover:
             "release_notes_draft": self.release_notes_draft,
             "rollback_plan": self.rollback_plan,
             "environment": self.environment,
+            "deployment_target": (
+                self.deployment_target.to_dict() if self.deployment_target else None
+            ),
         }
 
     def to_markdown(self) -> str:
         blockers = _markdown_bullets(self.critical_blockers, empty="None")
-        rollback = _markdown_bullets(self.rollback_notes, empty="Confirm rollback owner and steps")
+        rollback = _markdown_bullets(
+            self.rollback_notes, empty="Confirm rollback owner and steps"
+        )
         return f"""# Delivery → DevOps Handover: {self.project_name}
 **Ready for DevOps:** {'yes' if self.ready_for_devops else 'no'}
 **Go / No-Go:** {self.go_no_go_recommendation}
 **Environment:** {self.environment}
+**Deployment Target:** {self.deployment_target.provider if self.deployment_target else 'local'}
 
 ## Release Scope
 {self.release_scope or 'TBD'}
@@ -738,6 +822,11 @@ class DeliveryHandover:
             release_notes_draft=str(d.get("release_notes_draft", "")),
             rollback_plan=str(d.get("rollback_plan", "")),
             environment=str(d.get("environment", "production")),
+            deployment_target=(
+                DeploymentTarget.from_dict(d.get("deployment_target"))
+                if isinstance(d.get("deployment_target"), dict)
+                else None
+            ),
         )
 
 
@@ -809,21 +898,29 @@ class ProofOfWork:
             summary=str(data.get("summary", "")),
             changed_files=tuple(str(item) for item in data.get("changed_files", ())),
             diff_summary=tuple(str(item) for item in data.get("diff_summary", ())),
-            commit_messages=tuple(str(item) for item in data.get("commit_messages", ())),
+            commit_messages=tuple(
+                str(item) for item in data.get("commit_messages", ())
+            ),
             checks=tuple(dict(item) for item in data.get("checks", ())),
             qa_result=str(data.get("qa_result", "not-run")),
             review_result=str(data.get("review_result", "not-run")),
-            review_feedback=tuple(str(item) for item in data.get("review_feedback", ())),
+            review_feedback=tuple(
+                str(item) for item in data.get("review_feedback", ())
+            ),
             delivery_handover=dict(data.get("delivery_handover") or {}),
             devops_status=dict(data.get("devops_status") or {}),
             diffs=tuple(dict(item) for item in data.get("diffs", ())),
             links=tuple(str(item) for item in data.get("links", ())),
             risk_notes=tuple(str(item) for item in data.get("risk_notes", ())),
-            completed_stages=tuple(str(item) for item in data.get("completed_stages", ())),
+            completed_stages=tuple(
+                str(item) for item in data.get("completed_stages", ())
+            ),
             failed_stages=tuple(str(item) for item in data.get("failed_stages", ())),
             partial_success=bool(data.get("partial_success", False)),
             human_review_required=bool(data.get("human_review_required", True)),
-            markdown_path=(str(data.get("markdown_path")) if data.get("markdown_path") else None),
+            markdown_path=(
+                str(data.get("markdown_path")) if data.get("markdown_path") else None
+            ),
             created_at=str(data.get("created_at") or datetime.utcnow().isoformat()),
         )
 
@@ -933,6 +1030,7 @@ __all__ = [
     "DesignSpecV2",
     "Deliverable",
     "DeliveryHandover",
+    "DeploymentTarget",
     "DepartmentOutput",
     "DeploymentResult",
     "EventMessage",

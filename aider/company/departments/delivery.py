@@ -182,7 +182,9 @@ class DeliveryDepartment(Department):
         payload = task.payload if isinstance(task.payload, dict) else {}
         context = task.context if isinstance(task.context, dict) else {}
         phase = str(
-            context.get("project_phase") or context.get("current_project_phase") or "planning"
+            context.get("project_phase")
+            or context.get("current_project_phase")
+            or "planning"
         )
         title = str(
             context.get("project_name")
@@ -197,7 +199,9 @@ class DeliveryDepartment(Department):
             or "Coordinate the approved work through release."
         )[:800]
         has_prd = bool(context.get("prd_summary") or payload.get("prd_content"))
-        has_design = bool(context.get("design_spec_summary") or payload.get("design_spec"))
+        has_design = bool(
+            context.get("design_spec_summary") or payload.get("design_spec")
+        )
         has_engineering = bool(
             payload.get("engineering_result") or context.get("engineering_result")
         )
@@ -239,7 +243,11 @@ class DeliveryDepartment(Department):
                 name="QA verification complete",
                 description="Confirm QA outcome and known residual checks before release.",
                 owner="qa",
-                status=("complete" if has_qa else "in_progress" if phase == "qa" else "pending"),
+                status=(
+                    "complete"
+                    if has_qa
+                    else "in_progress" if phase == "qa" else "pending"
+                ),
                 dependencies=["qa"],
                 exit_criteria=[
                     "QA report is captured",
@@ -275,7 +283,9 @@ class DeliveryDepartment(Department):
             "DevOps environment readiness",
         ]
         if skill_guidance:
-            key_dependencies.append("Applicable delivery/project-management skill guidance")
+            key_dependencies.append(
+                "Applicable delivery/project-management skill guidance"
+            )
         if playbook_guidance:
             key_dependencies.append("Relevant playbook guidance")
         return ProjectPlan(
@@ -297,7 +307,9 @@ class DeliveryDepartment(Department):
             ],
         )
 
-    def _assess_project_health(self, plan: ProjectPlan, task: CompanyTask) -> ProjectPlan:
+    def _assess_project_health(
+        self, plan: ProjectPlan, task: CompanyTask
+    ) -> ProjectPlan:
         plan.completion_percentage = self._calculate_completion(plan)
         plan.weighted_completion = self._calculate_weighted_completion(plan)
         plan.critical_blockers = [
@@ -315,30 +327,28 @@ class DeliveryDepartment(Department):
         has_engineering = bool(payload.get("engineering_result"))
         has_qa = bool(payload.get("qa_report") or payload.get("qa_metadata"))
         high_open_risks = [
-            r for r in plan.risks if r.severity == "high" and r.status not in {"closed", "resolved"}
+            r
+            for r in plan.risks
+            if r.severity == "high" and r.status not in {"closed", "resolved"}
         ]
         if plan.critical_blockers:
             plan.status = "delayed"
             plan.overall_status = "delayed"
-            plan.progress_summary = "Critical blockers must be resolved before DevOps handoff."
+            plan.progress_summary = (
+                "Critical blockers must be resolved before DevOps handoff."
+            )
         elif has_engineering and has_qa and plan.weighted_completion >= 100:
             plan.status = "complete"
             plan.overall_status = "complete"
-            plan.progress_summary = (
-                "Engineering and QA artifacts are available; Delivery has prepared release handoff."
-            )
+            plan.progress_summary = "Engineering and QA artifacts are available; Delivery has prepared release handoff."
         elif high_open_risks or (has_engineering and not has_qa):
             plan.status = "at_risk"
             plan.overall_status = "at_risk"
-            plan.progress_summary = (
-                "Delivery is tracking unresolved release-readiness risk before DevOps handoff."
-            )
+            plan.progress_summary = "Delivery is tracking unresolved release-readiness risk before DevOps handoff."
         else:
             plan.status = "on_track"
             plan.overall_status = "on_track"
-            plan.progress_summary = (
-                "Delivery is proactively coordinating upstream artifacts and release readiness."
-            )
+            plan.progress_summary = "Delivery is proactively coordinating upstream artifacts and release readiness."
         plan.progress_summary += f" Weighted completion is {plan.weighted_completion}%."
         plan.executive_summary = self._executive_summary(plan)
         return plan
@@ -370,11 +380,15 @@ class DeliveryDepartment(Department):
     def _assess_risks(self, task: CompanyTask, plan: ProjectPlan) -> list[RiskRegister]:
         payload = task.payload if isinstance(task.payload, dict) else {}
         context = task.context if isinstance(task.context, dict) else {}
-        phase = str(context.get("project_phase") or context.get("current_project_phase") or "")
+        phase = str(
+            context.get("project_phase") or context.get("current_project_phase") or ""
+        )
         risks: list[RiskRegister] = []
 
         qa_metadata = (
-            payload.get("qa_metadata") if isinstance(payload.get("qa_metadata"), dict) else {}
+            payload.get("qa_metadata")
+            if isinstance(payload.get("qa_metadata"), dict)
+            else {}
         )
         qa_report = payload.get("qa_report")
         engineering_result = payload.get("engineering_result")
@@ -432,7 +446,9 @@ class DeliveryDepartment(Department):
             )
         return risks
 
-    def handover_to_devops(self, plan: ProjectPlan, task: CompanyTask) -> DeliveryHandover:
+    def handover_to_devops(
+        self, plan: ProjectPlan, task: CompanyTask
+    ) -> DeliveryHandover:
         payload = task.payload if isinstance(task.payload, dict) else {}
         context = task.context if isinstance(task.context, dict) else {}
         ready = (
@@ -466,25 +482,36 @@ class DeliveryDepartment(Department):
             release_notes_draft=self._release_notes_draft(plan, payload, release_scope),
             rollback_plan=self._rollback_plan(plan, payload),
             environment=str(context.get("environment", "production")),
+            deployment_target=(
+                payload.get("deployment_target") or context.get("deployment_target")
+            ),
         )
 
     def _executive_summary(self, plan: ProjectPlan) -> str:
-        blockers = ", ".join(plan.critical_blockers) if plan.critical_blockers else "none"
+        blockers = (
+            ", ".join(plan.critical_blockers) if plan.critical_blockers else "none"
+        )
         return (
             f"Delivery status is {plan.status} at {plan.weighted_completion}% weighted completion. "
             f"Next milestone: {plan.next_milestone or 'TBD'}. Critical blockers: {blockers}."
         )
 
-    def _release_notes_draft(self, plan: ProjectPlan, payload: dict, release_scope: str) -> str:
+    def _release_notes_draft(
+        self, plan: ProjectPlan, payload: dict, release_scope: str
+    ) -> str:
         engineering_metadata = (
             payload.get("engineering_metadata") if isinstance(payload, dict) else {}
         )
         files = []
         if isinstance(engineering_metadata, dict):
             files = list(
-                engineering_metadata.get("files") or engineering_metadata.get("changed_files") or []
+                engineering_metadata.get("files")
+                or engineering_metadata.get("changed_files")
+                or []
             )
-        file_note = f"\n\nChanged files: {', '.join(map(str, files[:10]))}." if files else ""
+        file_note = (
+            f"\n\nChanged files: {', '.join(map(str, files[:10]))}." if files else ""
+        )
         return f"Release scope: {release_scope[:500]}\n\nDelivery summary: {plan.executive_summary}{file_note}"
 
     def _rollback_plan(self, plan: ProjectPlan, payload: dict) -> str:

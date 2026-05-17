@@ -415,3 +415,73 @@ def test_company_daemon_cli_parses_runner_options(tmp_path):
     assert command.run_issue_id == "AP-6"
     assert command.runner_departments == ("product", "engineering", "qa")
     assert command.runner_max_iterations == 2
+
+
+def test_daemon_github_adapter_mocked_round_trip():
+    import httpx
+
+    from aider.company.tracker.github import GitHubTrackerAdapter
+
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "GET" and request.url.path.endswith("/issues"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 42,
+                        "number": 42,
+                        "title": "Ship invite rollout",
+                        "body": "Release via Company daemon.",
+                        "state": "open",
+                        "labels": [{"name": "aider-plus"}],
+                        "html_url": "https://github.test/owner/repo/issues/42",
+                    }
+                ],
+            )
+        if request.method == "PATCH" and request.url.path.endswith("/issues/42"):
+            body = json.loads(request.content.decode())
+            return httpx.Response(
+                200,
+                json={
+                    "id": 42,
+                    "number": 42,
+                    "title": "Ship invite rollout",
+                    "body": "Release via Company daemon.",
+                    "state": body.get("state", "open"),
+                    "labels": [{"name": label} for label in body.get("labels", [])],
+                },
+            )
+        if request.method == "POST" and request.url.path.endswith("/issues/42/comments"):
+            return httpx.Response(201, json={"id": 1001})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    tracker = GitHubTrackerAdapter(
+        token="token",
+        repo="owner/repo",
+        api_url="https://api.github.test",
+        client=client,
+    )
+
+    issue = tracker.list_candidate_issues(("aider-plus",))[0]
+    claimed = tracker.claim_issue(issue)
+    tracker.comment(claimed, "Company daemon started.")
+    tracker.attach_pr(claimed, "https://github.test/owner/repo/pull/7")
+    done = tracker.transition(claimed, "done")
+
+    assert issue.identifier == "42"
+    assert claimed.status == "in_progress"
+    assert done.status == "done"
+    request_kinds = [(request.method, request.url.path) for request in requests]
+    assert ("GET", "/repos/owner/repo/issues") in request_kinds
+    assert sum(1 for method, _path in request_kinds if method == "POST") == 2
+    assert any(
+        request.method == "PATCH"
+        and json.loads(request.content.decode()).get("state") == "closed"
+        for request in requests
+    )

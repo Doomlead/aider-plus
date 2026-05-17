@@ -624,6 +624,10 @@ class CompanyOrchestrator:
         if existing:
             return existing if isinstance(existing, list) else [str(existing)]
         playbook = self.context_builder._requested_playbook(["playbook.*"], task)
+        if playbook:
+            task.context["playbook_retrieval_explanations"] = (
+                self.context_builder._playbook_explanations(playbook)
+            )
         return self.context_builder._format_playbook_guidance(playbook)
 
     def _get_relevant_skills(self, task: CompanyTask) -> list[str]:
@@ -633,16 +637,23 @@ class CompanyOrchestrator:
             return existing if isinstance(existing, list) else [str(existing)]
         if not self.company_config.skill_learning.enabled:
             return []
-        manager = CompanySkillManager(self.state, self.company_config.skill_learning)
-        skills = list(manager.query_for_task(task, role=task.target))
+        requirements = ["skills.*"]
         if task.target == "delivery":
-            seen = {(skill.scope, skill.name) for skill in skills}
-            for skill in manager.query_for_task(task, role="project_management"):
-                if (skill.scope, skill.name) not in seen:
-                    skills.append(skill)
-                    seen.add((skill.scope, skill.name))
+            requirements.append("skills.project_management")
+        skills = self.context_builder._get_relevant_skills(task, requirements)
+        if not skills:
+            return []
+        manager = CompanySkillManager(self.state, self.company_config.skill_learning)
+        explanations = self.context_builder._skill_explanations(skills)
+        task.context["skills"] = [
+            self.context_builder._skill_context_dict(skill, explanations)
+            for skill in skills
+        ]
+        task.context["skill_retrieval_explanations"] = explanations
         manager.record_skill_usage(skills, role=task.target)
-        return manager.format_skill_guidance(skills)
+        return self.context_builder._format_skill_guidance_with_explanations(
+            manager.format_skill_guidance(skills), explanations
+        )
 
     async def _dispatch(self, task: CompanyTask) -> None:
         department = self.departments[task.target]

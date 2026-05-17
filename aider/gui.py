@@ -1746,6 +1746,16 @@ class GUI:
         c3.metric("Pending Proposals", counts.get("pending_proposals", 0))
         c4.metric("COO Memory", counts.get("coo_memory_entries", 0))
 
+        recently_injected = overview.get("recently_injected") or []
+        st.subheader("Recently Injected")
+        if not recently_injected:
+            st.caption("No memories or skills have been injected in this session yet.")
+        for item in recently_injected[:5]:
+            st.caption(
+                f"{item.get('type', 'knowledge')} · {item.get('injected_at', 'unknown time')}"
+            )
+            st.write(item.get("explanation") or "")
+
         if query:
             st.subheader("Search Results")
             results = overview.get("search_results") or []

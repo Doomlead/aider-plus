@@ -1803,13 +1803,25 @@ class AiderPlusDesktop:
                 ),
             )
         counts = overview.get("counts", {})
+        recently_injected = overview.get("recently_injected") or []
+        injected_lines = ["Recently Injected:"]
+        if recently_injected:
+            injected_lines.extend(
+                f"- {item.get('type', 'knowledge')}: {item.get('explanation', '')}"
+                for item in recently_injected[:5]
+            )
+        else:
+            injected_lines.append(
+                "- No memories or skills injected in this session yet."
+            )
         self._write_text(
             self.knowledge_detail,
             "Select a knowledge item to inspect.\n\n"
             f"Playbooks: {counts.get('playbooks', 0)}\n"
             f"Skills: {counts.get('skills', 0)}\n"
             f"Pending proposals: {counts.get('pending_proposals', 0)}\n"
-            f"COO memory entries: {counts.get('coo_memory_entries', 0)}",
+            f"COO memory entries: {counts.get('coo_memory_entries', 0)}\n\n"
+            + "\n".join(injected_lines),
         )
 
     def _on_knowledge_selected(self, _event=None):

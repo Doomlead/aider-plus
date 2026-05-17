@@ -1052,6 +1052,23 @@ class NanobotCOO:
         if any(
             phrase in prompt_lower
             for phrase in (
+                "why did you use that skill",
+                "why did you use the skill",
+                "why did you use that memory",
+                "why was that skill used",
+                "why was this skill used",
+                "why was that included",
+            )
+        ):
+            return COOActionDecision(
+                action="inspect_knowledge",
+                response_to_ceo=self._format_retrieval_explanations_for_ceo(),
+                confidence=0.94,
+                reasoning="CEO asked why knowledge or skills were injected.",
+            )
+        if any(
+            phrase in prompt_lower
+            for phrase in (
                 "what knowledge",
                 "inspect knowledge",
                 "knowledge overview",
@@ -1537,6 +1554,17 @@ class NanobotCOO:
             )
         return "\n".join(lines)
 
+    def _format_retrieval_explanations_for_ceo(self) -> str:
+        overview = self.inspect_knowledge()
+        recent = overview.get("recently_injected") or []
+        lines = ["CEO, here is why recent skills or memories were included:"]
+        if not recent:
+            lines.append("- No knowledge has been injected in this session yet.")
+            return "\n".join(lines)
+        for item in recent[:5]:
+            lines.append(f"- {item.get('explanation', 'No explanation recorded.')}")
+        return "\n".join(lines)
+
     def _format_knowledge_for_ceo(self, *, query: str = "") -> str:
         overview = self.inspect_knowledge(query=query)
         counts = overview.get("counts", {})
@@ -1547,6 +1575,11 @@ class NanobotCOO:
             f"- Pending skill proposals: {counts.get('pending_proposals', 0)}",
             f"- COO memory entries: {counts.get('coo_memory_entries', 0)}",
         ]
+        recent_injected = overview.get("recently_injected") or []
+        if recent_injected:
+            lines.append("- Recently injected knowledge:")
+            for item in recent_injected[:5]:
+                lines.append(f"  - {item.get('explanation', '')}")
         if query and overview.get("search_results"):
             lines.append("- Matching knowledge:")
             for item in overview.get("search_results", [])[:5]:

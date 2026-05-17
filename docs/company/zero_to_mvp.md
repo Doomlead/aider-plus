@@ -10,9 +10,10 @@ The `aider company create` command keeps the current-repo path for existing
 projects. The `aider company new` command adds a thin warehouse manager for new
 product work: it creates or reuses a Git-backed repo under the warehouse
 `products/` directory, records it in `warehouse.json`, scaffolds a coherent MVP
-starter structure from `aider/company/templates.py`, then runs the same template-grounded Company brief
-through Aider's repo-aware implementation loop so the result remains reviewable,
-testable, and ready for future iteration.
+starter structure from `aider/company/templates.py`, writes Company metadata,
+placeholder skills, and post-creation hooks, then runs the same
+template-grounded Company brief through Aider's repo-aware implementation loop
+so the result remains reviewable, testable, and ready for future iteration.
 
 ## Command
 
@@ -20,13 +21,13 @@ testable, and ready for future iteration.
 aider company create "Build a simple habit tracker web app with login, dashboard, and streaks"
 # or create a product repo under a warehouse first
 aider warehouse init ~/AiderPlusWarehouse
-aider company new "Build a simple habit tracker web app with login, dashboard, and streaks" --name habit-tracker --warehouse ~/AiderPlusWarehouse
+aider company new "Build a simple habit tracker web app with login, dashboard, and streaks" --name habit-tracker --template nextjs-saas --warehouse ~/AiderPlusWarehouse
 ```
 
 Choose a product shape with `--template`:
 
 ```bash
-aider company create "Build a webhook API for Stripe events" --template fastapi-backend
+aider company create "Build a webhook API for Stripe events" --template python-fastapi-api
 ```
 
 Pass normal Aider options after `--`:
@@ -38,7 +39,7 @@ aider company create "Build a CLI for exporting reports" --template cli-tool -- 
 Preview the generated Company brief without calling a model:
 
 ```bash
-aider company create "Build a habit tracker" --template nextjs-app --dry-plan
+aider company create "Build a habit tracker" --template nextjs-saas --dry-plan
 ```
 
 List templates:
@@ -65,9 +66,18 @@ normal Git tooling.
 
 ## Templates
 
-The built-in templates ground Product, UX, Engineering, QA, and iteration
-prompts for common MVP shapes:
+The built-in templates ground Product, UX, Engineering, Delivery, QA, DevOps,
+and iteration prompts for common MVP shapes. Each template includes recommended
+skills, starter files, post-creation instructions, and an example PRD prompt seed.
 
+- `nextjs-saas` — SaaS onboarding, workspace dashboard, billing seams, settings,
+  and auth/analytics/data provider adapters.
+- `python-fastapi-api` — contract-first API with routes, schemas, services,
+  repositories, health/readiness checks, and OpenAPI/test guidance.
+- `electron-desktop-app` — desktop MVP with main/preload/renderer separation,
+  secure IPC, local data, offline behavior, and packaging seams.
+- `data-dashboard` — dashboard with fixtures, metric definitions, charts,
+  filters, exports, and data-quality checks.
 - `saas-dashboard` — authenticated dashboard app with metrics, CRUD workflows,
   and admin views.
 - `cli-tool` — command-line product with subcommands, config, help text, and
@@ -84,6 +94,23 @@ prompts for common MVP shapes:
   and exports.
 - `internal-admin` — back-office UI with roles, workflows, destructive-action
   safeguards, and auditability.
+
+Example starts:
+
+```bash
+aider company new "Build a founder revenue dashboard with cohort charts" --template data-dashboard --name founder-metrics --warehouse ~/AiderPlusWarehouse
+aider company new "Build a secure offline notes desktop app" --template electron-desktop-app --name secure-notes --warehouse ~/AiderPlusWarehouse
+```
+
+Generated starter repos include:
+
+```text
+.aider/company/product.json        # template metadata and PRD seed
+.aider/company/post-creation.md    # first-run hooks for the selected template
+.aider/skills/<skill>/SKILL.md     # placeholder skill notes for future runs
+docs/company-mode.md              # Product → UX → Engineering → Delivery → DevOps handoff guide
+docs/product-brief.md             # Product brief and iteration notes
+```
 
 ## Full lifecycle example
 

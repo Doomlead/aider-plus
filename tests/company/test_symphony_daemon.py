@@ -200,3 +200,99 @@ def test_sanitize_workspace_key_rejects_empty_identifier():
         assert "workspace-safe" in str(exc)
     else:
         raise AssertionError("Expected invalid workspace key")
+
+
+def test_builtin_daemon_runner_end_to_end_tracker_and_proof(tmp_path):
+    import asyncio
+
+    from aider.company.coo import NanobotCOO
+    from aider.company.daemon.runner import CompanyDaemonRunner
+    from aider.company.department import Department
+    from aider.company.orchestrator import CompanyOrchestrator
+    from aider.company.schemas import CompanyTask, Deliverable, ProofOfWork
+    from aider.memory import ProjectMemory
+
+    class CycleDepartment(Department):
+        def __init__(self, memory, name):
+            super().__init__(memory)
+            self.name = name
+
+        async def process(self, task: CompanyTask) -> Deliverable:
+            workspace = Path(task.context["workspace"])
+            metadata = {"context": task.context}
+            payload = f"{self.name} completed {task.task_id}"
+            if self.name == "engineering":
+                workspace.joinpath("feature.txt").write_text("implemented", encoding="utf-8")
+                metadata["review_feedback"] = "Reviewer approved implementation."
+            if self.name == "qa":
+                metadata["command"] = "pytest tests/company/test_symphony_daemon.py"
+            if self.name == "delivery":
+                metadata["delivery_handover"] = {
+                    "ready_for_devops": True,
+                    "release_scope": "daemon test",
+                }
+            if self.name == "devops":
+                metadata["build"] = "passed"
+                metadata["deploy"] = "skipped-test"
+            return Deliverable(
+                task_id=task.task_id,
+                department=self.name,
+                artifact_type=task.artifact_type,
+                payload=payload,
+                status="success",
+                metadata=metadata,
+                review_feedback=(
+                    "Reviewer approved implementation." if self.name == "engineering" else None
+                ),
+            )
+
+    tracker_path = tmp_path / "issues.json"
+    runs_path = tmp_path / "runs"
+    tracker_path.write_text(
+        json.dumps(
+            {
+                "issues": [
+                    {
+                        "identifier": "AP-4",
+                        "title": "Run full company cycle",
+                        "description": "Exercise built-in runner.",
+                        "labels": ["aider-plus"],
+                        "url": "https://example.test/AP-4",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    workflow = CompanyWorkflow.load(write_workflow(tmp_path, tracker_path, runs_path))
+    memory = ProjectMemory(str(tmp_path / "memory"))
+    orchestrator = CompanyOrchestrator(memory)
+    for name in ("product", "engineering", "qa", "delivery", "devops"):
+        orchestrator.register(CycleDepartment(memory, name))
+    coo = NanobotCOO(orchestrator=orchestrator)
+    runner = CompanyDaemonRunner(orchestrator, coo, timeout_seconds=5)
+    daemon = CompanyDaemon(workflow=workflow, orchestrator=orchestrator, coo=coo, runner=runner)
+
+    proof = asyncio.run(daemon.run_issue("AP-4"))
+
+    assert proof.human_review_required is False
+    assert "feature.txt" in proof.changed_files
+    assert proof.qa_result == "success"
+    assert proof.review_result == "feedback"
+    assert proof.delivery_handover["ready_for_devops"] is True
+    assert proof.devops_status["status"] == "success"
+    assert proof.diffs and "feature.txt" in proof.diffs[0]["diff"]
+    workspace = Path(proof.workspace)
+    markdown = workspace.joinpath(".aider", "company", "proof-of-work.md").read_text(
+        encoding="utf-8"
+    )
+    assert "# Proof of Work: AP-4" in markdown
+    assert "## DevOps Build/Deploy" in markdown
+    reloaded = ProofOfWork.from_dict(
+        json.loads(workspace.joinpath(".aider", "company", "proof-of-work.json").read_text(encoding="utf-8"))
+    )
+    assert reloaded.markdown_path.endswith("proof-of-work.md")
+    data = json.loads(tracker_path.read_text(encoding="utf-8"))
+    raw = data["issues"][0]
+    assert raw["status"] == "done"
+    assert "Proof report:" in raw["comments"][0]["body"]

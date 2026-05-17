@@ -605,6 +605,7 @@ class DesktopCompanySession:
             "daemon_active_workflows": daemon.get("active_workflows", 0),
             "daemon_pending_proof_of_work": daemon.get("pending_proof_of_work", 0),
             "daemon_recent_proof_of_work": daemon.get("recent_proof_of_work", []),
+            "daemon_recent_runs": daemon.get("runs", [])[-5:],
             "last_build": last_build,
             "last_build_status": last_build.get("status", "not run"),
             "last_build_artifact": last_build.get("artifact") or "n/a",
@@ -1842,6 +1843,16 @@ class AiderPlusDesktop:
         else:
             skill_lines.append("Available: none")
         daemon = overview.get("daemon") or {}
+        run_lines = ["", "Recent daemon runs:"]
+        recent_runs = overview.get("daemon_recent_runs") or []
+        if recent_runs:
+            run_lines.extend(
+                f"- {run.get('issue_id', 'unknown')}: {run.get('status', 'unknown')} "
+                f"updated={run.get('updated_at', 'n/a')} proof={run.get('proof_path', 'none')}"
+                for run in recent_runs[:5]
+            )
+        else:
+            run_lines.append("- none yet")
         proof_lines = ["", "Recent proof-of-work artifacts:"]
         recent_proofs = overview.get("daemon_recent_proof_of_work") or []
         if recent_proofs:
@@ -1887,6 +1898,7 @@ class AiderPlusDesktop:
                     f"Active warehouse products: {overview['active_warehouse_products']}",
                     f"MCP status: {overview['mcp_status']}",
                     *skill_lines,
+                    *run_lines,
                     *proof_lines,
                 ]
             ),

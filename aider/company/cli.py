@@ -37,6 +37,7 @@ class CompanyCLICommand:
     workflow_path: str | None = None
     once: bool = False
     status: bool = False
+    run_issue_id: str | None = None
 
 
 class CompanyCLIError(ValueError):
@@ -47,7 +48,7 @@ USAGE = """Usage:
   aider company templates
   aider company create <idea> [--template TEMPLATE] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
   aider company new <idea> [--template TEMPLATE] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
-  aider company daemon --workflow PATH [--once] [--dry-run] [--status]
+  aider company daemon --workflow PATH [--once] [--dry-run] [--status] [--run ISSUE_ID]
   aider warehouse init [PATH]
   aider warehouse list [--warehouse PATH]
   aider warehouse open PRODUCT [--warehouse PATH]
@@ -158,6 +159,7 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
     dry_run = False
     once = False
     status = False
+    run_issue_id: str | None = None
     rest = list(args)
     index = 0
     while index < len(rest):
@@ -173,6 +175,11 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
             once = True
         elif token == "--status":
             status = True
+        elif token == "--run":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--run requires an issue id.\n" + USAGE)
+            run_issue_id = rest[index]
         else:
             raise CompanyCLIError(f"Unknown company daemon option: {token}.\n{USAGE}")
         index += 1
@@ -187,6 +194,7 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
         workflow_path=workflow_path,
         once=once,
         status=status,
+        run_issue_id=run_issue_id,
     )
 
 
@@ -256,6 +264,14 @@ def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
             print(f"Tracker: {status['tracker']}")
             print(f"Workspace root: {status['workspace_root']}")
             print(f"Max concurrent agents: {status['max_concurrent_agents']}")
+            recent = status.get("recent_proof_of_work") or []
+            if recent:
+                print("Recent proof-of-work:")
+                for proof in recent[:5]:
+                    print(
+                        f"- {proof.get('issue', 'unknown')}: {proof.get('summary', '')} "
+                        f"proof={proof.get('markdown_path') or proof.get('path', '')}"
+                    )
             if not status["runs"]:
                 print("Runs: none")
             else:
@@ -266,7 +282,16 @@ def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
                         f"attempts={run.get('attempts', 0)} workspace={run.get('workspace', '')}"
                     )
             return 0
-        proofs = daemon.run_once(dry_run=command.dry_plan)
+        if command.run_issue_id:
+            import asyncio
+
+            proofs = [
+                asyncio.run(
+                    daemon.run_issue(command.run_issue_id, dry_run=command.dry_plan)
+                )
+            ]
+        else:
+            proofs = daemon.run_once(dry_run=command.dry_plan)
         if not proofs:
             print("No eligible company daemon issues found.")
             return 0

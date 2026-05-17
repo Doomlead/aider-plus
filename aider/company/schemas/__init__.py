@@ -1,6 +1,7 @@
 import json as _json
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any, Literal, Optional, Union
 
@@ -740,6 +741,146 @@ class DeliveryHandover:
         )
 
 
+@dataclass(frozen=True)
+class ProofOfWork:
+    """Structured proof artifact produced by Company daemon issue runs."""
+
+    issue: str
+    title: str
+    workspace: str
+    branch: str | None = None
+    pr_url: str | None = None
+    summary: str = ""
+    changed_files: tuple[str, ...] = ()
+    commit_messages: tuple[str, ...] = ()
+    checks: tuple[dict[str, Any], ...] = ()
+    qa_result: str = "not-run"
+    review_result: str = "not-run"
+    review_feedback: tuple[str, ...] = ()
+    delivery_handover: dict[str, Any] = field(default_factory=dict)
+    devops_status: dict[str, Any] = field(default_factory=dict)
+    diffs: tuple[dict[str, str], ...] = ()
+    links: tuple[str, ...] = ()
+    risk_notes: tuple[str, ...] = ()
+    human_review_required: bool = True
+    markdown_path: str | None = None
+    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "issue": self.issue,
+            "title": self.title,
+            "workspace": self.workspace,
+            "branch": self.branch,
+            "pr_url": self.pr_url,
+            "summary": self.summary,
+            "changed_files": list(self.changed_files),
+            "commit_messages": list(self.commit_messages),
+            "checks": list(self.checks),
+            "qa_result": self.qa_result,
+            "review_result": self.review_result,
+            "review_feedback": list(self.review_feedback),
+            "delivery_handover": dict(self.delivery_handover),
+            "devops_status": dict(self.devops_status),
+            "diffs": list(self.diffs),
+            "links": list(self.links),
+            "risk_notes": list(self.risk_notes),
+            "human_review_required": self.human_review_required,
+            "markdown_path": self.markdown_path,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ProofOfWork":
+        return cls(
+            issue=str(data.get("issue", "")),
+            title=str(data.get("title", "")),
+            workspace=str(data.get("workspace", "")),
+            branch=str(data.get("branch")) if data.get("branch") else None,
+            pr_url=str(data.get("pr_url")) if data.get("pr_url") else None,
+            summary=str(data.get("summary", "")),
+            changed_files=tuple(str(item) for item in data.get("changed_files", ())),
+            commit_messages=tuple(str(item) for item in data.get("commit_messages", ())),
+            checks=tuple(dict(item) for item in data.get("checks", ())),
+            qa_result=str(data.get("qa_result", "not-run")),
+            review_result=str(data.get("review_result", "not-run")),
+            review_feedback=tuple(str(item) for item in data.get("review_feedback", ())),
+            delivery_handover=dict(data.get("delivery_handover") or {}),
+            devops_status=dict(data.get("devops_status") or {}),
+            diffs=tuple(dict(item) for item in data.get("diffs", ())),
+            links=tuple(str(item) for item in data.get("links", ())),
+            risk_notes=tuple(str(item) for item in data.get("risk_notes", ())),
+            human_review_required=bool(data.get("human_review_required", True)),
+            markdown_path=(str(data.get("markdown_path")) if data.get("markdown_path") else None),
+            created_at=str(data.get("created_at") or datetime.utcnow().isoformat()),
+        )
+
+    def to_markdown(self) -> str:
+        def bullets(items: tuple[str, ...] | list[str], empty: str = "None") -> str:
+            return "\n".join(f"- {item}" for item in items) if items else f"- {empty}"
+
+        checks = []
+        for check in self.checks:
+            command = check.get("command") or check.get("name") or "check"
+            status = check.get("status") or check.get("result") or "unknown"
+            checks.append(f"{command}: {status}")
+        diff_sections = []
+        for diff in self.diffs:
+            name = diff.get("file") or diff.get("name") or "diff"
+            body = str(diff.get("diff") or diff.get("content") or "")
+            if body:
+                diff_sections.append(f"### {name}\n```diff\n{body[:12000]}\n```")
+        links = list(self.links)
+        if self.pr_url and self.pr_url not in links:
+            links.insert(0, self.pr_url)
+        return f"""# Proof of Work: {self.issue}
+
+**Title:** {self.title}  
+**Created:** {self.created_at}  
+**Workspace:** `{self.workspace}`  
+**Branch:** {self.branch or "unknown"}  
+**Human review required:** {self.human_review_required}
+
+## Summary
+{self.summary or "No summary provided."}
+
+## Changed Files
+{bullets(self.changed_files)}
+
+## Commits
+{bullets(self.commit_messages)}
+
+## QA Results
+**Status:** {self.qa_result}
+
+{bullets(checks)}
+
+## Review Feedback
+**Status:** {self.review_result}
+
+{bullets(self.review_feedback)}
+
+## Delivery Handover
+```json
+{_json.dumps(self.delivery_handover, indent=2, sort_keys=True)}
+```
+
+## DevOps Build/Deploy
+```json
+{_json.dumps(self.devops_status, indent=2, sort_keys=True)}
+```
+
+## Links
+{bullets(links)}
+
+## Risks / Follow-ups
+{bullets(self.risk_notes)}
+
+## Diffs
+{chr(10).join(diff_sections) if diff_sections else "- No diff captured."}
+""".strip() + "\n"
+
+
 @dataclass
 class CompanyTask:
     task_id: str
@@ -778,6 +919,7 @@ __all__ = [
     "EventMessage",
     "Milestone",
     "ProjectPlan",
+    "ProofOfWork",
     "PRD",
     "ProcessResult",
     "QAFeedback",

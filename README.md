@@ -48,8 +48,25 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
 - **MCP integration:** department agent loops can use Model Context Protocol
   tools through approval-aware adapters and manager configuration.
 - **Company daemon:** an issue workflow daemon can pull eligible issues from a
-  local JSON tracker, prepare per-issue workspaces, run Company prompts, write
-  proof-of-work artifacts, update tracker state, and require human review.
+  local JSON tracker or GitHub Issues, prepare per-issue workspaces, run Company
+  prompts, write proof-of-work artifacts, update tracker state, attach PRs, and
+  require human review.
+
+
+## Company daemon with GitHub Issues
+
+The daemon can use GitHub Issues as its tracker without extra service setup:
+
+```bash
+export GITHUB_TOKEN=ghp_your_token
+export GITHUB_REPO=owner/repo
+aider company daemon --workflow AIDER_WORKFLOW.md --tracker github --repo owner/repo --once
+```
+
+Workflow files can also declare `tracker.kind: github` and `tracker.labels` so
+the daemon lists labeled open issues, claims them with an `in_progress` label,
+posts progress/proof comments, attaches PR links, and marks completed work as
+`done`.
 
 ---
 

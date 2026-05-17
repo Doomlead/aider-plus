@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
+
 class TrackerError(ValueError):
     """Raised when a tracker adapter cannot complete an operation."""
 
@@ -57,10 +58,20 @@ class TrackerIssue:
 class TrackerAdapter(ABC):
     """Abstract issue/control-plane adapter used by the Company daemon."""
 
+    def list_candidates(self, labels: tuple[str, ...] = ()) -> list[TrackerIssue]:
+        """Compatibility alias for the common tracker adapter interface."""
+
+        return self.list_candidate_issues(labels)
+
     @abstractmethod
     def list_candidate_issues(
         self, labels: tuple[str, ...] = ()
     ) -> list[TrackerIssue]: ...
+
+    def claim(self, issue: TrackerIssue) -> TrackerIssue:
+        """Compatibility alias for the common tracker adapter interface."""
+
+        return self.claim_issue(issue)
 
     @abstractmethod
     def claim_issue(self, issue: TrackerIssue) -> TrackerIssue: ...
@@ -160,3 +171,35 @@ def _issue_id(data: dict[str, Any]) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def create_tracker_adapter(config: Any) -> TrackerAdapter:
+    """Create a tracker adapter from workflow/CLI configuration."""
+
+    if isinstance(config, dict):
+        kind = str(config.get("type") or config.get("kind") or "local")
+        path = config.get("path")
+        repo = config.get("repo")
+        token = config.get("token")
+        api_url = str(config.get("api_url") or "https://api.github.com")
+    else:
+        kind = str(
+            getattr(config, "type", None) or getattr(config, "kind", None) or "local"
+        )
+        path = getattr(config, "path", None)
+        repo = getattr(config, "repo", None)
+        token = getattr(config, "token", None)
+        api_url = str(getattr(config, "api_url", None) or "https://api.github.com")
+
+    normalized = kind.strip().lower()
+    if normalized == "local":
+        if not path:
+            raise TrackerError("Local tracker workflows require tracker.path.")
+        return LocalJsonTrackerAdapter(path)
+    if normalized == "github":
+        from aider.company.tracker.github import GitHubTrackerAdapter
+
+        return GitHubTrackerAdapter(token=token, repo=repo, api_url=api_url)
+    raise TrackerError(
+        f"Unsupported tracker kind: {kind}. Supported: local, github."
+    )

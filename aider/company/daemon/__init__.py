@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 from aider.company.schemas import ProofOfWork
 from aider.company.templates import DEFAULT_TEMPLATE_KEY, render_zero_to_mvp_prompt
-from aider.company.tracker import LocalJsonTrackerAdapter, TrackerAdapter, TrackerIssue
+from aider.company.tracker import TrackerAdapter, TrackerError, TrackerIssue, create_tracker_adapter
 from aider.company.warehouse import default_warehouse_path
 from aider.company.workflow import CompanyWorkflow, WorkflowError
 
@@ -479,13 +479,10 @@ class CompanyDaemon:
 
 
 def build_tracker(workflow: CompanyWorkflow) -> TrackerAdapter:
-    if workflow.tracker.kind == "local":
-        if not workflow.tracker.path:
-            raise CompanyDaemonError("Local tracker workflows require tracker.path.")
-        return LocalJsonTrackerAdapter(workflow.tracker.path)
-    raise CompanyDaemonError(
-        f"Unsupported tracker kind: {workflow.tracker.kind}. Supported: local."
-    )
+    try:
+        return create_tracker_adapter(workflow.tracker)
+    except TrackerError as exc:
+        raise CompanyDaemonError(str(exc)) from exc
 
 
 def sanitize_workspace_key(value: str) -> str:

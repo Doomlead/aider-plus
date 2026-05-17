@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
 
-from aider.company.daemon import CompanyDaemonError, load_daemon
-from aider.company.workflow import WorkflowError
+from aider.company.daemon import CompanyDaemon, CompanyDaemonError, load_daemon
+from aider.company.workflow import TrackerWorkflowConfig, WorkflowError
 from aider.company.templates import (
     DEFAULT_TEMPLATE_KEY,
     get_template,
@@ -40,6 +40,8 @@ class CompanyCLICommand:
     run_issue_id: str | None = None
     runner_departments: tuple[str, ...] = ()
     runner_max_iterations: int | None = None
+    tracker_type: str | None = None
+    repo: str | None = None
 
 
 class CompanyCLIError(ValueError):
@@ -50,7 +52,7 @@ USAGE = """Usage:
   aider company templates
   aider company create <idea> [--template TEMPLATE] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
   aider company new <idea> [--template TEMPLATE] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
-  aider company daemon --workflow PATH [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N]
+  aider company daemon --workflow PATH [--tracker TYPE] [--repo OWNER/REPO] [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N]
   aider warehouse init [PATH]
   aider warehouse list [--warehouse PATH]
   aider warehouse open PRODUCT [--warehouse PATH]
@@ -164,6 +166,8 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
     run_issue_id: str | None = None
     runner_departments: tuple[str, ...] = ()
     runner_max_iterations: int | None = None
+    tracker_type: str | None = None
+    repo: str | None = None
     rest = list(args)
     index = 0
     while index < len(rest):
@@ -175,6 +179,16 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
             workflow_path = rest[index]
         elif token == "--dry-run":
             dry_run = True
+        elif token == "--tracker":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--tracker requires a tracker type.\n" + USAGE)
+            tracker_type = rest[index].strip().lower()
+        elif token == "--repo":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError("--repo requires an owner/repo value.\n" + USAGE)
+            repo = rest[index].strip()
         elif token == "--once":
             once = True
         elif token == "--status":
@@ -218,6 +232,8 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
         run_issue_id=run_issue_id,
         runner_departments=runner_departments,
         runner_max_iterations=runner_max_iterations,
+        tracker_type=tracker_type,
+        repo=repo,
     )
 
 
@@ -274,13 +290,34 @@ def handle_company_cli_pre_coder(command: CompanyCLICommand) -> int | None:
     return None
 
 
+def _load_daemon_for_command(command: CompanyCLICommand) -> CompanyDaemon:
+    """Load a daemon and apply CLI tracker overrides."""
+
+    if not command.workflow_path:
+        raise CompanyCLIError("`aider company daemon` requires --workflow PATH.")
+    if not command.tracker_type and not command.repo:
+        return load_daemon(command.workflow_path)
+
+    from aider.company.workflow import CompanyWorkflow
+
+    loaded = CompanyWorkflow.load(command.workflow_path)
+    tracker = loaded.tracker
+    tracker = TrackerWorkflowConfig(
+        kind=command.tracker_type or tracker.kind,
+        path=tracker.path,
+        repo=command.repo or tracker.repo,
+        labels=tracker.labels,
+    )
+    return CompanyDaemon(workflow=replace(loaded, tracker=tracker))
+
+
 def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
     """Run Symphony-inspired Company daemon commands that do not need a Coder."""
 
     if not command.workflow_path:
         raise CompanyCLIError("`aider company daemon` requires --workflow PATH.")
     try:
-        daemon = load_daemon(command.workflow_path)
+        daemon = _load_daemon_for_command(command)
         daemon.configure_runner_options(
             departments=command.runner_departments,
             max_iterations=command.runner_max_iterations,

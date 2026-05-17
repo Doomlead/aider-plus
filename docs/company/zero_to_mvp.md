@@ -15,6 +15,29 @@ placeholder skills, post-creation hooks, QA gates, and an initial scaffold commi
 then runs the same template-grounded Company brief through Aider's repo-aware implementation loop
 so the result remains reviewable, testable, and ready for future iteration.
 
+## Guided onboarding flow
+
+Run the first-time setup before creating your first product:
+
+```bash
+aider company init
+```
+
+The `CompanyOnboarding` flow walks through the core studio setup:
+
+1. Initialize the warehouse that stores Git-backed product repositories.
+2. Pick the default `aider company new --template ...` starter.
+3. Configure a GitHub token/repo pair for the issue daemon, or leave it blank for local tracker use.
+4. Choose preferred department models and prompt caching for Product, UX, Engineering, Reviewer, QA, and DevOps.
+5. Decide whether MCP integrations should be enabled for external tools/context.
+6. Generate `AIDER_WORKFLOW.md` and `.aider/company/workflow.yml` with the quickstart commands and daemon entry point.
+
+The same helper is exposed in the Streamlit browser UI and the native Tkinter desktop UI under **Onboarding / Quick Start**. Use `--skip-onboarding` on normal `aider` launches when you do not want the first-run offer.
+
+```bash
+aider company init --warehouse ~/AiderPlusWarehouse --template nextjs-app --github-repo owner/repo --model gpt-5.5 --enable-mcp --yes
+```
+
 ## Command
 
 ```bash

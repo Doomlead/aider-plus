@@ -1,0 +1,117 @@
+import json
+from pathlib import Path
+
+from aider.company.cli import handle_company_cli_pre_coder, parse_company_cli
+from aider.company.onboarding import CompanyOnboarding, DEPARTMENTS
+
+
+def _blank_prompts():
+    while True:
+        yield ""
+
+
+def test_onboarding_flow_writes_state_workflow_and_guide(tmp_path):
+    prompts = _blank_prompts()
+    defaults = {
+        "warehouse_path": tmp_path / "warehouse",
+        "template": "nextjs-app",
+        "github_repo": "octo/demo",
+        "github_token": "gh-test",
+        "mcp_enabled": True,
+        "model_preferences": {
+            dept: {"model": "gpt-5.5", "cache": True} for dept in DEPARTMENTS
+        },
+    }
+    onboarding = CompanyOnboarding(
+        root=tmp_path,
+        defaults=defaults,
+        input_func=lambda _prompt: next(prompts),
+        output_func=lambda _msg: None,
+    )
+
+    result = onboarding.run_onboarding_flow()
+
+    assert Path(result.config_path).exists()
+    assert Path(result.workflow_guide_path).exists()
+    assert Path(result.daemon_workflow_path).exists()
+    assert (tmp_path / "warehouse" / "warehouse.json").exists()
+
+    state = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+    assert state["default_template"] == "nextjs-app"
+    assert state["github_repo"] == "octo/demo"
+    assert state["github_token_configured"] is True
+    assert state["mcp_enabled"] is True
+    assert state["model_preferences"]["engineering"]["model"] == "gpt-5.5"
+
+    guide = Path(result.workflow_guide_path).read_text(encoding="utf-8")
+    assert "aider company new" in guide
+    assert "aider company daemon" in guide
+    assert "octo/demo" in guide
+
+
+def test_onboarding_flow_prompts_department_models(tmp_path):
+    answers = iter(
+        [
+            "",  # warehouse default
+            "fastapi-backend",
+            "",  # github repo
+            "",  # github token
+            *sum(([f"model-{dept}", "n"] for dept in DEPARTMENTS), []),
+            "y",  # mcp
+        ]
+    )
+    onboarding = CompanyOnboarding(
+        root=tmp_path,
+        defaults={"warehouse_path": tmp_path / "warehouse"},
+        input_func=lambda _prompt: next(answers),
+        output_func=lambda _msg: None,
+    )
+
+    result = onboarding.run_onboarding_flow()
+
+    assert result.template == "fastapi-backend"
+    assert result.mcp_enabled is True
+    assert result.model_preferences["product"] == {
+        "model": "model-product",
+        "cache": False,
+    }
+    assert result.model_preferences["devops"] == {
+        "model": "model-devops",
+        "cache": False,
+    }
+
+
+def test_company_init_cli_parses_and_runs_non_interactive(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+    command, aider_args = parse_company_cli(
+        [
+            "company",
+            "init",
+            "--warehouse",
+            str(tmp_path / "warehouse"),
+            "--template",
+            "nextjs-app",
+            "--github-repo",
+            "octo/demo",
+            "--model",
+            "gpt-5.5",
+            "--enable-mcp",
+            "--yes",
+        ]
+    )
+
+    assert aider_args == []
+    assert command.action == "init"
+    assert command.yes is True
+    assert handle_company_cli_pre_coder(command) == 0
+
+    out = capsys.readouterr().out
+    assert "Company onboarding config" in out
+    assert (tmp_path / "AIDER_WORKFLOW.md").exists()
+    state = json.loads(
+        (tmp_path / ".aider" / "company" / "onboarding.json").read_text()
+    )
+    assert state["github_repo"] == "octo/demo"
+    assert state["model_preferences"]["qa"]["model"] == "gpt-5.5"

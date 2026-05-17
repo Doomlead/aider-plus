@@ -580,6 +580,10 @@ class DesktopCompanySession:
             ),
             "logs_url": deployment_result.get("logs_url")
             or deploy_payload.get("logs_url"),
+            "deployed_at": deployment_result.get("deployed_at")
+            or deploy_payload.get("deployed_at"),
+            "deployment_notes": deployment_result.get("deployment_notes")
+            or deploy_payload.get("deployment_notes"),
             "rollback_command": (
                 deployment_result.get("rollback_command")
                 or deploy_payload.get("rollback_command")
@@ -643,6 +647,8 @@ class DesktopCompanySession:
             "last_deployment_provider": last_build.get("provider", "local"),
             "last_deployment_url": last_build.get("deploy_url"),
             "last_deployment_logs_url": last_build.get("logs_url"),
+            "last_deployment_deployed_at": last_build.get("deployed_at"),
+            "last_deployment_notes": last_build.get("deployment_notes"),
             "last_deployment_rollback_command": last_build.get("rollback_command"),
             "active_warehouse_products": active_products,
             "mcp_status": (
@@ -1932,7 +1938,9 @@ class AiderPlusDesktop:
                     f"Last build status: {overview['last_build_status']}",
                     f"Last deployment provider: [{overview.get('last_deployment_provider', 'local')}]",
                     f"Last deployment URL: {overview.get('last_deployment_url') or 'n/a'}",
+                    f"Last Deployed: {overview.get('last_deployment_deployed_at') or 'n/a'}",
                     f"Last deployment logs URL: {overview.get('last_deployment_logs_url') or 'n/a'}",
+                    f"Deployment notes: {overview.get('last_deployment_notes') or 'n/a'}",
                     "Rollback button: "
                     + (
                         "enabled"

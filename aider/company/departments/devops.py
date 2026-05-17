@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import shlex
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -152,6 +153,8 @@ class DevOpsDepartment(Department):
                 "deploy_url": deployment.deployed_url,
                 "logs_url": deployment.logs_url,
                 "rollback_command": deployment.rollback_command,
+                "deployment_notes": deployment.deployment_notes,
+                "deployed_at": deployment.deployed_at,
                 "git_tag": build_artifact.tag,
                 "environment": deployment.environment,
                 "deployment_target": (
@@ -171,6 +174,8 @@ class DevOpsDepartment(Department):
                 "deploy_url": deployment.deployed_url,
                 "logs_url": deployment.logs_url,
                 "rollback_command": deployment.rollback_command,
+                "deployment_notes": deployment.deployment_notes,
+                "deployed_at": deployment.deployed_at,
                 "git_tag": build_artifact.tag,
                 "build_artifact": build_artifact.to_dict(),
                 "deployment_result": deployment.to_dict(),
@@ -261,7 +266,7 @@ class DevOpsDepartment(Department):
             },
         )
         commands = self._deployment_commands(task, target, build_artifact)
-        high_risk_allowed = self._high_risk_approved(task)
+        high_risk_allowed = self._high_risk_approved(task, target)
         logs: list[str] = []
         for command in commands:
             logs.append(
@@ -273,6 +278,7 @@ class DevOpsDepartment(Department):
                 )
             )
         log_artifacts = self._capture_logs(task, "deploy", logs)
+        deployed_at = self._deployment_timestamp()
         if commands and any(not self._command_succeeded(log) for log in logs):
             result = DeploymentResult(
                 environment=target.environment,
@@ -284,6 +290,10 @@ class DevOpsDepartment(Department):
                 rollback_command=self._rollback_command(
                     task, target, build_artifact, handover
                 ),
+                deployment_notes=self._deployment_notes(
+                    task, target, commands, "failed", deployed_at
+                ),
+                deployed_at=deployed_at,
                 build_artifact=build_artifact,
                 deployment_logs=self._summarize_logs(logs),
                 log_artifacts=log_artifacts,
@@ -318,6 +328,10 @@ class DevOpsDepartment(Department):
             rollback_command=self._rollback_command(
                 task, target, build_artifact, handover
             ),
+            deployment_notes=self._deployment_notes(
+                task, target, commands, "success", deployed_at
+            ),
+            deployed_at=deployed_at,
             build_artifact=build_artifact,
             deployment_logs=self._summarize_logs(logs),
             log_artifacts=log_artifacts,
@@ -602,6 +616,7 @@ class DevOpsDepartment(Department):
                     "provider": target.provider if target else "local",
                     "deployed_url": deployed_url,
                     "deployment_target": target.to_dict() if target else None,
+                    "deployed_at": self._deployment_timestamp(),
                     "build_artifact": artifact.to_dict(),
                 },
                 indent=2,
@@ -676,7 +691,7 @@ class DevOpsDepartment(Department):
             target.environment = self._environment(task, handover)
         target.provider = self._normalize_provider(target.provider)
         target.environment = target.environment or self._environment(task, handover)
-        return target
+        return self._merge_environment_config(target)
 
     @staticmethod
     def _normalize_provider(provider: str) -> str:
@@ -688,6 +703,19 @@ class DevOpsDepartment(Department):
             "docker": "docker-compose",
         }
         return aliases.get(normalized, normalized or "local")
+
+    def _merge_environment_config(self, target: DeploymentTarget) -> DeploymentTarget:
+        config = dict(target.config or {})
+        environment_configs = (
+            config.get("environments") or config.get("environment_configs") or {}
+        )
+        if isinstance(environment_configs, dict):
+            env_config = environment_configs.get(target.environment) or {}
+            if isinstance(env_config, dict):
+                merged = {**config, **env_config}
+                merged["environments"] = environment_configs
+                target.config = merged
+        return target
 
     def _validate_target_provider(self, target: DeploymentTarget) -> None:
         allowed = {
@@ -824,12 +852,75 @@ class DevOpsDepartment(Department):
         return tag if tag.startswith("v") else f"v{tag}"
 
     @staticmethod
-    def _high_risk_approved(task: CompanyTask) -> bool:
+    def _high_risk_approved(
+        task: CompanyTask, target: DeploymentTarget | None = None
+    ) -> bool:
         payload = task.payload if isinstance(task.payload, dict) else {}
-        return bool(
+        context = task.context if isinstance(task.context, dict) else {}
+        environment = (target.environment if target else None) or str(
+            payload.get("environment") or context.get("environment") or "production"
+        )
+        approval_level = str(
+            (target.config or {}).get("approval_level") if target else "high"
+        ).lower()
+        approvals = payload.get("deployment_approvals") or context.get(
+            "deployment_approvals"
+        )
+        env_approved = False
+        if isinstance(approvals, dict):
+            env_approved = bool(
+                approvals.get(environment)
+                or approvals.get(
+                    f"{target.provider}:{environment}" if target else environment
+                )
+            )
+        env_key = re.sub(r"[^A-Za-z0-9]+", "_", environment).strip("_").lower()
+        approved = bool(
             payload.get("devops_high_risk_approved")
             or payload.get("deploy_approved")
-            or task.context.get("devops_high_risk_approved")
+            or context.get("devops_high_risk_approved")
+            or context.get("deploy_approved")
+            or payload.get(f"devops_{env_key}_approved")
+            or payload.get(f"deploy_approved_{env_key}")
+            or context.get(f"devops_{env_key}_approved")
+            or context.get(f"deploy_approved_{env_key}")
+            or env_approved
+        )
+        if approval_level in {"critical", "production"}:
+            return bool(
+                approved
+                and (
+                    payload.get("devops_critical_approved")
+                    or payload.get(f"devops_{env_key}_approved")
+                    or context.get("devops_critical_approved")
+                    or context.get(f"devops_{env_key}_approved")
+                    or env_approved
+                )
+            )
+        return approved
+
+    @staticmethod
+    def _deployment_timestamp() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _deployment_notes(
+        task: CompanyTask,
+        target: DeploymentTarget,
+        commands: list[str],
+        status: str,
+        deployed_at: str,
+    ) -> str:
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        if payload.get("deployment_notes"):
+            return str(payload["deployment_notes"])
+        approval_level = str((target.config or {}).get("approval_level") or "high")
+        command_note = (
+            f"{len(commands)} provider command(s)" if commands else "local manifest"
+        )
+        return (
+            f"{status.title()} deployment to {target.provider}/{target.environment} "
+            f"at {deployed_at} using {command_note}; approval_level={approval_level}."
         )
 
     def _capture_logs(

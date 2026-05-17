@@ -413,8 +413,9 @@ for a green handoff:
   `DeliveryHandover.from_dict()` provide structured release schemas so
   build/deploy artifacts can round-trip through department payloads, metadata,
   dashboards, and audit surfaces. Deployment results now include the selected
-  provider/environment/config target, deployed URL, logs URL, and a recorded
-  rollback command when one can be generated safely.
+  provider/environment/config target, deployed URL, logs URL, human-readable
+  `deployment_notes`, `deployed_at` timestamp, and a recorded rollback command
+  when one can be generated safely.
 - `DevOpsDepartment` validates the Delivery handover, performs builds, selects a
   provider target, performs deployments, emits `devops_build_started`,
   `devops_build_success`, `devops_deploy_started`, `devops_deployed`, and
@@ -426,6 +427,9 @@ for a green handoff:
   `DeploymentTarget.config` values instead of free-form shell snippets. Every
   provider command is still treated as high risk and requires explicit approval
   flags such as `devops_high_risk_approved`/`deploy_approved` before execution.
+  Environment-specific approval signals such as `deployment_approvals.staging`,
+  `devops_production_approved`, or `devops_critical_approved` can be used with
+  target config `approval_level` values like `standard` or `critical`.
 - Build detection can infer Docker, Python package, npm, Make, Cargo, or Go build
   commands from repository files, while configured deployment commands remain
   supported for real environments under the same allowlist/approval gates. When
@@ -461,17 +465,39 @@ for a green handoff:
     "deploy_approved": true
   }
   ```
+
+  Environment-specific config can override provider settings and approval level:
+
+  ```json
+  {
+    "deployment_target": {
+      "provider": "railway",
+      "environment": "staging",
+      "config": {
+        "service": "web",
+        "approval_level": "critical",
+        "environments": {
+          "staging": {"service": "staging-web", "approval_level": "standard"},
+          "production": {"service": "prod-web", "approval_level": "critical"}
+        }
+      }
+    },
+    "deployment_approvals": {"staging": true},
+    "deployment_notes": "Deploy staging release candidate for smoke testing."
+  }
+  ```
 - The orchestrator routes validated release approvals through
   `_execute_devops_release()` and passes Delivery's `DeploymentTarget` into
   Delivery-originated DevOps handoff tasks so the lifecycle remains Engineering →
   QA → Delivery → DevOps.
 - Company dashboard/status output includes the latest build artifact, provider
-  badge text, deployment status, deployed URL, logs URL, and a Rollback button
-  that copies the recorded rollback command for human review instead of running
-  it automatically.
+  badge text, deployment status, deployed URL, logs URL, deployment notes,
+  **Last Deployed** timestamp, and a Rollback button that copies the recorded
+  rollback command for human review instead of running it automatically.
 - DevOps coverage includes successful build/deploy execution, provider-specific
   command generation, disabled-provider blocking, readiness-gate blocking,
-  high-risk command gating, log URL generation, and schema round-tripping tests.
+  high-risk command gating, log URL generation, environment-specific config
+  merging, mocked Vercel end-to-end deployment, and schema round-tripping tests.
 
 Company state includes lifecycle phases, approval gates, resolved task IDs,
 pending tasks, recovered gates, audit events, playbook memory, and project

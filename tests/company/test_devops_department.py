@@ -122,6 +122,8 @@ def test_devops_schema_round_trips_build_and_deployment_result():
         deployed_url="https://invite-flow.example.com",
         rollback_url="rollback://previous",
         build_artifact=artifact,
+        deployment_notes="Manual production smoke passed.",
+        deployed_at="2026-05-17T00:00:00+00:00",
         deployment_logs="deployed",
     )
     handover = DeliveryHandover.from_dict(ready_handover())
@@ -314,3 +316,120 @@ def test_devops_logs_url_uses_configured_artifact_upload_target(tmp_path):
     deployment = deliverable.payload["deployment_result"]
     assert deployment["logs_url"].startswith("s3://aider-deploy-logs/releases/local/")
     assert deliverable.payload["logs_url"] == deployment["logs_url"]
+
+
+def test_devops_merges_environment_specific_deployment_config(tmp_path):
+    commands = []
+    department = DevOpsDepartment(ProjectMemory(str(tmp_path)))
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        department._validate_command(command, high_risk_allowed=high_risk_allowed)
+        commands.append(command)
+        return f"$ {command}\nexit_code=0\nrailway deployed"
+
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(
+        tmp_path,
+        deployment_commands=[],
+        deployment_target={
+            "provider": "railway",
+            "environment": "staging",
+            "config": {
+                "service": "default-web",
+                "approval_level": "critical",
+                "environments": {
+                    "staging": {
+                        "service": "staging-web",
+                        "approval_level": "standard",
+                    },
+                    "production": {
+                        "service": "prod-web",
+                        "approval_level": "critical",
+                    },
+                },
+            },
+        },
+        deployment_approvals={"staging": True},
+    )
+
+    deliverable = asyncio.run(department.process(task))
+
+    assert deliverable.status == "success"
+    deployment = deliverable.payload["deployment_result"]
+    assert deployment["target"]["config"]["service"] == "staging-web"
+    assert deployment["deployment_notes"].endswith("approval_level=standard.")
+    assert (
+        commands[-1]
+        == "railway up --detach --service staging-web --environment staging"
+    )
+
+
+def test_devops_critical_environment_requires_environment_approval(tmp_path):
+    department = DevOpsDepartment(ProjectMemory(str(tmp_path)))
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        department._validate_command(command, high_risk_allowed=high_risk_allowed)
+        return f"$ {command}\nexit_code=0\nshould not deploy"
+
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(
+        tmp_path,
+        deployment_commands=[],
+        deployment_target={
+            "provider": "vercel",
+            "environment": "production",
+            "config": {"project": "invite-flow", "approval_level": "critical"},
+        },
+        deploy_approved=True,
+    )
+
+    deliverable = asyncio.run(department.process(task))
+
+    assert deliverable.status == "failure"
+    assert "High-risk DevOps command requires approval" in deliverable.payload["error"]
+
+
+def test_devops_mocked_vercel_deploy_end_to_end_records_observability(tmp_path):
+    department = DevOpsDepartment(ProjectMemory(str(tmp_path)))
+    commands = []
+    events = []
+
+    async def capture(event):
+        events.append(event)
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        department._validate_command(command, high_risk_allowed=high_risk_allowed)
+        commands.append((command, high_risk_allowed))
+        if command.startswith("vercel"):
+            return f"$ {command}\nexit_code=0\nhttps://invite-flow.vercel.app"
+        return f"$ {command}\nexit_code=0\nbuild ok"
+
+    department._on_event = capture
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(
+        tmp_path,
+        deployment_commands=[],
+        deployment_target={
+            "provider": "vercel",
+            "environment": "production",
+            "config": {
+                "project": "invite-flow",
+                "logs_url": "https://vercel.example/logs/123",
+            },
+        },
+        devops_production_approved=True,
+        deployment_notes="Release train 2026.05 production deploy.",
+    )
+
+    deliverable = asyncio.run(department.process(task))
+
+    assert deliverable.status == "success"
+    assert commands == [
+        ("python -m build", False),
+        ("vercel deploy --yes --prod", True),
+    ]
+    deployment = deliverable.payload["deployment_result"]
+    assert deployment["deployed_at"]
+    assert deployment["deployment_notes"] == "Release train 2026.05 production deploy."
+    assert deployment["logs_url"] == "https://vercel.example/logs/123"
+    assert "devops_deployed" in [event.payload["name"] for event in events]

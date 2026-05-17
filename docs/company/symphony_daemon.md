@@ -9,8 +9,8 @@ approval, MCP, QA, and proof-of-work patterns as the execution model.
 
 - **Repo-owned workflow policy** in an `AIDER_WORKFLOW.md` or
   `.aider/company/WORKFLOW.md` file.
-- **Tracker adapter boundary** with a local JSON tracker today and Linear/GitHub
-  adapters as future drop-ins.
+- **Tracker adapter boundary** with local JSON and GitHub Issues adapters, plus
+  room for Linear or other tracker drop-ins.
 - **One isolated Git workspace per issue** under a configured runs directory.
 - **Bounded daemon ticks** controlled by `agent.max_concurrent_agents` and
   `agent.max_attempts`.
@@ -29,6 +29,16 @@ tracker:
   kind: local
   path: .aider/company/issues.json
   labels: [aider-plus]
+  # For GitHub Issues, use kind: github and add a github section:
+  # repo: owner/repo
+  # github:
+  #   cache_ttl_seconds: 300
+  #   max_retries: 2
+  #   labels:
+  #     todo: company:todo
+  #     in_progress: company:in-progress
+  #     retry: company:retry
+  #     done: company:done
 workspace:
   root: ./AiderPlusWarehouse/runs
   clean: false
@@ -64,7 +74,7 @@ The prompt body supports these placeholders:
 
 ## Local JSON tracker
 
-The first adapter is deliberately local and deterministic:
+The local adapter is deliberately deterministic:
 
 ```json
 {
@@ -83,8 +93,66 @@ The first adapter is deliberately local and deterministic:
 
 Eligible statuses are `todo`, `ready`, `open`, and `retry`. The daemon updates
 status, comments, and pull request URLs in the same JSON file. This mirrors the
-same adapter operations that future Linear and GitHub adapters should implement:
-list candidates, claim, comment, transition, and attach a PR.
+same adapter operations used by the GitHub adapter: list candidates, claim,
+comment, transition, and attach a PR.
+
+
+## GitHub Issues tracker
+
+Use the GitHub adapter when you want the daemon to pull work from a real
+repository issue tracker. Configure a personal access token with environment
+variables:
+
+```bash
+export GITHUB_TOKEN=ghp_your_token
+export GITHUB_REPO=owner/repo
+```
+
+For a more secure production setup, authenticate with a GitHub App installation
+instead of a personal access token. Install the optional GitHub extra first when
+you need GitHub App JWT signing:
+
+```bash
+python -m pip install -e '.[github]'
+export GITHUB_APP_ID=12345
+export GITHUB_APP_INSTALLATION_ID=67890
+export GITHUB_APP_PRIVATE_KEY_PATH=/secure/path/aider-company.private-key.pem
+export GITHUB_REPO=owner/repo
+```
+
+Then set the workflow tracker to GitHub:
+
+```yaml
+tracker:
+  kind: github
+  repo: owner/repo  # optional when GITHUB_REPO is set
+  labels: [aider-plus]
+  github:
+    cache_ttl_seconds: 300  # 5-minute issue-list cache for frequent ticks
+    max_retries: 2          # retry rate-limited/transient API responses
+    labels:
+      todo: company:todo
+      in_progress: company:in-progress
+      retry: company:retry
+      done: company:done
+```
+
+Or override the tracker from the CLI for a workflow that already defines the
+labels, workspace, agent, company, and hooks policy:
+
+```bash
+aider company daemon --workflow AIDER_WORKFLOW.md --tracker github --repo owner/repo --once
+```
+
+GitHub issue state is mapped into daemon states with labels: open issues are
+`todo` by default, `in_progress`/`running`/`claimed` labels map to
+`in_progress`, `retry` maps to `retry`, and closed issues or a `done` label map
+to `done`. The optional `tracker.github.labels` mapping lets teams use their
+own label names while keeping the daemon states stable. Claiming an issue applies
+`in_progress`; completing a run applies `done` and closes the issue. Comments
+and PR links are posted back to the issue. The adapter caches issue-list results
+for 5 minutes by default (configurable up to 10 minutes) and retries
+rate-limited/transient GitHub responses before surfacing an error.
 
 ## CLI
 

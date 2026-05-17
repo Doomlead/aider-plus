@@ -21,6 +21,7 @@ class TrackerWorkflowConfig:
     path: str | None = None
     repo: str | None = None
     labels: tuple[str, ...] = ()
+    github: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,11 @@ class CompanyWorkflow:
                     else None
                 ),
                 labels=tuple(str(label) for label in labels),
+                github=(
+                    dict(tracker_data.get("github") or {})
+                    if isinstance(tracker_data.get("github") or {}, dict)
+                    else {}
+                ),
             ),
             workspace=WorkspaceWorkflowConfig(
                 root=(

@@ -722,6 +722,16 @@ def get_parser(default_config_files, git_root):
         ),
     )
     group.add_argument(
+        "--adapter",
+        choices=("discord", "slack", "webhook"),
+        action="append",
+        default=[],
+        help=(
+            "Enable or configure a thin chat/webhook adapter surface; may be repeated"
+            " (choices: discord, slack, webhook)"
+        ),
+    )
+    group.add_argument(
         "--show-repo-map",
         action="store_true",
         help="Print the repo map and exit (debug)",

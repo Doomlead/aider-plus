@@ -132,8 +132,15 @@ The orchestrator owns these concerns:
 - shared EventBus publication for live surfaces.
 
 When adding a new surface, prefer sending a request to the COO/orchestrator and
-rendering events from the shared bus. When adding a new workflow rule, prefer
-putting it in the orchestrator or a department instead of in a GUI or adapter.
+rendering events from the shared bus. Thin chat/webhook surfaces should subclass
+`aider.integrations.adapters.ThinAdapter`, normalize inbound payloads to
+`AdapterMessage`, delegate user text with `handle_user_input()`, and subscribe to
+EventBus updates with `subscribe_to_bus()` so shared `surface_messages.py`
+renderers own status, approval, lifecycle, daemon, deployment, and COO text.
+`aider.integrations.discord.DiscordAiderBot` and
+`aider.integrations.slack.SlackAdapter` are the reference implementations. When
+adding a new workflow rule, prefer putting it in the orchestrator or a department
+instead of in a GUI or adapter.
 
 ## 5. Departments: role-specific loops and deliverables
 

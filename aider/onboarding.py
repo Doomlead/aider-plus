@@ -37,7 +37,9 @@ def run_onboarding(io: InputOutput | None = None) -> int:
     io.tool_output("👋 Welcome to Aider Company Onboarding")
     if config_exists:
         io.tool_warning(f"Existing config found at {config_path} or .aider.conf.yml.")
-        if not io.confirm_ask("Do you want to continue and update onboarding settings?", default="y"):
+        if not io.confirm_ask(
+            "Do you want to continue and update onboarding settings?", default="y"
+        ):
             io.tool_output("Onboarding cancelled.")
             return 0
 
@@ -46,8 +48,11 @@ def run_onboarding(io: InputOutput | None = None) -> int:
         ("anthropic_api_key", "ANTHROPIC_API_KEY"),
         ("openrouter_api_key", "OPENROUTER_API_KEY"),
         ("discord_bot_token", "DISCORD_BOT_TOKEN"),
+        ("slack_bot_token", "SLACK_BOT_TOKEN"),
+        ("slack_signing_secret", "SLACK_SIGNING_SECRET"),
+        ("webhook_adapter_secret", "AIDER_WEBHOOK_ADAPTER_SECRET"),
     ]
-    config: dict[str, str | bool] = {"use_architect_mode": True}
+    config: dict[str, str | bool | list[str]] = {"use_architect_mode": True}
     for field, env_name in provider_keys:
         current = os.environ.get(env_name, "")
         prompt = f"Enter {env_name} (leave blank to skip)"
@@ -63,17 +68,32 @@ def run_onboarding(io: InputOutput | None = None) -> int:
     repo_choice = input(f"Repository path to initialize [{repo_guess}]: ").strip()
     config["default_repo"] = repo_choice or repo_guess
 
+    adapters = input(
+        "Additional adapters to enable (comma-separated: discord, slack, webhook) []: "
+    ).strip()
+    config["adapters"] = [
+        adapter.strip()
+        for adapter in adapters.split(",")
+        if adapter.strip() in {"discord", "slack", "webhook"}
+    ]
+
     paths["config_dir"].mkdir(parents=True, exist_ok=True)
     paths["memory_dir"].mkdir(parents=True, exist_ok=True)
     Path(workspace).expanduser().mkdir(parents=True, exist_ok=True)
-    project_memory = Path(config["default_repo"]).expanduser() / ".aider" / "project_memory.json"
+    project_memory = (
+        Path(config["default_repo"]).expanduser() / ".aider" / "project_memory.json"
+    )
     project_memory.parent.mkdir(parents=True, exist_ok=True)
     if not project_memory.exists():
-        project_memory.write_text(json.dumps({"initialized_by": "aider onboard"}, indent=2), encoding="utf-8")
+        project_memory.write_text(
+            json.dumps({"initialized_by": "aider onboard"}, indent=2), encoding="utf-8"
+        )
 
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     io.tool_warning(f"Saved onboarding config to {config_path}.")
-    io.tool_warning("API keys are stored in plain text. Consider moving keys to environment variables.")
+    io.tool_warning(
+        "API keys are stored in plain text. Consider moving keys to environment variables."
+    )
     io.tool_output("✅ Onboarding complete.")
     io.tool_output("Next steps: Run `aider` to start the company agent.")
     return 0
@@ -99,7 +119,9 @@ def check_openrouter_tier(api_key):
         response.raise_for_status()
         data = response.json()
         # According to the documentation, 'is_free_tier' will be true if the user has never paid
-        return data.get("data", {}).get("is_free_tier", True)  # Default to True if not found
+        return data.get("data", {}).get(
+            "is_free_tier", True
+        )  # Default to True if not found
     except Exception:
         # If there's any error, we'll default to assuming free tier
         return True
@@ -231,7 +253,9 @@ def generate_pkce_codes():
     code_verifier = secrets.token_urlsafe(64)
     hasher = hashlib.sha256()
     hasher.update(code_verifier.encode("utf-8"))
-    code_challenge = base64.urlsafe_b64encode(hasher.digest()).rstrip(b"=").decode("utf-8")
+    code_challenge = (
+        base64.urlsafe_b64encode(hasher.digest()).rstrip(b"=").decode("utf-8")
+    )
     return code_verifier, code_challenge
 
 
@@ -281,7 +305,9 @@ def start_openrouter_oauth_flow(io, analytics):
     port = find_available_port()
     if not port:
         io.tool_error("Could not find an available port between 8484 and 8584.")
-        io.tool_error("Please ensure a port in this range is free, or configure manually.")
+        io.tool_error(
+            "Please ensure a port in this range is free, or configure manually."
+        )
         return None
 
     callback_url = f"http://localhost:{port}/callback/aider"
@@ -330,8 +356,12 @@ def start_openrouter_oauth_flow(io, analytics):
     def run_server():
         nonlocal server_error
         try:
-            with socketserver.TCPServer(("localhost", port), OAuthCallbackHandler) as httpd:
-                io.tool_output(f"Temporary server listening on {callback_url}", log_only=True)
+            with socketserver.TCPServer(
+                ("localhost", port), OAuthCallbackHandler
+            ) as httpd:
+                io.tool_output(
+                    f"Temporary server listening on {callback_url}", log_only=True
+                )
                 server_started.set()  # Signal that the server is ready
                 # Wait until shutdown is requested or timeout occurs (handled by main thread)
                 while not shutdown_server.is_set():
@@ -372,12 +402,16 @@ def start_openrouter_oauth_flow(io, analytics):
     }
     auth_url = f"{auth_url_base}?{'&'.join(f'{k}={v}' for k, v in auth_params.items())}"
 
-    io.tool_output("\nPlease open this URL in your browser to connect Aider with OpenRouter:")
+    io.tool_output(
+        "\nPlease open this URL in your browser to connect Aider with OpenRouter:"
+    )
     io.tool_output()
     print(auth_url)
 
     MINUTES = 5
-    io.tool_output(f"\nWaiting up to {MINUTES} minutes for you to finish in the browser...")
+    io.tool_output(
+        f"\nWaiting up to {MINUTES} minutes for you to finish in the browser..."
+    )
     io.tool_output("Use Control-C to interrupt.")
 
     try:
@@ -391,7 +425,9 @@ def start_openrouter_oauth_flow(io, analytics):
         shutdown_server.wait(timeout=MINUTES * 60)  # Convert minutes to seconds
     except KeyboardInterrupt:
         io.tool_warning("\nOAuth flow interrupted.")
-        analytics.event("oauth_flow_failed", provider="openrouter", reason="user_interrupt")
+        analytics.event(
+            "oauth_flow_failed", provider="openrouter", reason="user_interrupt"
+        )
         interrupted = True
         # Ensure the server thread is signaled to shut down
         shutdown_server.set()
@@ -430,20 +466,30 @@ def start_openrouter_oauth_flow(io, analytics):
             with open(key_file, "a", encoding="utf-8") as f:
                 f.write(f'OPENROUTER_API_KEY="{api_key}"\n')
 
-            io.tool_warning("Aider will load the OpenRouter key automatically in future sessions.")
+            io.tool_warning(
+                "Aider will load the OpenRouter key automatically in future sessions."
+            )
             io.tool_output()
 
             analytics.event("oauth_flow_success", provider="openrouter")
             return api_key
         except Exception as e:
-            io.tool_error(f"Successfully obtained key, but failed to save it to file: {e}")
-            io.tool_warning("Set OPENROUTER_API_KEY environment variable for this session only.")
+            io.tool_error(
+                f"Successfully obtained key, but failed to save it to file: {e}"
+            )
+            io.tool_warning(
+                "Set OPENROUTER_API_KEY environment variable for this session only."
+            )
             # Still return the key for the current session even if saving failed
-            analytics.event("oauth_flow_save_failed", provider="openrouter", reason=str(e))
+            analytics.event(
+                "oauth_flow_save_failed", provider="openrouter", reason=str(e)
+            )
             return api_key
     else:
         io.tool_error("Authentication with OpenRouter failed.")
-        analytics.event("oauth_flow_failed", provider="openrouter", reason="code_exchange_failed")
+        analytics.event(
+            "oauth_flow_failed", provider="openrouter", reason="code_exchange_failed"
+        )
         return None
 
 

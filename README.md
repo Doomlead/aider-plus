@@ -28,9 +28,11 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
 - **Warehouse-backed product studio:** `aider company new` can create a named
   product repo inside a central warehouse, register it, scaffold starter files,
   and then run Company Mode against the new repo.
-- **Zero-to-MVP templates:** lightweight templates for SaaS dashboards, Next.js
-  apps, FastAPI backends, CLI tools, Discord bots, browser extensions, data apps,
-  and internal admin tools.
+- **Zero-to-MVP templates:** richer templates for Next.js SaaS apps, Python
+  FastAPI APIs, Electron desktop apps, data dashboards, SaaS dashboards, CLI
+  tools, Discord bots, browser extensions, and internal admin tools. Templates
+  now include recommended skills, starter files, post-creation hooks, and PRD
+  prompt seeds.
 - **Browser and native desktop GUIs:** shared Company dashboards, direct chat,
   per-agent chat tabs, settings editors, approvals, audit views, memory views,
   Delivery summaries, skill quick views, daemon status/proof-of-work panels, and
@@ -123,7 +125,7 @@ aider company templates
 
 ```bash
 aider company create "Build a habit tracker with login, streaks, and a dashboard" \
-  --template nextjs-app \
+  --template nextjs-saas \
   --name habit-tracker
 ```
 
@@ -134,7 +136,7 @@ the current Git repo. Use this when you already have the product repository open
 
 ```bash
 aider company create "Build a Stripe webhook API" \
-  --template fastapi-backend \
+  --template python-fastapi-api \
   --dry-plan
 ```
 
@@ -156,7 +158,7 @@ Create a new product repo inside it:
 ```bash
 aider company new "Build a habit tracker with streaks" \
   --name habit-tracker \
-  --template nextjs-app \
+  --template nextjs-saas \
   --warehouse ~/AiderPlusWarehouse
 ```
 
@@ -166,8 +168,8 @@ Aider Plus will:
 2. initialize it as a Git repo;
 3. register it in `warehouse.json`;
 4. scaffold a coherent starter structure from the selected template;
-5. write product metadata under `.aider/company/`;
-6. switch into that repo and run the Company implementation loop.
+5. write product metadata, placeholder skills, and post-creation hooks under `.aider/`;
+6. switch into that repo and inject template-specific Product guidance into the Company implementation loop.
 
 A warehouse has this shape:
 
@@ -179,7 +181,10 @@ AiderPlusWarehouse/
       .git/
       README.md
       docs/product-brief.md
+      docs/company-mode.md
       .aider/company/product.json
+      .aider/company/post-creation.md
+      .aider/skills/.../SKILL.md
       ...template starter files...
   .aider/coo/                 # cross-product COO memory
 ```
@@ -200,7 +205,7 @@ Preview a new product without creating it:
 ```bash
 aider company new "Build a Stripe webhook API" \
   --name billing-hooks \
-  --template fastapi-backend \
+  --template python-fastapi-api \
   --warehouse ~/AiderPlusWarehouse \
   --dry-plan
 ```
@@ -209,12 +214,20 @@ aider company new "Build a Stripe webhook API" \
 
 ## Zero-to-MVP templates
 
-Templates are lightweight by design. They create starter directories, README
-files, product metadata, and template-specific seams so Company Mode can build a
-small coherent MVP without dumping a full framework distribution into the repo.
+Templates are lightweight by design but now carry richer product metadata. They
+create starter directories, README files, `.aider/company/product.json`,
+`.aider/company/post-creation.md`, placeholder `.aider/skills/*/SKILL.md` files,
+and template-specific seams so Company Mode can build a small coherent MVP
+without dumping a full framework distribution into the repo. The generated
+Product prompt includes recommended skills, an example PRD seed, discovery
+focus, engineering defaults, QA gates, and post-creation guidance.
 
 Current templates:
 
+- `nextjs-saas` — production-shaped SaaS app with onboarding, billing seams, settings, dashboards, and provider adapters.
+- `python-fastapi-api` — contract-first FastAPI API with routers, schemas, services, repositories, health checks, and tests.
+- `electron-desktop-app` — cross-platform desktop app with main/preload/renderer separation, IPC contracts, local data, and packaging seams.
+- `data-dashboard` — analytics dashboard with fixtures, metric definitions, charts, filters, exports, and data-quality checks.
 - `saas-dashboard` — authenticated dashboard, metrics, CRUD workflows, and admin views.
 - `nextjs-app` — React/Next.js-style routes, components, state, and UI tests.
 - `fastapi-backend` — Python API with routes, schemas, services, persistence boundaries, and tests.
@@ -223,6 +236,20 @@ Current templates:
 - `browser-extension` — manifest, popup/options UI, content scripts, storage, and tests.
 - `data-app` — ingestion, transforms, charts, exports, fixtures, and validation checks.
 - `internal-admin` — back-office workflows, roles, audit, approvals, and operational safeguards.
+
+Example template-specific starts:
+
+```bash
+aider company new "Build a founder revenue dashboard with CSV import and cohort charts" \
+  --template data-dashboard \
+  --name founder-metrics \
+  --warehouse ~/AiderPlusWarehouse
+
+aider company new "Build a secure offline notes app with encrypted local files" \
+  --template electron-desktop-app \
+  --name secure-notes \
+  --warehouse ~/AiderPlusWarehouse
+```
 
 ---
 

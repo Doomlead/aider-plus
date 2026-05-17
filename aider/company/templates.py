@@ -9,8 +9,10 @@ the same repo-native Aider workflow can create v0 and keep iterating afterward.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from string import Template
+from types import MappingProxyType
+from typing import Mapping
 
 
 @dataclass(frozen=True)
@@ -24,9 +26,23 @@ class ProjectTemplate:
     engineering_defaults: tuple[str, ...]
     qa_focus: tuple[str, ...]
     iteration_hooks: tuple[str, ...]
+    recommended_skills: tuple[str, ...] = ()
+    starter_files: Mapping[str, str] = field(default_factory=dict)
+    post_creation_instructions: tuple[str, ...] = ()
+    example_prd_prompt: str = ""
 
     def summary(self) -> str:
-        return f"{self.key}: {self.label} — {self.description}"
+        skills = (
+            ", ".join(self.recommended_skills)
+            if self.recommended_skills
+            else "generalist"
+        )
+        return f"{self.key}: {self.label} — {self.description} (skills: {skills})"
+
+    def all_starter_files(self) -> Mapping[str, str]:
+        """Return immutable template-owned starter files."""
+
+        return MappingProxyType(dict(self.starter_files))
 
 
 TEMPLATES: dict[str, ProjectTemplate] = {
@@ -214,6 +230,161 @@ TEMPLATES: dict[str, ProjectTemplate] = {
             "keep workflow queues extensible for future departments or statuses",
         ),
     ),
+    "nextjs-saas": ProjectTemplate(
+        key="nextjs-saas",
+        label="Next.js SaaS",
+        description="Production-shaped SaaS app with onboarding, billing seams, settings, and dashboard flows.",
+        discovery_focus=(
+            "ideal customer profile, workspace model, and onboarding activation moment",
+            "subscription tiers, billing events, and upgrade/downgrade seams",
+            "core dashboard jobs-to-be-done, empty states, and collaboration roles",
+        ),
+        engineering_defaults=(
+            "organize app-router routes around marketing, onboarding, app, and settings areas",
+            "keep auth, billing, analytics, and data providers behind replaceable adapters",
+            "document environment variables and mock external services by default",
+        ),
+        qa_focus=(
+            "onboarding, protected routes, workspace switching, billing placeholders, and empty states",
+            "component contracts for loading/error states and accessibility-critical controls",
+        ),
+        iteration_hooks=(
+            "capture pricing, onboarding, and role changes as Product memory before implementation",
+            "preserve provider interfaces so Delivery can swap mocks for production services",
+        ),
+        recommended_skills=("product", "ux", "frontend", "qa", "devops"),
+        starter_files={
+            "README.md": """# $project_name\n\n$idea\n\nAider Plus scaffolded this as a Next.js SaaS MVP with clear seams for Product, UX, Engineering, Delivery, and DevOps.\n\n## Company Mode\n- Begin in `docs/product-brief.md` and `.aider/company/product.json`.\n- Use `docs/company-mode.md` for department handoffs and acceptance gates.\n- Keep auth, billing, analytics, and data providers mocked until credentials exist.\n\n## Suggested Structure\n- `app/(marketing)/` — public landing and conversion routes\n- `app/(onboarding)/` — activation flow and first workspace setup\n- `app/(app)/dashboard/` — authenticated product experience\n- `components/` — accessible, reusable UI states\n- `lib/providers/` — auth, billing, analytics, and data adapters\n- `tests/` — route, component, and provider-contract checks\n""",
+            "app/(marketing)/README.md": "Public landing, pricing, and conversion routes live here.\n",
+            "app/(onboarding)/README.md": "First-run activation and workspace setup flows live here.\n",
+            "app/(app)/dashboard/README.md": "Authenticated dashboard and core SaaS workflows live here.\n",
+            "components/README.md": "Reusable components with loading, empty, error, and disabled states live here.\n",
+            "lib/providers/README.md": "Mockable auth, billing, analytics, and data provider adapters live here.\n",
+            "tests/README.md": "Add onboarding, protected-route, billing-placeholder, and accessibility checks here.\n",
+        },
+        post_creation_instructions=(
+            "Run Product discovery before selecting auth or billing vendors.",
+            "Keep SaaS provider adapters mocked until real credentials and deployment targets are known.",
+            "Ask UX to review onboarding, empty states, and upgrade prompts before Engineering hardens flows.",
+        ),
+        example_prd_prompt="Draft a PRD for a B2B SaaS MVP with onboarding, a workspace dashboard, role-aware settings, and mocked billing seams.",
+    ),
+    "python-fastapi-api": ProjectTemplate(
+        key="python-fastapi-api",
+        label="Python FastAPI API",
+        description="Contract-first Python API with routers, schemas, services, persistence adapters, and operational checks.",
+        discovery_focus=(
+            "API consumers, resource lifecycle, idempotency, and auth expectations",
+            "data model, persistence boundaries, migration needs, and fixture strategy",
+            "SLO, observability, rate-limit, and deployment assumptions for the MVP",
+        ),
+        engineering_defaults=(
+            "separate app factory, routers, Pydantic schemas, services, and repositories",
+            "include health/readiness checks plus dependency-injected test stores",
+            "write contract-shaped tests before wiring external databases or queues",
+        ),
+        qa_focus=(
+            "OpenAPI shape, validation errors, auth boundaries, idempotency, and not-found paths",
+            "repository/service tests using in-memory fixtures and deterministic clocks",
+        ),
+        iteration_hooks=(
+            "record endpoint compatibility notes and migration decisions in product memory",
+            "keep infra assumptions explicit so DevOps can add containers and deployment later",
+        ),
+        recommended_skills=("product", "backend", "qa", "devops"),
+        starter_files={
+            "README.md": """# $project_name\n\n$idea\n\nAider Plus scaffolded this as a contract-first FastAPI API MVP.\n\n## Company Mode\n- Product owns API consumers, resources, and acceptance criteria.\n- Engineering keeps transport, schemas, services, and persistence adapters separate.\n- QA verifies OpenAPI contracts, validation, and auth/error boundaries.\n- DevOps documents local run, configuration, health checks, and deployment assumptions.\n\n## Suggested Structure\n- `app/main.py` — application factory and health/readiness routes\n- `app/api/routes/` — thin HTTP routers\n- `app/schemas/` — request/response contracts\n- `app/services/` — business logic\n- `app/repositories/` — persistence adapters\n- `tests/` — route, schema, service, and repository tests\n""",
+            "app/__init__.py": '"""$project_name API package."""\n',
+            "app/main.py": """\"\"\"Application entrypoint for $project_name.\"\"\"\n\n\ndef health() -> dict[str, str]:\n    \"\"\"Return a framework-neutral health payload until FastAPI is installed.\"\"\"\n    return {\"status\": \"ok\", \"product\": \"$project_slug\"}\n""",
+            "app/api/routes/README.md": "HTTP route modules live here; keep handlers thin.\n",
+            "app/schemas/README.md": "Pydantic request and response contracts live here.\n",
+            "app/services/README.md": "Business logic and orchestration live here.\n",
+            "app/repositories/README.md": "Persistence adapters live here and should be replaceable in tests.\n",
+            "tests/README.md": "Add route, schema, service, auth-boundary, and error-response tests here.\n",
+        },
+        post_creation_instructions=(
+            "Confirm API consumers and auth mode before adding production dependencies.",
+            "Keep a health/readiness path and deterministic test fixtures in the first implementation.",
+            "Document any endpoint compatibility promises in `docs/product-brief.md`.",
+        ),
+        example_prd_prompt="Draft a PRD for a Python FastAPI MVP covering resources, endpoint contracts, auth boundaries, and local test fixtures.",
+    ),
+    "electron-desktop-app": ProjectTemplate(
+        key="electron-desktop-app",
+        label="Electron desktop app",
+        description="Cross-platform desktop MVP with main/preload/renderer separation, local data, and packaging seams.",
+        discovery_focus=(
+            "primary desktop workflow, offline expectations, and local file/data access",
+            "platform targets, auto-update, packaging, permissions, and native integrations",
+            "security boundaries between main, preload, renderer, and untrusted content",
+        ),
+        engineering_defaults=(
+            "keep Electron main, preload bridge, renderer UI, and shared domain logic separate",
+            "prefer explicit IPC contracts and avoid exposing broad Node APIs to the renderer",
+            "document local storage, file-system, and packaging assumptions before adding native deps",
+        ),
+        qa_focus=(
+            "IPC contract tests, renderer state checks, file permission failures, and offline flows",
+            "smoke scripts for app launch, main-window creation, and settings persistence",
+        ),
+        iteration_hooks=(
+            "record platform-specific UX findings and packaging constraints as Delivery notes",
+            "keep native integrations behind adapters for future Windows/macOS/Linux hardening",
+        ),
+        recommended_skills=("product", "ux", "frontend", "desktop", "qa", "devops"),
+        starter_files={
+            "README.md": """# $project_name\n\n$idea\n\nAider Plus scaffolded this as an Electron desktop MVP.\n\n## Company Mode\n- Product clarifies the desktop job-to-be-done and offline/file expectations.\n- UX defines window states, navigation, shortcuts, and platform conventions.\n- Engineering keeps main, preload, renderer, IPC, and domain logic separated.\n- Delivery/DevOps document packaging, signing, updates, and platform constraints.\n\n## Suggested Structure\n- `electron/main/` — app lifecycle and native integration adapters\n- `electron/preload/` — narrow IPC bridge contracts\n- `renderer/` — UI, screens, and client state\n- `src/domain/` — framework-independent product logic\n- `tests/` — IPC, domain, and renderer smoke checks\n""",
+            "electron/main/README.md": "Main-process lifecycle, windows, menus, and native integration adapters live here.\n",
+            "electron/preload/README.md": "Expose narrow, documented IPC bridge contracts here.\n",
+            "renderer/README.md": "Renderer UI screens, states, and accessibility notes live here.\n",
+            "src/domain/README.md": "Framework-independent desktop product logic lives here.\n",
+            "tests/README.md": "Add IPC contract, domain, renderer, and launch smoke checks here.\n",
+        },
+        post_creation_instructions=(
+            "Ask Product/UX to identify platform targets before adding packaging dependencies.",
+            "Keep IPC contracts documented and security-reviewed before exposing filesystem access.",
+            "Document packaging/signing/update assumptions even if they remain TODOs in v0.",
+        ),
+        example_prd_prompt="Draft a PRD for an Electron desktop MVP with offline-first workflows, secure IPC, local data, and packaging assumptions.",
+    ),
+    "data-dashboard": ProjectTemplate(
+        key="data-dashboard",
+        label="Data dashboard",
+        description="Analytics dashboard MVP with ingestion fixtures, metric definitions, charts, filters, and export seams.",
+        discovery_focus=(
+            "source systems, freshness, metric definitions, owners, and sensitive fields",
+            "decision workflows, dashboard audiences, filters, and drill-down questions",
+            "export/sharing requirements, data quality risks, and refresh cadence",
+        ),
+        engineering_defaults=(
+            "separate ingestion fixtures, transforms, metric contracts, and presentation adapters",
+            "make chart contracts and sample data deterministic so QA can verify trends",
+            "document privacy and retention assumptions before connecting live data sources",
+        ),
+        qa_focus=(
+            "metric correctness, dirty/missing data, filter combinations, chart contracts, and exports",
+            "fixture-driven regression tests for representative edge cases",
+        ),
+        iteration_hooks=(
+            "record metric definition changes and data-quality findings as Product memory",
+            "keep source adapters replaceable so Delivery can connect production data later",
+        ),
+        recommended_skills=("product", "data", "ux", "frontend", "qa", "devops"),
+        starter_files={
+            "README.md": """# $project_name\n\n$idea\n\nAider Plus scaffolded this as a data dashboard MVP with deterministic sample data and explicit metric contracts.\n\n## Company Mode\n- Product owns metric definitions, audiences, and decisions supported by the dashboard.\n- UX owns chart hierarchy, filters, empty states, and explainability.\n- Engineering keeps ingestion, transforms, presentation, and exports separate.\n- QA verifies metrics against fixtures and dirty-data edge cases.\n\n## Suggested Structure\n- `data/sample/` — representative fixtures\n- `src/ingestion/` — source readers and refresh adapters\n- `src/metrics/` — metric definitions and calculation contracts\n- `src/presentation/` — chart/view/export adapters\n- `tests/` — fixture-driven metric and chart contract tests\n""",
+            "data/sample/README.md": "Place small, sanitized fixtures with expected metric outcomes here.\n",
+            "src/ingestion/README.md": "Source readers, freshness checks, and adapters live here.\n",
+            "src/metrics/README.md": "Metric definitions, calculations, and ownership notes live here.\n",
+            "src/presentation/README.md": "Chart contracts, views, filters, and export adapters live here.\n",
+            "tests/README.md": "Add fixture-driven metric, dirty-data, filter, chart, and export tests here.\n",
+        },
+        post_creation_instructions=(
+            "Confirm metric definitions and sample data before building charts.",
+            "Keep live-source credentials out of the repo and use sanitized fixtures for v0.",
+            "Ask QA to pin expected metric outcomes so future iterations catch regressions.",
+        ),
+        example_prd_prompt="Draft a PRD for a data dashboard MVP covering audiences, metric definitions, source fixtures, charts, filters, and exports.",
+    ),
 }
 
 COMMON_STARTER_FILES: dict[str, str] = {
@@ -237,16 +408,47 @@ $idea
 ## Template
 $template_label (`$template_key`)
 
+## Example PRD Prompt
+$example_prd_prompt
+
 ## Delivery Loop
-- Product: clarify the core user, promise, and MVP scope.
-- UX: define the first-run flow, main screens, and accessible states.
-- Engineering: keep the implementation repo-native, modular, and testable.
-- QA: add smoke checks around the critical path and edge states.
-- DevOps: document local run, configuration, and deployment assumptions.
+- Product: clarify the core user, promise, MVP scope, and acceptance criteria.
+- UX: define first-run flow, primary screens, accessible states, and review notes.
+- Engineering: keep implementation repo-native, modular, testable, and dependency-aware.
+- Delivery: translate department decisions into thin milestones and release notes.
+- DevOps: document local run, configuration, CI, deployment, and operational assumptions.
+
+## Recommended Skills
+$recommended_skills_markdown
+
+## Post-Creation Instructions
+$post_creation_instructions_markdown
 
 ## Next Iteration Notes
-Capture user approvals, QA findings, and follow-up scope here so future company
-runs can keep evolving the same Git repository.
+Capture user approvals, QA findings, metrics, risks, and follow-up scope here so
+future company runs can keep evolving the same Git repository.
+""",
+    "docs/company-mode.md": """# Company Mode Handoff Guide
+
+This repository was scaffolded by `aider company new` for `$template_label`. Use
+these seams to keep Product → UX → Engineering → Delivery → DevOps aligned.
+
+## Department Gates
+1. **Product** updates `docs/product-brief.md` with users, scope, acceptance criteria, and open questions.
+2. **UX** records flow, screen, accessibility, empty/error/loading, and approval notes.
+3. **Engineering** implements small vertical slices using the template folders as boundaries.
+4. **QA** adds smoke or unit checks for critical paths and documents skipped checks.
+5. **Delivery/DevOps** documents release, run, configuration, and deployment assumptions.
+
+## Template Guidance
+- Template: `$template_label` (`$template_key`)
+- Recommended skills: $recommended_skills_inline
+- PRD seed: $example_prd_prompt
+
+## Iteration Rule
+Prefer adding explicit notes, tests, and adapters over replacing scaffolding in a
+large rewrite. Future Company runs should be able to read this repo and continue
+from the current product state.
 """,
 }
 
@@ -485,6 +687,10 @@ def get_template(key: str | None) -> ProjectTemplate:
         ) from exc
 
 
+def _markdown_bullets(items: tuple[str, ...]) -> str:
+    return "\n".join(f"- {item}" for item in items)
+
+
 def render_template_starter_files(
     *,
     idea: str,
@@ -508,6 +714,19 @@ def render_template_starter_files(
         "python_package": python_package,
         "template_key": template.key,
         "template_label": template.label,
+        "recommended_skills_inline": ", ".join(template.recommended_skills)
+        or "generalist",
+        "recommended_skills_markdown": _markdown_bullets(
+            template.recommended_skills or ("generalist",)
+        ),
+        "post_creation_instructions_markdown": _markdown_bullets(
+            template.post_creation_instructions
+            or (
+                "Run Company Mode once to refine the MVP brief before adding major dependencies.",
+            )
+        ),
+        "example_prd_prompt": template.example_prd_prompt
+        or f"Draft a concise PRD for {template.label} covering users, scope, acceptance criteria, risks, and release notes.",
     }
     files: dict[str, str] = {
         ".aider/company/product.json": json.dumps(
@@ -515,16 +734,30 @@ def render_template_starter_files(
                 "name": project_name.strip(),
                 "slug": project_slug,
                 "template": template.key,
+                "template_label": template.label,
                 "idea": idea.strip(),
+                "recommended_skills": list(template.recommended_skills),
+                "post_creation_instructions": list(template.post_creation_instructions),
+                "example_prd_prompt": values["example_prd_prompt"],
             },
             indent=2,
             sort_keys=True,
         )
         + "\n"
     }
+    skill_files = {
+        f".aider/skills/{skill}/SKILL.md": (
+            f"# {skill.title()} Skill\n\n"
+            f"Use this placeholder to capture {skill} guidance learned while building `$project_name`.\n"
+            "Keep guidance concise, repo-specific, and safe for future Company runs.\n"
+        )
+        for skill in (template.recommended_skills or ("generalist",))
+    }
     for path, content in {
         **COMMON_STARTER_FILES,
         **TEMPLATE_STARTER_FILES.get(template.key, {}),
+        **dict(template.all_starter_files()),
+        **skill_files,
     }.items():
         rendered_path = Template(path).safe_substitute(values)
         files[rendered_path] = Template(content).safe_substitute(values)
@@ -560,7 +793,15 @@ def render_zero_to_mvp_prompt(
             f"Product template: {template.label} ({template.key})",
             f"Template description: {template.description}",
             "",
-            "Use the Aider Plus delivery loop: Product -> UX -> Engineering -> QA -> DevOps.",
+            "Recommended skills to activate or emulate:",
+            bullets(template.recommended_skills or ("generalist",)),
+            "",
+            "Example Product/PRD seed for this template:",
+            template.example_prd_prompt
+            or f"Draft a concise PRD for {template.label} covering users, scope, acceptance criteria, risks, and release notes.",
+            "",
+            "Use the Aider Plus delivery loop: Product -> UX -> Engineering -> Delivery -> DevOps.",
+            "Keep QA explicit in that loop; legacy shorthand is Product -> UX -> Engineering -> QA -> DevOps.",
             "The goal is not a one-shot code dump. Create v0 in a way that can keep evolving in",
             "this git repository after the first implementation.",
             "",
@@ -576,6 +817,12 @@ def render_zero_to_mvp_prompt(
             "Iteration and memory hooks:",
             bullets(template.iteration_hooks),
             "",
+            "Post-creation instructions:",
+            bullets(
+                template.post_creation_instructions
+                or ("Run Product discovery before adding major dependencies.",)
+            ),
+            "",
             "Required output and behavior:",
             "- Inspect the repository before choosing files or frameworks.",
             "- If the repo is empty, create the smallest coherent MVP structure for this template.",
@@ -585,5 +832,6 @@ def render_zero_to_mvp_prompt(
             "- Keep changes reviewable with small cohesive files and clear boundaries.",
             "- Prefer explicit TODOs for integrations that need secrets or external accounts.",
             "- Summarize the Product, UX, Engineering, QA, release, and post-mortem outcomes.",
+            "- Include Delivery and DevOps handoff notes for release readiness.",
         ]
     )

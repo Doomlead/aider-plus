@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aider.company.templates import render_template_starter_files
+from aider.company.templates import get_template, render_template_starter_files
 
 WAREHOUSE_REGISTRY = "warehouse.json"
 DEFAULT_WAREHOUSE_DIRNAME = "AiderPlusWarehouse"
@@ -124,12 +124,17 @@ class WarehouseManager:
         product_path = self.products_dir / slug
         product_path.mkdir(parents=True, exist_ok=True)
         self._ensure_git_repo(product_path)
+        resolved_template = get_template(template)
         self._write_starter_files(
             product_path=product_path,
             name=name,
             slug=slug,
             idea=idea,
-            template=template,
+            template=resolved_template.key,
+        )
+        self._apply_post_creation_hooks(
+            product_path=product_path,
+            template=resolved_template.key,
         )
 
         registry = self._read_registry()
@@ -140,7 +145,7 @@ class WarehouseManager:
             name=name,
             slug=slug,
             path=str(product_path),
-            template=template,
+            template=resolved_template.key,
             idea=idea,
             created_at=existing.get("created_at") or now,
             updated_at=now,
@@ -239,6 +244,26 @@ class WarehouseManager:
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def _apply_post_creation_hooks(*, product_path: Path, template: str) -> None:
+        """Materialize template post-creation guidance inside the product repo."""
+
+        project_template = get_template(template)
+        instructions = project_template.post_creation_instructions or (
+            "Run Product discovery before adding major dependencies.",
+        )
+        target = product_path / ".aider" / "company" / "post-creation.md"
+        if target.exists():
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        bullets = "\n".join(f"- {instruction}" for instruction in instructions)
+        target.write_text(
+            f"# Post-Creation Hooks: {project_template.label}\n\n"
+            "Apply these hooks before the first full Company implementation run.\n\n"
+            f"{bullets}\n",
+            encoding="utf-8",
+        )
 
     @staticmethod
     def _ensure_git_repo(path: Path) -> None:

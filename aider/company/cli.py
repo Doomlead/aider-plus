@@ -11,6 +11,7 @@ from aider.company.daemon import CompanyDaemonError, load_daemon
 from aider.company.workflow import WorkflowError
 from aider.company.templates import (
     DEFAULT_TEMPLATE_KEY,
+    get_template,
     list_templates,
     render_zero_to_mvp_prompt,
 )
@@ -134,6 +135,10 @@ def parse_company_cli(
         raise CompanyCLIError(
             f"`aider company {action}` requires a product idea.\n" + USAGE
         )
+    try:
+        template = get_template(template).key
+    except ValueError as exc:
+        raise CompanyCLIError(str(exc) + "\n" + USAGE) from exc
 
     return (
         CompanyCLICommand(
@@ -191,6 +196,12 @@ def format_template_list() -> str:
     lines = ["Aider Plus zero-to-MVP templates:"]
     for template in list_templates():
         lines.append(f"- {template.summary()}")
+        if template.post_creation_instructions:
+            lines.append(
+                "  post-create: " + "; ".join(template.post_creation_instructions[:2])
+            )
+        if template.example_prd_prompt:
+            lines.append(f"  PRD seed: {template.example_prd_prompt}")
     return "\n".join(lines)
 
 

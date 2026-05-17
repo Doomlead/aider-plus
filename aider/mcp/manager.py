@@ -8,6 +8,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
+from aider.company.schemas import CompanyTask
 from aider.mcp.config import MCPConfig, MCPServerConfig, MCPToolPolicy
 
 MCPApprovalHandler = Callable[[dict[str, Any]], Awaitable[bool] | bool]
@@ -54,10 +55,34 @@ class MCPClientManager:
         config: MCPConfig | None = None,
         *,
         approval_handler: MCPApprovalHandler | None = None,
+        approval_manager: Any | None = None,
     ):
         self.config = config or MCPConfig()
         self.approval_handler = approval_handler
+        self.approval_manager = approval_manager
+        self._approval_aware_tool_policies: dict[str, MCPToolPolicy] = {}
         self._connectors_by_scope: dict[str, list[MCPConnector]] = {}
+
+    def register_approval_aware_tool(
+        self, tool_name: str, permission_level: str
+    ) -> MCPToolPolicy:
+        """Register local policy metadata for an MCP tool.
+
+        ``read_only`` tools may execute without a human gate;
+        ``requires_approval`` tools must pass through ApprovalManager or the
+        configured approval handler before execution.
+        """
+
+        if permission_level not in {"read_only", "requires_approval"}:
+            raise ValueError("permission_level must be read_only or requires_approval")
+        policy = MCPToolPolicy(
+            read_only=permission_level == "read_only",
+            requires_approval=permission_level == "requires_approval",
+        )
+        self._approval_aware_tool_policies[tool_name] = policy
+        for server in self.config.servers.values():
+            server.tool_policies[tool_name] = policy
+        return policy
 
     async def ensure_connected(
         self,
@@ -176,7 +201,9 @@ class MCPClientManager:
             schema = raw_tool.get("inputSchema") or raw_tool.get("input_schema")
         if not isinstance(schema, dict):
             schema = {"type": "object", "properties": {}}
-        policy = server.tool_policies.get(name, MCPToolPolicy())
+        policy = server.tool_policies.get(
+            name, self._approval_aware_tool_policies.get(name, MCPToolPolicy())
+        )
         return MCPToolRef(
             server_name=server.name,
             name=name,
@@ -213,10 +240,6 @@ class MCPClientManager:
             )
         if not tool.policy.requires_approval:
             return
-        if self.approval_handler is None:
-            raise PermissionError(
-                f"MCP tool requires approval but no approval handler is configured: {tool.aider_name}"
-            )
         request = {
             "server": server.name,
             "tool": tool.name,
@@ -224,6 +247,31 @@ class MCPClientManager:
             "arguments": arguments,
             "read_only": tool.policy.read_only,
         }
+        if self.approval_manager is not None:
+            task = CompanyTask(
+                task_id=f"mcp-approval-{server.name}-{tool.name}",
+                origin="mcp",
+                target="engineering",
+                artifact_type="mcp_tool_call",
+                payload=request,
+                blocking=True,
+                context={
+                    "gate_name": "mcp_tool_approval",
+                    "approver_role": "ceo",
+                    "artifact_preview": str(request)[:1500],
+                    "handoff_to": "engineering",
+                },
+            )
+            decision = await self.approval_manager.create_request(task)
+            if hasattr(self.approval_manager, "close_request"):
+                self.approval_manager.close_request(task.task_id)
+            if not bool(getattr(decision, "approved", decision)):
+                raise PermissionError(f"MCP tool call rejected: {tool.aider_name}")
+            return
+        if self.approval_handler is None:
+            raise PermissionError(
+                f"MCP tool requires approval but no approval handler is configured: {tool.aider_name}"
+            )
         approved = self.approval_handler(request)
         if inspect.isawaitable(approved):
             approved = await approved

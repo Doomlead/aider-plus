@@ -184,3 +184,77 @@ def test_safe_mcp_server_submits_company_tasks(tmp_path):
     assert submitted[0].origin == "mcp"
     assert submitted[0].target == "product"
     assert submitted[0].payload == "build it"
+
+
+def test_safe_mcp_server_lists_new_approval_aware_tools_and_knowledge(tmp_path):
+    skill = tmp_path / ".aider" / "skills" / "engineering" / "ship-small"
+    skill.mkdir(parents=True)
+    skill.joinpath("SKILL.md").write_text(
+        "# Ship Small\nKeep diffs reviewable.\n", encoding="utf-8"
+    )
+    proposal = tmp_path / ".aider" / "skill_proposals" / "engineering"
+    proposal.mkdir(parents=True)
+    proposal.joinpath("prop-1.json").write_text(
+        '{"proposal_id":"prop-1","status":"pending","name":"ship-small"}',
+        encoding="utf-8",
+    )
+    memory = ProjectMemory(str(tmp_path))
+    memory.update({"daemon_runs": [{"issue_id": "AP-1", "status": "ok"}]})
+    server = AiderPlusMCPServer(
+        AiderPlusMCPServerConfig(repo_path=str(tmp_path)), project_memory=memory
+    )
+
+    skills = server.list_skills()
+    assert skills["available_count"] == 1
+    assert server.get_skill("engineering/ship-small")["content"].startswith(
+        "# Ship Small"
+    )
+    assert (
+        server.list_pending_skill_proposals()["pending_proposals"][0]["proposal_id"]
+        == "prop-1"
+    )
+    assert (
+        server.get_recent_daemon_runs()["recent_daemon_runs"][0]["issue_id"] == "AP-1"
+    )
+    assert server.get_knowledge_overview()["counts"]["skills"] == 1
+    assert server.search_knowledge("Ship")["results"]
+    assert server.get_company_status()["status"] == "ready"
+
+
+def test_mcp_manager_registers_approval_aware_tool_policy():
+    manager = FakeManager(MCPConfig(enabled=True))
+    policy = manager.register_approval_aware_tool("list_issues", "requires_approval")
+
+    assert policy.requires_approval is True
+    assert manager.config.servers == {}
+
+    with pytest.raises(ValueError):
+        manager.register_approval_aware_tool("list_issues", "write")
+
+
+def test_agent_loop_registers_builtin_mcp_discovery_tool():
+    class DummyCoder:
+        done_messages = []
+        conversation_memory = None
+        project_memory = None
+        main_system = ""
+
+        class MainModel:
+            name = "test-model"
+            extra_params = {}
+
+        main_model = MainModel()
+        repo = None
+
+        def clone(self, **_kwargs):
+            return self
+
+    loop = AiderAgentLoop(coder=DummyCoder())
+
+    assert "list_available_mcp_tools" in loop.tool_registry.tools
+    assert any(
+        tool["name"] == "trigger_daemon_run"
+        for tool in asyncio.run(
+            loop.tool_registry.execute("list_available_mcp_tools", {})
+        )["tools"]
+    )

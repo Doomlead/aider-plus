@@ -177,19 +177,27 @@ def create_tracker_adapter(config: Any) -> TrackerAdapter:
     """Create a tracker adapter from workflow/CLI configuration."""
 
     if isinstance(config, dict):
+        github = dict(config.get("github") or {})
         kind = str(config.get("type") or config.get("kind") or "local")
         path = config.get("path")
         repo = config.get("repo")
         token = config.get("token")
-        api_url = str(config.get("api_url") or "https://api.github.com")
+        api_url = str(
+            config.get("api_url") or github.get("api_url") or "https://api.github.com"
+        )
     else:
+        github = dict(getattr(config, "github", None) or {})
         kind = str(
             getattr(config, "type", None) or getattr(config, "kind", None) or "local"
         )
         path = getattr(config, "path", None)
         repo = getattr(config, "repo", None)
         token = getattr(config, "token", None)
-        api_url = str(getattr(config, "api_url", None) or "https://api.github.com")
+        api_url = str(
+            getattr(config, "api_url", None)
+            or github.get("api_url")
+            or "https://api.github.com"
+        )
 
     normalized = kind.strip().lower()
     if normalized == "local":
@@ -199,7 +207,28 @@ def create_tracker_adapter(config: Any) -> TrackerAdapter:
     if normalized == "github":
         from aider.company.tracker.github import GitHubTrackerAdapter
 
-        return GitHubTrackerAdapter(token=token, repo=repo, api_url=api_url)
+        auth = (
+            dict(github.get("auth") or {})
+            if isinstance(github.get("auth") or {}, dict)
+            else {}
+        )
+        labels = (
+            dict(github.get("labels") or {})
+            if isinstance(github.get("labels") or {}, dict)
+            else {}
+        )
+        return GitHubTrackerAdapter(
+            token=token or auth.get("token"),
+            repo=repo,
+            api_url=api_url,
+            app_id=auth.get("app_id"),
+            app_installation_id=auth.get("installation_id"),
+            app_private_key=auth.get("private_key"),
+            app_private_key_path=auth.get("private_key_path"),
+            status_labels=labels,
+            cache_ttl_seconds=github.get("cache_ttl_seconds"),
+            max_retries=int(github.get("max_retries", 2) or 0),
+        )
     raise TrackerError(
         f"Unsupported tracker kind: {kind}. Supported: local, github."
     )

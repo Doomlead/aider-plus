@@ -63,9 +63,21 @@ export GITHUB_REPO=owner/repo
 aider company daemon --workflow AIDER_WORKFLOW.md --tracker github --repo owner/repo --once
 ```
 
-Workflow files can also declare `tracker.kind: github` and `tracker.labels` so
-the daemon lists labeled open issues, claims them with an `in_progress` label,
-posts progress/proof comments, attaches PR links, and marks completed work as
+For production, prefer GitHub App installation credentials when available. Install the optional GitHub extra first if you need GitHub App JWT signing:
+
+```bash
+python -m pip install -e '.[github]'
+export GITHUB_APP_ID=12345
+export GITHUB_APP_INSTALLATION_ID=67890
+export GITHUB_APP_PRIVATE_KEY_PATH=/secure/path/aider-company.private-key.pem
+export GITHUB_REPO=owner/repo
+```
+
+Workflow files can declare `tracker.kind: github`, `tracker.labels`, and a
+`tracker.github` section for cache/retry controls and label mappings. The daemon
+lists labeled open issues, claims them with an `in_progress` label, posts
+progress/proof comments, attaches PR links, retries rate-limited GitHub API
+calls, briefly caches issue lists for frequent ticks, and marks completed work as
 `done`.
 
 ---

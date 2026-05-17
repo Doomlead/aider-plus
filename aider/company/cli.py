@@ -307,6 +307,7 @@ def _load_daemon_for_command(command: CompanyCLICommand) -> CompanyDaemon:
         path=tracker.path,
         repo=command.repo or tracker.repo,
         labels=tracker.labels,
+        github=tracker.github,
     )
     return CompanyDaemon(workflow=replace(loaded, tracker=tracker))
 

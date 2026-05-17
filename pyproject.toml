@@ -36,6 +36,7 @@ help = { file = "requirements/requirements-help.txt" }
 browser = { file = "requirements/requirements-browser.txt" }
 playwright = { file = "requirements/requirements-playwright.txt" }
 mcp = { file = "requirements/requirements-mcp.txt" }
+github = { file = "requirements/requirements-github.txt" }
 
 [tool.setuptools]
 include-package-data = true

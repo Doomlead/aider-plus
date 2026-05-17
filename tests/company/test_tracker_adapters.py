@@ -134,3 +134,191 @@ def test_company_daemon_cli_accepts_github_tracker_and_repo():
     assert command.tracker_type == "github"
     assert command.repo == "owner/repo"
     assert command.once is True
+
+
+def test_github_tracker_caches_issue_lists_briefly():
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1001,
+                    "number": 7,
+                    "title": "Cached issue",
+                    "body": "",
+                    "state": "open",
+                    "labels": [{"name": "aider-plus"}],
+                }
+            ],
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    tracker = GitHubTrackerAdapter(
+        token="token",
+        repo="owner/repo",
+        client=client,
+        cache_ttl_seconds=300,
+    )
+
+    assert tracker.list_candidate_issues(("aider-plus",))[0].identifier == "7"
+    assert tracker.list_candidate_issues(("aider-plus",))[0].identifier == "7"
+    assert calls == 1
+
+
+def test_github_tracker_retries_rate_limited_requests():
+    calls = 0
+    sleeps = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                429,
+                headers={"retry-after": "2"},
+                json={"message": "rate limited"},
+            )
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1001,
+                    "number": 7,
+                    "title": "Retried issue",
+                    "body": "",
+                    "state": "open",
+                    "labels": [{"name": "aider-plus"}],
+                }
+            ],
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    tracker = GitHubTrackerAdapter(
+        token="token",
+        repo="owner/repo",
+        client=client,
+        max_retries=1,
+        sleep=sleeps.append,
+    )
+
+    assert tracker.list_candidate_issues(("aider-plus",))[0].title == "Retried issue"
+    assert calls == 2
+    assert sleeps == [2.0]
+
+
+def test_github_tracker_supports_github_app_installation_tokens(monkeypatch):
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/app/installations/99/access_tokens"):
+            assert request.headers["Authorization"] == "Bearer app-jwt"
+            return httpx.Response(
+                201,
+                json={"token": "installation-token", "expires_at": "2999-01-01T00:00:00Z"},
+            )
+        assert request.headers["Authorization"] == "Bearer installation-token"
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(GitHubTrackerAdapter, "_app_jwt", lambda self: "app-jwt")
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    tracker = GitHubTrackerAdapter(
+        repo="owner/repo",
+        app_id="123",
+        app_installation_id="99",
+        app_private_key="fake-key",
+        client=client,
+    )
+
+    assert tracker.list_candidate_issues() == []
+    assert tracker.list_candidate_issues(("aider-plus",)) == []
+    token_requests = [
+        request for request in requests if request.url.path.endswith("access_tokens")
+    ]
+    assert len(token_requests) == 1
+
+
+def test_github_tracker_uses_custom_status_label_mapping():
+    patch_bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 1001,
+                        "number": 7,
+                        "title": "Custom labels",
+                        "body": "",
+                        "state": "open",
+                        "labels": [{"name": "company:todo"}],
+                    }
+                ],
+            )
+        body = json.loads(request.content.decode())
+        patch_bodies.append(body)
+        return httpx.Response(
+            200,
+            json={
+                "id": 1001,
+                "number": 7,
+                "title": "Custom labels",
+                "body": "",
+                "state": body.get("state", "open"),
+                "labels": [{"name": label} for label in body["labels"]],
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    tracker = GitHubTrackerAdapter(
+        token="token",
+        repo="owner/repo",
+        client=client,
+        status_labels={
+            "todo": "company:todo",
+            "in_progress": "company:running",
+            "done": "company:done",
+        },
+    )
+
+    issue = tracker.list_candidate_issues()[0]
+    assert issue.status == "todo"
+    tracker.transition(issue, "done")
+    assert patch_bodies[-1]["labels"] == ["company:done"]
+
+
+def test_workflow_parses_github_tracker_section(tmp_path):
+    from aider.company.workflow import CompanyWorkflow
+
+    workflow_path = tmp_path / "AIDER_WORKFLOW.md"
+    workflow_path.write_text(
+        """---
+tracker:
+  kind: github
+  repo: owner/repo
+  labels: [aider-plus]
+  github:
+    cache_ttl_seconds: 300
+    max_retries: 2
+    labels:
+      todo: company:todo
+      in_progress: company:in-progress
+      retry: company:retry
+      done: company:done
+---
+Work on {{ issue.identifier }}.
+""",
+        encoding="utf-8",
+    )
+
+    workflow = CompanyWorkflow.load(workflow_path)
+
+    assert workflow.tracker.kind == "github"
+    assert workflow.tracker.repo == "owner/repo"
+    assert workflow.tracker.github["cache_ttl_seconds"] == 300
+    assert workflow.tracker.github["labels"]["in_progress"] == "company:in-progress"

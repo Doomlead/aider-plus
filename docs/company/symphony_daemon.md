@@ -130,6 +130,7 @@ tracker:
   github:
     cache_ttl_seconds: 300  # 5-minute issue-list cache for frequent ticks
     max_retries: 2          # retry rate-limited/transient API responses
+    retry_backoff_seconds: 1.0
     labels:
       todo: company:todo
       in_progress: company:in-progress
@@ -145,14 +146,33 @@ aider company daemon --workflow AIDER_WORKFLOW.md --tracker github --repo owner/
 ```
 
 GitHub issue state is mapped into daemon states with labels: open issues are
-`todo` by default, `in_progress`/`running`/`claimed` labels map to
-`in_progress`, `retry` maps to `retry`, and closed issues or a `done` label map
-to `done`. The optional `tracker.github.labels` mapping lets teams use their
-own label names while keeping the daemon states stable. Claiming an issue applies
-`in_progress`; completing a run applies `done` and closes the issue. Comments
-and PR links are posted back to the issue. The adapter caches issue-list results
-for 5 minutes by default (configurable up to 10 minutes) and retries
-rate-limited/transient GitHub responses before surfacing an error.
+`todo` by default, `in_progress`/`running`/`claimed`/`needs_review` labels map to
+`in_progress`, `retry`/`blocked`/`failed` map to `retry`, and closed issues or a
+`done` label map to `done`. The optional `tracker.github.labels` mapping lets
+teams use their own label names while keeping the daemon states stable. Claiming
+an issue applies `in_progress`; completing a run applies `done` and closes the
+issue. Comments and PR links are posted back to the issue; PR attachment comments
+include a ProofOfWork Markdown link, an executive summary, completed/failed stage
+counts, and the human-review flag. The adapter caches issue-list results for 5
+minutes by default (configurable up to 10 minutes) and retries rate-limited or
+transient GitHub responses with exponential backoff before surfacing an error.
+Retry counters, the most recent API error, and recent retry events are exposed in
+daemon status.
+
+Linear can also be used as a real tracker adapter when `LINEAR_API_KEY` is set:
+
+```yaml
+tracker:
+  kind: linear
+  labels: [aider-plus]
+  linear:
+    max_retries: 2
+    retry_backoff_seconds: 1.0
+    states:
+      in_progress: started
+      done: completed
+      retry: unstarted
+```
 
 ## CLI
 
@@ -162,7 +182,8 @@ Run one daemon tick without executing a runner:
 aider company daemon --workflow AIDER_WORKFLOW.md --once --dry-run
 ```
 
-Show status for existing run workspaces:
+Show status for existing run workspaces, including retry totals, the latest error,
+tracker retry stats, and the most recent proof link:
 
 ```bash
 aider company daemon --workflow AIDER_WORKFLOW.md --status
@@ -178,9 +199,10 @@ A dry run creates the issue workspace, initializes Git, renders the Company Mode
 prompt, writes run state, and writes proof-of-work JSON. Production callers can
 attach a runner to `CompanyDaemon` to execute Aider headlessly and return changed
 files, check results, QA/review status, PR URL, and risk notes. The built-in
-runner publishes `daemon_run_progress` events to the shared typed EventBus, so
-CLI `--watch`, browser/desktop timelines, Discord forwarding, and future API/MCP
-streams see the same progress envelope.
+runner publishes `daemon_run_progress` events to the shared typed EventBus. Each
+progress payload includes completed/failed counts plus retry count and last-error
+fields, so CLI `--watch`, browser/desktop timelines, Discord forwarding, and
+future API/MCP streams see the same observable progress envelope.
 
 ## Safety model
 

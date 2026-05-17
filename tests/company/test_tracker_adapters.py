@@ -74,7 +74,9 @@ def test_github_tracker_lists_claims_comments_transitions_and_attaches_pr():
             return httpx.Response(201, json={"id": 5001})
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
-    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.test")
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
     tracker = GitHubTrackerAdapter(
         token="token",
         repo="owner/repo",
@@ -219,7 +221,10 @@ def test_github_tracker_supports_github_app_installation_tokens(monkeypatch):
             assert request.headers["Authorization"] == "Bearer app-jwt"
             return httpx.Response(
                 201,
-                json={"token": "installation-token", "expires_at": "2999-01-01T00:00:00Z"},
+                json={
+                    "token": "installation-token",
+                    "expires_at": "2999-01-01T00:00:00Z",
+                },
             )
         assert request.headers["Authorization"] == "Bearer installation-token"
         return httpx.Response(200, json=[])
@@ -322,3 +327,47 @@ Work on {{ issue.identifier }}.
     assert workflow.tracker.repo == "owner/repo"
     assert workflow.tracker.github["cache_ttl_seconds"] == 300
     assert workflow.tracker.github["labels"]["in_progress"] == "company:in-progress"
+
+
+def test_github_attach_pr_includes_proof_summary_and_markdown_link():
+    comments = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        comments.append(json.loads(request.content.decode())["body"])
+        return httpx.Response(201, json={"id": 1})
+
+    from aider.company.schemas import ProofOfWork
+    from aider.company.tracker import TrackerIssue
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    tracker = GitHubTrackerAdapter(token="token", repo="owner/repo", client=client)
+    proof = ProofOfWork(
+        issue="7",
+        title="Attach proof",
+        workspace="/tmp/workspace",
+        summary="Implemented the tracker change.",
+        completed_stages=("engineering", "qa"),
+        failed_stages=("delivery",),
+        markdown_path="/tmp/workspace/.aider/company/proof-of-work.md",
+    )
+
+    tracker.attach_pr(
+        TrackerIssue(identifier="7", title="Attach proof"),
+        "https://github.com/owner/repo/pull/9",
+        proof=proof,
+    )
+
+    assert "ProofOfWork Markdown" in comments[0]
+    assert "Implemented the tracker change." in comments[0]
+    assert "Completed stages: engineering, qa" in comments[0]
+
+
+def test_create_tracker_adapter_returns_linear_adapter(monkeypatch):
+    from aider.company.tracker.linear import LinearTrackerAdapter
+
+    monkeypatch.setenv("LINEAR_API_KEY", "lin-test")
+    adapter = create_tracker_adapter({"type": "linear", "linear": {"max_retries": 1}})
+
+    assert isinstance(adapter, LinearTrackerAdapter)
+    assert adapter.max_retries == 1

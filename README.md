@@ -50,7 +50,7 @@ Core implementation files to know first:
 - **Memory** — local, inspectable project, conversation, COO, warehouse, and retrieval context used to make later runs less stateless.
 - **EventBus** — the versioned in-process runtime stream for lifecycle, department, approval, daemon, COO, and deployment events.
 - **Approval gate** — an explicit human decision point for risky actions such as deployments, recovery, skill proposals, or sensitive tool use.
-- **ProofOfWork** — daemon-run evidence that records changed files, diffs, checks, review/QA feedback, handoffs, release status, and partial-success details.
+- **ProofOfWork** — daemon-run evidence that records changed files, diffs, checks, review/QA feedback, handoffs, release status, retry counts, last errors, attempted partial stages, and partial-success details.
 - **Warehouse** — a registry of normal product Git repositories under `products/<slug>/`, plus shared COO memory. It is not a custom VCS.
 - **Template** — a zero-to-MVP starter shape with recommended skills, starter files, QA gates, post-creation notes, and PRD prompt seeds.
 
@@ -291,8 +291,9 @@ aider company daemon --workflow PATH [--once] [--dry-run] [--status] [--run ISSU
 Run one issue-workflow daemon tick for an issue-backed workflow, preview it with
 `--dry-run`, trigger one issue with `--run ISSUE_ID`, restrict the runner with
 `--departments product,engineering,qa` and `--max-iterations N`, print
-run/workspace status with `--status`, or add `--watch` to stream shared EventBus
-progress while the run executes.
+run/workspace status with `--status` (including retry totals, latest error, and
+the last proof link), or add `--watch` to stream shared EventBus progress while
+the run executes.
 
 ### Warehouse commands
 
@@ -618,12 +619,13 @@ uses YAML front matter plus a prompt body. The daemon can:
 - use the built-in `CompanyDaemonRunner` by default to execute Company Mode cycles across Product/UX, Engineering review, QA, Delivery, and DevOps departments when they are registered;
 - capture changed files, concise diff summaries, JSON-stored diffs, recent commit messages, QA checks, review feedback, Delivery handover data, DevOps build/deploy status, links, risks, completed stages, failed stages, and partial-success state as structured proof-of-work;
 - continue through later departments when a stage fails where possible, marking `partial_success: true` for recoverable partial runs;
-- emit `daemon_run_progress` lifecycle events as stages start/finish so live surfaces can show long-running progress;
-- produce `.aider/company/run-state.json`, `.aider/company/proof-of-work.json`, and a human-readable `.aider/company/proof-of-work.md` with concise diff summaries;
+- emit `daemon_run_progress` lifecycle events as stages start/finish, including retry count and last-error fields so live surfaces can show long-running progress and retry context;
+- produce `.aider/company/run-state.json`, `.aider/company/proof-of-work.json`, and a human-readable `.aider/company/proof-of-work.md` with an executive TL;DR, detailed stage sections, retry metadata, partial-stage details, and concise diff summaries;
 - expose `CompanyDaemon.get_status()` with running/idle state, last run, active
-  workflows, pending proof-of-work, recent proof artifacts, hook timeout, and
-  max-workspace safety limits for dashboards and COO inspection;
-- comment, attach PR URLs, and transition tracker state.
+  workflows, pending proof-of-work, recent proof artifacts, retry stats, latest
+  proof link, hook timeout, and max-workspace safety limits for dashboards and
+  COO inspection;
+- comment, attach PR URLs with ProofOfWork Markdown links and summaries, and transition tracker state for GitHub or Linear-backed workflows.
 
 Example workflow:
 

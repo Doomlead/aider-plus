@@ -862,6 +862,9 @@ class ProofOfWork:
     risk_notes: tuple[str, ...] = ()
     completed_stages: tuple[str, ...] = ()
     failed_stages: tuple[str, ...] = ()
+    partial_stages: tuple[str, ...] = ()
+    retry_count: int = 0
+    last_error: str | None = None
     partial_success: bool = False
     human_review_required: bool = True
     markdown_path: str | None = None
@@ -889,6 +892,9 @@ class ProofOfWork:
             "risk_notes": list(self.risk_notes),
             "completed_stages": list(self.completed_stages),
             "failed_stages": list(self.failed_stages),
+            "partial_stages": list(self.partial_stages),
+            "retry_count": self.retry_count,
+            "last_error": self.last_error,
             "partial_success": self.partial_success,
             "human_review_required": self.human_review_required,
             "markdown_path": self.markdown_path,
@@ -924,6 +930,13 @@ class ProofOfWork:
                 str(item) for item in data.get("completed_stages", ())
             ),
             failed_stages=tuple(str(item) for item in data.get("failed_stages", ())),
+            partial_stages=tuple(str(item) for item in data.get("partial_stages", ())),
+            retry_count=int(data.get("retry_count", 0) or 0),
+            last_error=(
+                str(data.get("last_error"))
+                if data.get("last_error") is not None
+                else None
+            ),
             partial_success=bool(data.get("partial_success", False)),
             human_review_required=bool(data.get("human_review_required", True)),
             markdown_path=(
@@ -947,7 +960,20 @@ class ProofOfWork:
         links = list(self.links)
         if self.pr_url and self.pr_url not in links:
             links.insert(0, self.pr_url)
+        retry_note = f"Retry count: {self.retry_count}"
+        if self.last_error:
+            retry_note += f"; last error: {self.last_error}"
+        tldr = self.summary or "No summary provided."
+        if self.partial_success:
+            tldr += " Partial success; review failed or partial stages before merging."
+        elif self.human_review_required:
+            tldr += " Human review is required before this work is considered complete."
+        else:
+            tldr += " No human review blockers were detected."
         return f"""# Proof of Work: {self.issue}
+
+## Executive TL;DR
+{tldr}
 
 **Title:** {self.title}
 **Created:** {self.created_at}
@@ -955,15 +981,21 @@ class ProofOfWork:
 **Branch:** {self.branch or "unknown"}
 **Human review required:** {self.human_review_required}
 **Partial success:** {self.partial_success}
+**{retry_note}**
 
 ## Summary
 {self.summary or "No summary provided."}
 
-## Completed Stages
+## Stage Status
+
+### Completed Stages
 {bullets(self.completed_stages)}
 
-## Failed Stages
+### Failed Stages
 {bullets(self.failed_stages)}
+
+### Partial / Attempted Stages
+{bullets(self.partial_stages)}
 
 ## Changed Files
 {bullets(self.changed_files)}

@@ -32,6 +32,8 @@ class CompanyDaemonRunnerOptions:
     dry_run: bool = False
     continue_on_error: bool = True
     progress_every: int = 1
+    retry_count: int = 0
+    last_error: str | None = None
 
     def normalized_departments(self) -> tuple[str, ...]:
         return tuple(
@@ -117,7 +119,9 @@ class CompanyDaemonRunner:
             }
             for step_index, (department, artifact_type) in enumerate(sequence, start=1):
                 if department not in departments:
-                    risk_notes.append(f"Skipped {department}; department is not registered.")
+                    risk_notes.append(
+                        f"Skipped {department}; department is not registered."
+                    )
                     continue
                 await self._emit_progress(
                     issue,
@@ -129,7 +133,9 @@ class CompanyDaemonRunner:
                 )
                 task = CompanyTask(
                     task_id=f"{issue.identifier}:{department}",
-                    origin="daemon" if not deliverables else deliverables[-1].department,
+                    origin=(
+                        "daemon" if not deliverables else deliverables[-1].department
+                    ),
                     target=department,
                     artifact_type=artifact_type,  # type: ignore[arg-type]
                     payload=payload,
@@ -233,7 +239,11 @@ class CompanyDaemonRunner:
         )
         diffs = [{"file": "workspace.diff", "diff": diff}] if diff else []
         links = [issue.url] if issue.url else []
-        final_status = "partial_success" if partial_success else ("done" if deliverables else "not-run")
+        final_status = (
+            "partial_success"
+            if partial_success
+            else ("done" if deliverables else "not-run")
+        )
         await self._emit_progress(
             issue,
             stage="complete",
@@ -258,6 +268,9 @@ class CompanyDaemonRunner:
             "risk_notes": risk_notes,
             "completed_stages": completed_stages,
             "failed_stages": failed_stages,
+            "partial_stages": (
+                sorted(set(completed_stages + failed_stages)) if partial_success else []
+            ),
             "partial_success": partial_success,
             "human_review_required": human_review_required,
         }
@@ -316,6 +329,9 @@ class CompanyDaemonRunner:
             "failed_stages": list(failed_stages),
             "total_stages": total_stages,
             "completed_count": len(completed_stages),
+            "failed_count": len(failed_stages),
+            "retry_count": int(getattr(self.options, "retry_count", 0) or 0),
+            "last_error": getattr(self.options, "last_error", None),
         }
         if error:
             payload["error"] = error

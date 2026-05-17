@@ -29,6 +29,7 @@ from aider.company.agent_factory import build_company_agent_loops
 from aider.company.audit import AuditLogViewer
 from aider.company.config import apply_agent_model_overrides_from_env
 from aider.company.coo import NanobotCOO
+from aider.company.events import CompanyEvent as RuntimeCompanyEvent
 from aider.company.daemon import CompanyDaemonError, load_daemon
 from aider.company.knowledge import KnowledgeManager
 from aider.company.departments.delivery import DeliveryDepartment
@@ -41,6 +42,7 @@ from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.workflow import WorkflowError
 from aider.company.project import Project
 from aider.company.skills import CompanySkillManager
+from aider.company.surface_messages import format_runtime_event_message
 from aider.company.schemas import CompanyTask
 from aider.main import main as cli_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
@@ -1417,6 +1419,9 @@ class AiderPlusDesktop:
         self.coo_status_text.tag_configure(
             "coo_error", foreground="#B42318", font=("TkDefaultFont", 10, "bold")
         )
+        self.coo_status_text.tag_configure("event_error", foreground="#B42318")
+        self.coo_status_text.tag_configure("event_warning", foreground="#B7791F")
+        self.coo_status_text.tag_configure("event_info", foreground="#175CD3")
         self.coo_status_text.pack(fill="both", expand=True)
         panes.add(coo_frame, weight=2)
 
@@ -2140,12 +2145,25 @@ class AiderPlusDesktop:
                         *(f"- {task_id}" for task_id in pending_escalations[-5:]),
                     ]
                 )
-        lines.extend(["", "Recent COO events:"])
-        events = status.get("recent_events") or []
-        if events:
-            lines.extend(f"- {event}" for event in events[-20:])
+        lines.extend(["", "Recent EventBus events (grouped):"])
+        bus = getattr(getattr(self.company, "orchestrator", None), "event_bus", None)
+        runtime_events = bus.get_recent_events(limit=30) if bus else []
+        if runtime_events:
+            grouped: dict[str, list[RuntimeCompanyEvent]] = {}
+            for event in runtime_events:
+                grouped.setdefault(event.event_type, []).append(event)
+            for event_type, grouped_events in grouped.items():
+                lines.append(f"▸ {company_label(event_type)} ({len(grouped_events)})")
+                for event in grouped_events[-5:]:
+                    lines.append(
+                        "  " + format_runtime_event_message(event, compact=True)
+                    )
         else:
-            lines.append("- No bus events yet.")
+            events = status.get("recent_events") or []
+            if events:
+                lines.extend(f"- {event}" for event in events[-20:])
+            else:
+                lines.append("- No bus events yet.")
         summary = status.get("last_deliverable_summary")
         if summary:
             lines.extend(["", "Last deliverable summary:", str(summary)[:1200]])
@@ -2310,6 +2328,13 @@ class AiderPlusDesktop:
             return
         events, _version = self.company.drain_events()
         for event in events:
+            if isinstance(event, RuntimeCompanyEvent):
+                self._append_chat(
+                    company_label(event.event_type),
+                    format_runtime_event_message(event, compact=True),
+                    tag="aider",
+                )
+                continue
             message = (
                 getattr(event, "message", None)
                 or getattr(event, "payload", None)

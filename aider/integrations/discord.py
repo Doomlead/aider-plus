@@ -21,6 +21,7 @@ from aider.company.surface_messages import (
     format_company_status_message,
     format_coo_status_message,
     format_lifecycle_event_message,
+    format_discord_event_block,
     format_runtime_event_message,
 )
 from aider.main import main as aider_main
@@ -48,7 +49,12 @@ def subscribe_discord_event_forwarder(
     async def handler(event: RuntimeCompanyEvent):
         if event.event_type not in selected:
             return
-        result = forward(format_runtime_event_message(event))
+        formatter = (
+            format_discord_event_block
+            if event.event_type in HIGH_PRIORITY_EVENT_TYPES or event.severity != "info"
+            else format_runtime_event_message
+        )
+        result = forward(formatter(event))
         if asyncio.iscoroutine(result):
             await result
 

@@ -23,6 +23,7 @@ from aider.company.agent_factory import build_company_agent_loops
 from aider.company.audit import AuditLogViewer
 from aider.company.config import apply_agent_model_overrides_from_env
 from aider.company.coo import NanobotCOO
+from aider.company.events import CompanyEvent as RuntimeCompanyEvent
 from aider.company.daemon import CompanyDaemonError, load_daemon
 from aider.company.knowledge import KnowledgeManager
 from aider.company.departments.delivery import DeliveryDepartment
@@ -36,6 +37,7 @@ from aider.company.workflow import WorkflowError
 from aider.company.project import Project
 from aider.company.skills import CompanySkillManager
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
+from aider.company.surface_messages import format_runtime_event_message
 from aider.dump import dump  # noqa: F401
 from aider.io import InputOutput
 from aider.main import main as cli_main
@@ -1273,6 +1275,16 @@ class GUI:
                         st.rerun()
 
     def render_company_event(self, event):
+        if isinstance(event, RuntimeCompanyEvent):
+            message = format_runtime_event_message(event)
+            if event.severity == "error":
+                st.error(message)
+            elif event.severity == "warning":
+                st.warning(message)
+            else:
+                st.info(message)
+            return
+
         if isinstance(event, EventMessage):
             if event.event == CompanyEvent.APPROVAL_REQUIRED:
                 st.warning(f"Approval required: {event.task_id}")
@@ -1621,6 +1633,19 @@ class GUI:
                         if proof.get("path"):
                             st.caption(proof["path"])
 
+        st.subheader("Live EventBus Feed")
+        feed_limit = int(getattr(self.state, "company_feed_limit", 10) or 10)
+        bus = getattr(company.orchestrator, "event_bus", None)
+        feed_events = bus.get_recent_events(limit=feed_limit) if bus else []
+        if feed_events:
+            for event in reversed(feed_events):
+                self.render_company_event(event)
+            if st.button("Load More events", key="company_feed_load_more"):
+                self.state.company_feed_limit = feed_limit + 20
+                st.rerun()
+        else:
+            st.caption("No EventBus events have been published yet.")
+
         m1, m2, m3 = st.columns(3)
         m1.metric("Turns this session", metrics["turns_this_session"])
         m2.metric("Approvals pending", metrics["approvals_pending"])
@@ -1717,8 +1742,23 @@ class GUI:
                     st.warning("Pending human escalations")
                     st.json(coo_status.get("pending_human_escalations"))
                 st.write("**Recent events**")
-                for event in (coo_status.get("recent_events") or [])[-20:]:
-                    st.info(str(event))
+                bus = getattr(company.orchestrator, "event_bus", None)
+                rich_events = bus.get_recent_events(limit=20) if bus else []
+                if rich_events:
+                    grouped = {}
+                    for event in rich_events:
+                        grouped.setdefault(event.event_type, []).append(event)
+                    for event_type, events in grouped.items():
+                        with st.expander(
+                            humanize_company_label(event_type),
+                            expanded=event_type
+                            in {"approval_required", "project_blocked"},
+                        ):
+                            for event in events:
+                                self.render_company_event(event)
+                else:
+                    for event in (coo_status.get("recent_events") or [])[-20:]:
+                        st.info(str(event))
             except Exception as err:
                 st.error(f"COO activity unavailable: {err}")
         with st.expander("Raw company status", expanded=False):
@@ -1772,6 +1812,35 @@ class GUI:
         c2.metric("Skills", counts.get("skills", 0))
         c3.metric("Pending Proposals", counts.get("pending_proposals", 0))
         c4.metric("COO Memory", counts.get("coo_memory_entries", 0))
+
+        with st.expander("Knowledge EventBus replay", expanded=False):
+            knowledge_limit = int(
+                getattr(self.state, "knowledge_event_feed_limit", 10) or 10
+            )
+            bus = getattr(company.orchestrator, "event_bus", None)
+            knowledge_events = (
+                bus.get_recent_events(
+                    filter_by_type={
+                        "skill_proposal_updated",
+                        "coo_action_taken",
+                        "department_event",
+                        "lifecycle",
+                    },
+                    limit=knowledge_limit,
+                )
+                if bus
+                else []
+            )
+            if knowledge_events:
+                for event in reversed(knowledge_events):
+                    self.render_company_event(event)
+                if st.button(
+                    "Load More knowledge events", key="knowledge_feed_load_more"
+                ):
+                    self.state.knowledge_event_feed_limit = knowledge_limit + 20
+                    st.rerun()
+            else:
+                st.caption("No retained knowledge-related EventBus events yet.")
 
         recently_injected = overview.get("recently_injected") or []
         st.subheader("Recently Injected")

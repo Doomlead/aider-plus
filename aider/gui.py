@@ -677,6 +677,25 @@ class DesktopCompanySession:
             ),
             "deploy_url": deployment_result.get("deployed_url")
             or deploy_payload.get("deploy_url"),
+            "provider": (
+                (deployment_result.get("target") or {}).get("provider")
+                if isinstance(deployment_result.get("target"), dict)
+                else (
+                    (deploy_payload.get("deployment_target") or {}).get("provider")
+                    if isinstance(deploy_payload.get("deployment_target"), dict)
+                    else "local"
+                )
+            ),
+            "logs_url": deployment_result.get("logs_url")
+            or deploy_payload.get("logs_url"),
+            "deployed_at": deployment_result.get("deployed_at")
+            or deploy_payload.get("deployed_at"),
+            "deployment_notes": deployment_result.get("deployment_notes")
+            or deploy_payload.get("deployment_notes"),
+            "rollback_command": (
+                deployment_result.get("rollback_command")
+                or deploy_payload.get("rollback_command")
+            ),
             "logs_summary": (
                 deploy_payload.get("build_logs_summary")
                 or build_artifact.get("build_logs_summary")
@@ -733,6 +752,12 @@ class DesktopCompanySession:
                 last_build.get("logs_summary") or "No build logs captured yet."
             ),
             "last_build_log_artifacts": last_build.get("log_artifacts", []),
+            "last_deployment_provider": last_build.get("provider", "local"),
+            "last_deployment_url": last_build.get("deploy_url"),
+            "last_deployment_logs_url": last_build.get("logs_url"),
+            "last_deployment_deployed_at": last_build.get("deployed_at"),
+            "last_deployment_notes": last_build.get("deployment_notes"),
+            "last_deployment_rollback_command": last_build.get("rollback_command"),
             "active_warehouse_products": active_products,
             "mcp_status": (
                 f"enabled ({len(getattr(mcp_config, 'servers', {}) or {})} servers)"
@@ -1514,6 +1539,30 @@ class GUI:
                 f"pending proof-of-work={overview['daemon_pending_proof_of_work']}"
             )
             st.write(f"**Last build status:** {overview['last_build_status']}")
+            st.write(
+                "**Last deployment:** "
+                f"[{overview.get('last_deployment_provider', 'local')}] "
+                f"{overview.get('last_deployment_url') or 'n/a'}"
+            )
+            st.write(
+                "**Last Deployed:** "
+                f"{overview.get('last_deployment_deployed_at') or 'n/a'}"
+            )
+            st.write(
+                "**Last deployment logs URL:** "
+                f"{overview.get('last_deployment_logs_url') or 'n/a'}"
+            )
+            if overview.get("last_deployment_notes"):
+                st.write(f"**Deployment notes:** {overview['last_deployment_notes']}")
+            rollback_command = overview.get("last_deployment_rollback_command")
+            if rollback_command:
+                with st.expander("Rollback", expanded=False):
+                    st.warning(
+                        "Review this safe rollback command and run it only through an approved shell gate."
+                    )
+                    st.code(str(rollback_command), language="bash")
+            else:
+                st.write("**Rollback:** no safe rollback command recorded")
             st.write(f"**Last build artifact:** {overview['last_build_artifact']}")
             st.write(
                 f"**Last build logs:** {str(overview['last_build_logs_summary'])[:500]}"

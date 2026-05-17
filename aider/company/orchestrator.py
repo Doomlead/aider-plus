@@ -953,6 +953,12 @@ class CompanyOrchestrator:
                     and task.payload.get("delivery_handover")
                     else context.get("delivery_handover")
                 ),
+                "deployment_target": (
+                    task.payload.get("deployment_target")
+                    if isinstance(task.payload, dict)
+                    and task.payload.get("deployment_target")
+                    else context.get("deployment_target")
+                ),
                 "environment": context.get("environment", "production"),
             },
             blocking=False,
@@ -1059,6 +1065,12 @@ class CompanyOrchestrator:
                 "delivery_handover": (
                     d.metadata.get("delivery_handover")
                     if d.department == "delivery"
+                    else None
+                ),
+                "deployment_target": (
+                    (d.metadata.get("delivery_handover") or {}).get("deployment_target")
+                    if d.department == "delivery"
+                    and isinstance(d.metadata.get("delivery_handover"), dict)
                     else None
                 ),
             },

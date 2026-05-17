@@ -409,28 +409,95 @@ long-running sessions.
 Delivery remains the release-readiness gate, while DevOps is the execution layer
 for a green handoff:
 
-- `BuildArtifact`, `DeploymentResult`, and `DeliveryHandover.from_dict()` provide
-  structured release schemas so build/deploy artifacts can round-trip through
-  department payloads, metadata, dashboards, and audit surfaces.
-- `DevOpsDepartment` validates the Delivery handover, performs builds, performs
-  deployments, emits `devops_build_started`, `devops_build_success`,
-  `devops_deploy_started`, `devops_deployed`, and `devops_failure` lifecycle
-  events, and returns rich build/deploy metadata in `deploy_report` deliverables.
+- `BuildArtifact`, `DeploymentTarget`, `DeploymentResult`, and
+  `DeliveryHandover.from_dict()` provide structured release schemas so
+  build/deploy artifacts can round-trip through department payloads, metadata,
+  dashboards, and audit surfaces. Deployment results now include the selected
+  provider/environment/config target, deployed URL, logs URL, human-readable
+  `deployment_notes`, `deployed_at` timestamp, and a recorded rollback command
+  when one can be generated safely.
+- `DevOpsDepartment` validates the Delivery handover, performs builds, selects a
+  provider target, performs deployments, emits `devops_build_started`,
+  `devops_build_success`, `devops_deploy_started`, `devops_deployed`, and
+  `devops_failure` lifecycle events, and returns rich build/deploy metadata in
+  `deploy_report` deliverables.
 - Safe shell execution uses explicit allowlists for Docker builds, Python package
-  builds, npm builds, wheel creation, and tagging. High-risk deployment commands
-  such as `kubectl`, `helm`, cloud CLIs, registry pushes, and hosted deploy CLIs
-  require explicit approval flags before execution.
-- Build detection can infer Docker, Python package, or npm build commands from
-  repository files, while configured deployment commands are supported for real
-  environments. When no external deployment command is configured, DevOps writes
-  a local deployment manifest under `.aider/company/deployments/`.
+  builds, npm builds, wheel creation, and tagging. Provider deploy commands for
+  Vercel, Railway, Fly.io, AWS, and Docker Compose are generated from structured
+  `DeploymentTarget.config` values instead of free-form shell snippets. Every
+  provider command is still treated as high risk and requires explicit approval
+  flags such as `devops_high_risk_approved`/`deploy_approved` before execution.
+  Environment-specific approval signals such as `deployment_approvals.staging`,
+  `devops_production_approved`, or `devops_critical_approved` can be used with
+  target config `approval_level` values like `standard` or `critical`.
+- Build detection can infer Docker, Python package, npm, Make, Cargo, or Go build
+  commands from repository files, while configured deployment commands remain
+  supported for real environments under the same allowlist/approval gates. When
+  no external deployment command is configured, DevOps writes a local deployment
+  manifest under `.aider/company/deployments/`.
+- Deployment providers can be restricted with
+  `AIDER_DEVOPS_DEPLOYMENT_PROVIDERS=local,vercel,railway,fly,aws,docker-compose`.
+  Log capture defaults to `.aider/company/build-logs` and can be redirected with
+  `AIDER_DEVOPS_LOG_CAPTURE_DIR`; set
+  `AIDER_DEVOPS_ARTIFACT_UPLOAD_TARGET=s3://bucket/prefix` or
+  `github://owner/repo/releases/tag` to surface durable log artifact URLs in the
+  deployment result.
+- Example deployment target payloads:
+
+  ```json
+  {
+    "deployment_target": {
+      "provider": "vercel",
+      "environment": "production",
+      "config": {"project": "invite-flow", "scope": "acme"}
+    },
+    "devops_high_risk_approved": true
+  }
+  ```
+
+  ```json
+  {
+    "deployment_target": {
+      "provider": "docker-compose",
+      "environment": "staging",
+      "config": {"file": "compose.yaml", "service": "web"}
+    },
+    "deploy_approved": true
+  }
+  ```
+
+  Environment-specific config can override provider settings and approval level:
+
+  ```json
+  {
+    "deployment_target": {
+      "provider": "railway",
+      "environment": "staging",
+      "config": {
+        "service": "web",
+        "approval_level": "critical",
+        "environments": {
+          "staging": {"service": "staging-web", "approval_level": "standard"},
+          "production": {"service": "prod-web", "approval_level": "critical"}
+        }
+      }
+    },
+    "deployment_approvals": {"staging": true},
+    "deployment_notes": "Deploy staging release candidate for smoke testing."
+  }
+  ```
 - The orchestrator routes validated release approvals through
-  `_execute_devops_release()` and creates Delivery-originated DevOps handoff
-  tasks so the lifecycle remains Engineering → QA → Delivery → DevOps.
-- Company dashboard/status output includes the latest build artifact, deployment
-  status, artifact location, and deployed URL when a DevOps result is present.
-- DevOps coverage includes successful build/deploy execution, readiness-gate
-  blocking, high-risk command gating, and schema round-tripping tests.
+  `_execute_devops_release()` and passes Delivery's `DeploymentTarget` into
+  Delivery-originated DevOps handoff tasks so the lifecycle remains Engineering →
+  QA → Delivery → DevOps.
+- Company dashboard/status output includes the latest build artifact, provider
+  badge text, deployment status, deployed URL, logs URL, deployment notes,
+  **Last Deployed** timestamp, and a Rollback button that copies the recorded
+  rollback command for human review instead of running it automatically.
+- DevOps coverage includes successful build/deploy execution, provider-specific
+  command generation, disabled-provider blocking, readiness-gate blocking,
+  high-risk command gating, log URL generation, environment-specific config
+  merging, mocked Vercel end-to-end deployment, and schema round-tripping tests.
 
 Company state includes lifecycle phases, approval gates, resolved task IDs,
 pending tasks, recovered gates, audit events, playbook memory, and project

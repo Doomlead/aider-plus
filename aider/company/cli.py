@@ -42,6 +42,7 @@ class CompanyCLICommand:
     runner_max_iterations: int | None = None
     tracker_type: str | None = None
     repo: str | None = None
+    watch: bool = False
 
 
 class CompanyCLIError(ValueError):
@@ -52,7 +53,7 @@ USAGE = """Usage:
   aider company templates
   aider company create <idea> [--template TEMPLATE] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
   aider company new <idea> [--template TEMPLATE] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
-  aider company daemon --workflow PATH [--tracker TYPE] [--repo OWNER/REPO] [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N]
+  aider company daemon --workflow PATH [--tracker TYPE] [--repo OWNER/REPO] [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N] [--watch]
   aider warehouse init [PATH]
   aider warehouse list [--warehouse PATH]
   aider warehouse open PRODUCT [--warehouse PATH]
@@ -168,6 +169,7 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
     runner_max_iterations: int | None = None
     tracker_type: str | None = None
     repo: str | None = None
+    watch: bool = False
     rest = list(args)
     index = 0
     while index < len(rest):
@@ -193,6 +195,8 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
             once = True
         elif token == "--status":
             status = True
+        elif token == "--watch":
+            watch = True
         elif token == "--run":
             index += 1
             if index >= len(rest):
@@ -201,20 +205,28 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
         elif token == "--departments":
             index += 1
             if index >= len(rest):
-                raise CompanyCLIError("--departments requires a comma-separated list.\n" + USAGE)
+                raise CompanyCLIError(
+                    "--departments requires a comma-separated list.\n" + USAGE
+                )
             runner_departments = tuple(
                 item.strip().lower() for item in rest[index].split(",") if item.strip()
             )
         elif token == "--max-iterations":
             index += 1
             if index >= len(rest):
-                raise CompanyCLIError("--max-iterations requires a positive integer.\n" + USAGE)
+                raise CompanyCLIError(
+                    "--max-iterations requires a positive integer.\n" + USAGE
+                )
             try:
                 runner_max_iterations = int(rest[index])
             except ValueError as exc:
-                raise CompanyCLIError("--max-iterations must be a positive integer.\n" + USAGE) from exc
+                raise CompanyCLIError(
+                    "--max-iterations must be a positive integer.\n" + USAGE
+                ) from exc
             if runner_max_iterations < 1:
-                raise CompanyCLIError("--max-iterations must be a positive integer.\n" + USAGE)
+                raise CompanyCLIError(
+                    "--max-iterations must be a positive integer.\n" + USAGE
+                )
         else:
             raise CompanyCLIError(f"Unknown company daemon option: {token}.\n{USAGE}")
         index += 1
@@ -234,6 +246,7 @@ def _parse_company_daemon(args: Sequence[str]) -> CompanyCLICommand:
         runner_max_iterations=runner_max_iterations,
         tracker_type=tracker_type,
         repo=repo,
+        watch=watch,
     )
 
 
@@ -324,6 +337,23 @@ def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
             max_iterations=command.runner_max_iterations,
             dry_run=command.dry_plan,
         )
+        unsubscribe = None
+        if command.watch:
+            from aider.company.surface_messages import format_runtime_event_message
+
+            def _print_event(event):
+                print(format_runtime_event_message(event), flush=True)
+
+            event_bus = getattr(
+                getattr(daemon, "orchestrator", None), "event_bus", None
+            )
+            if event_bus is None:
+                # Force lazy default runner construction so the daemon and runner share a bus.
+                event_bus = getattr(
+                    daemon._get_default_runner().orchestrator, "event_bus", None
+                )
+            if event_bus is not None:
+                unsubscribe = event_bus.subscribe(_print_event)
         if command.status:
             status = daemon.status()
             print(f"Workflow: {status['workflow']}")
@@ -361,6 +391,8 @@ def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
         if not proofs:
             print("No eligible company daemon issues found.")
             return 0
+        if unsubscribe is not None:
+            unsubscribe()
         for proof in proofs:
             print(f"Issue: {proof.issue}")
             print(f"Workspace: {proof.workspace}")

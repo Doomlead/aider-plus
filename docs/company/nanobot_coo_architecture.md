@@ -40,6 +40,12 @@ Company bridge: delegate_company_task / product iteration request
         v
 CompanyOrchestrator
         |
+        +--> shared typed EventBus
+        |     - coo_action_taken
+        |     - lifecycle / approval_required
+        |     - daemon_run_progress / deployment_completed
+        |     - consumed by Browser, Desktop, Discord, daemon --watch, API/MCP
+        |
         v
 Internal departments, each with a dedicated AiderAgentLoop
   - ProductAgent
@@ -55,7 +61,10 @@ Internal departments, each with a dedicated AiderAgentLoop
 - **COO**: the persistent Nanobot-style personal assistant and company operator.
 - **Departments**: internal execution teams owned by `CompanyOrchestrator`.
 - **CompanyOrchestrator**: the canonical workflow, approval, lifecycle,
-  context-building, handoff, and audit coordinator.
+  context-building, handoff, audit, and EventBus publishing coordinator.
+- **EventBus**: the central typed runtime stream; COO bus events, lifecycle
+  transitions, daemon progress, approvals, and deployment completion are
+  published once and consumed consistently by all surfaces.
 
 The COO should not replace Product → UX → Engineering → QA → DevOps. The COO
 chooses whether the CEO needs a direct response, clarification, memory update,

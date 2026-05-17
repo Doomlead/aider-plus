@@ -14,15 +14,45 @@ from pathlib import Path
 from typing import Awaitable, Callable, Dict, Optional, Set
 
 from aider.coders import Coder
+from aider.company.events import CompanyEvent as RuntimeCompanyEvent, EventBus
 from aider.company.surface_messages import (
     format_approval_required_message,
     format_audit_log_message,
     format_company_status_message,
     format_coo_status_message,
     format_lifecycle_event_message,
+    format_runtime_event_message,
 )
 from aider.main import main as aider_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
+
+HIGH_PRIORITY_EVENT_TYPES = {
+    "approval_required",
+    "project_blocked",
+    "daemon_run_progress",
+    "deployment_completed",
+    "coo_action_taken",
+}
+
+
+def subscribe_discord_event_forwarder(
+    event_bus: EventBus,
+    forward: Callable[[str], Awaitable[None] | None],
+    *,
+    event_types: Set[str] | None = None,
+):
+    """Forward selected high-priority Company EventBus events to Discord."""
+
+    selected = set(event_types or HIGH_PRIORITY_EVENT_TYPES)
+
+    async def handler(event: RuntimeCompanyEvent):
+        if event.event_type not in selected:
+            return
+        result = forward(format_runtime_event_message(event))
+        if asyncio.iscoroutine(result):
+            await result
+
+    return event_bus.subscribe(handler)
 
 
 @dataclass(frozen=True)

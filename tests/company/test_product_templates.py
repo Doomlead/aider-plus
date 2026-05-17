@@ -17,6 +17,8 @@ def test_template_catalog_lists_hardened_product_templates():
         "python-fastapi-api",
         "electron-desktop-app",
         "data-dashboard",
+        "data-dashboard-streamlit",
+        "cli-tool-python",
     ]:
         assert key in catalog
 
@@ -30,6 +32,7 @@ def test_template_model_exposes_richer_metadata():
     assert "frontend" in template.recommended_skills
     assert "README.md" in template.starter_files
     assert template.post_creation_instructions
+    assert template.qa_gates
     assert "PRD" in template.example_prd_prompt
 
 
@@ -44,9 +47,11 @@ def test_render_template_starter_files_generates_company_scaffold():
     product = json.loads(files[".aider/company/product.json"])
     assert product["template"] == "data-dashboard"
     assert "data" in product["recommended_skills"]
+    assert product["qa_gates"]
     assert files["README.md"].startswith("# Founder Metrics")
     assert "Product → UX" in files["docs/company-mode.md"]
     assert "Metric definitions" in files["src/metrics/README.md"]
+    assert "## QA Gates" in files["docs/product-brief.md"]
     assert ".aider/skills/data/SKILL.md" in files
 
 
@@ -86,3 +91,26 @@ def test_warehouse_applies_template_post_creation_hooks(tmp_path):
     assert product_path.joinpath(".aider", "company", "post-creation.md").exists()
     assert product_path.joinpath("electron", "preload", "README.md").exists()
     assert product_path.joinpath(".aider", "skills", "desktop", "SKILL.md").exists()
+    assert product_path.joinpath(".git").exists()
+
+
+def test_new_high_value_templates_seed_expected_files():
+    streamlit_files = render_template_starter_files(
+        idea="Build a KPI dashboard",
+        template_key="data-dashboard-streamlit",
+        project_name="KPI Studio",
+        project_slug="kpi-studio",
+    )
+    assert "app.py" in streamlit_files
+    assert "src/kpi_studio/metrics/README.md" in streamlit_files
+    assert ".aider/skills/python/SKILL.md" in streamlit_files
+
+    cli_files = render_template_starter_files(
+        idea="Build a report exporter",
+        template_key="cli-tool-python",
+        project_name="Report Exporter",
+        project_slug="report-exporter",
+    )
+    assert "src/report_exporter/cli.py" in cli_files
+    assert "src/report_exporter/config.py" in cli_files
+    assert "exit-code" in cli_files["tests/README.md"]

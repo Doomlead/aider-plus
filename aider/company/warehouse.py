@@ -136,6 +136,10 @@ class WarehouseManager:
             product_path=product_path,
             template=resolved_template.key,
         )
+        self._commit_initial_scaffold(
+            product_path=product_path,
+            template=resolved_template.key,
+        )
 
         registry = self._read_registry()
         products = registry.setdefault("products", {})
@@ -250,9 +254,9 @@ class WarehouseManager:
         """Materialize template post-creation guidance inside the product repo."""
 
         project_template = get_template(template)
-        instructions = project_template.post_creation_instructions or (
+        instructions = project_template.post_creation_steps() or [
             "Run Product discovery before adding major dependencies.",
-        )
+        ]
         target = product_path / ".aider" / "company" / "post-creation.md"
         if target.exists():
             return
@@ -264,6 +268,64 @@ class WarehouseManager:
             f"{bullets}\n",
             encoding="utf-8",
         )
+
+
+    @staticmethod
+    def _commit_initial_scaffold(*, product_path: Path, template: str) -> None:
+        """Commit newly scaffolded files so product repos start review-ready."""
+
+        try:
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=product_path,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if not status.stdout.strip():
+                return
+            subprocess.run(
+                ["git", "add", "--all"],
+                cwd=product_path,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            existing_commit = subprocess.run(
+                ["git", "rev-parse", "--verify", "HEAD"],
+                cwd=product_path,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            message = (
+                f"Scaffold {template} product"
+                if existing_commit.returncode != 0
+                else f"Update {template} scaffold"
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Aider Plus",
+                    "-c",
+                    "user.email=aider-plus@example.invalid",
+                    "commit",
+                    "-m",
+                    message,
+                ],
+                cwd=product_path,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise WarehouseError(
+                f"Unable to commit initial scaffold at {product_path}: {exc}"
+            ) from exc
 
     @staticmethod
     def _ensure_git_repo(path: Path) -> None:

@@ -256,9 +256,13 @@ def format_template_list() -> str:
     lines = ["Aider Plus zero-to-MVP templates:"]
     for template in list_templates():
         lines.append(f"- {template.summary()}")
-        if template.post_creation_instructions:
+        if template.recommended_skills:
+            lines.append("  skills: " + ", ".join(template.recommended_skills))
+        if template.all_qa_gates():
+            lines.append("  QA gates: " + "; ".join(template.all_qa_gates()[:2]))
+        if template.post_creation_steps():
             lines.append(
-                "  post-create: " + "; ".join(template.post_creation_instructions[:2])
+                "  post-create: " + "; ".join(template.post_creation_steps()[:2])
             )
         if template.example_prd_prompt:
             lines.append(f"  PRD seed: {template.example_prd_prompt}")

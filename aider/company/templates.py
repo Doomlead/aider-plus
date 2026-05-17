@@ -26,10 +26,24 @@ class ProjectTemplate:
     engineering_defaults: tuple[str, ...]
     qa_focus: tuple[str, ...]
     iteration_hooks: tuple[str, ...]
-    recommended_skills: tuple[str, ...] = ()
-    starter_files: Mapping[str, str] = field(default_factory=dict)
-    post_creation_instructions: tuple[str, ...] = ()
+    recommended_skills: list[str] = field(default_factory=list)
+    starter_files: dict[str, str] = field(default_factory=dict)
+    post_creation_instructions: str = ""
     example_prd_prompt: str = ""
+    qa_gates: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Normalize older tuple-based declarations into rich template metadata."""
+
+        object.__setattr__(self, "recommended_skills", list(self.recommended_skills))
+        object.__setattr__(self, "starter_files", dict(self.starter_files))
+        object.__setattr__(self, "qa_gates", list(self.qa_gates))
+        if isinstance(self.post_creation_instructions, (tuple, list)):
+            object.__setattr__(
+                self,
+                "post_creation_instructions",
+                "\n".join(str(item) for item in self.post_creation_instructions),
+            )
 
     def summary(self) -> str:
         skills = (
@@ -38,6 +52,20 @@ class ProjectTemplate:
             else "generalist"
         )
         return f"{self.key}: {self.label} — {self.description} (skills: {skills})"
+
+    def post_creation_steps(self) -> list[str]:
+        """Return normalized post-create instructions as display-ready steps."""
+
+        return [
+            line.strip("- ")
+            for line in self.post_creation_instructions.splitlines()
+            if line.strip()
+        ]
+
+    def all_qa_gates(self) -> list[str]:
+        """Return explicit QA gates, falling back to the older QA focus metadata."""
+
+        return self.qa_gates or list(self.qa_focus)
 
     def all_starter_files(self) -> Mapping[str, str]:
         """Return immutable template-owned starter files."""
@@ -267,6 +295,12 @@ TEMPLATES: dict[str, ProjectTemplate] = {
             "Keep SaaS provider adapters mocked until real credentials and deployment targets are known.",
             "Ask UX to review onboarding, empty states, and upgrade prompts before Engineering hardens flows.",
         ),
+        qa_gates=[
+            "Product brief names ICP, activation event, roles, and MVP acceptance criteria.",
+            "UX covers onboarding, dashboard empty/loading/error states, and upgrade prompts.",
+            "Engineering keeps auth, billing, analytics, and data providers behind mockable adapters.",
+            "QA verifies protected routes, workspace switching, billing seams, and accessibility basics.",
+        ],
         example_prd_prompt="Draft a PRD for a B2B SaaS MVP with onboarding, a workspace dashboard, role-aware settings, and mocked billing seams.",
     ),
     "python-fastapi-api": ProjectTemplate(
@@ -307,6 +341,12 @@ TEMPLATES: dict[str, ProjectTemplate] = {
             "Keep a health/readiness path and deterministic test fixtures in the first implementation.",
             "Document any endpoint compatibility promises in `docs/product-brief.md`.",
         ),
+        qa_gates=[
+            "OpenAPI/resource contracts are documented before persistence choices harden.",
+            "Health/readiness behavior and config expectations are represented in starter code or docs.",
+            "Route, schema, service, repository, auth-boundary, and validation-error tests are seeded or planned.",
+            "DevOps has explicit notes for environment variables, local run, and deployment assumptions.",
+        ],
         example_prd_prompt="Draft a PRD for a Python FastAPI MVP covering resources, endpoint contracts, auth boundaries, and local test fixtures.",
     ),
     "electron-desktop-app": ProjectTemplate(
@@ -345,6 +385,12 @@ TEMPLATES: dict[str, ProjectTemplate] = {
             "Keep IPC contracts documented and security-reviewed before exposing filesystem access.",
             "Document packaging/signing/update assumptions even if they remain TODOs in v0.",
         ),
+        qa_gates=[
+            "Desktop platform targets, offline expectations, and local data boundaries are documented.",
+            "IPC surface is narrow, named, and reviewed before renderer code can access local resources.",
+            "Renderer, domain logic, launch smoke, settings persistence, and permission failures have QA coverage planned.",
+            "Delivery notes include packaging, signing, auto-update, and platform-specific TODOs.",
+        ],
         example_prd_prompt="Draft a PRD for an Electron desktop MVP with offline-first workflows, secure IPC, local data, and packaging assumptions.",
     ),
     "data-dashboard": ProjectTemplate(
@@ -383,7 +429,148 @@ TEMPLATES: dict[str, ProjectTemplate] = {
             "Keep live-source credentials out of the repo and use sanitized fixtures for v0.",
             "Ask QA to pin expected metric outcomes so future iterations catch regressions.",
         ),
+        qa_gates=[
+            "Metric definitions, source freshness, owners, and sensitive fields are explicit in Product docs.",
+            "Sample fixtures include expected metric outcomes for QA and Engineering regression tests.",
+            "UX documents chart hierarchy, filters, empty states, dirty-data states, and export expectations.",
+            "DevOps notes live-source credentials, privacy, retention, and refresh cadence before production data is connected.",
+        ],
         example_prd_prompt="Draft a PRD for a data dashboard MVP covering audiences, metric definitions, source fixtures, charts, filters, and exports.",
+    ),
+
+    "data-dashboard-streamlit": ProjectTemplate(
+        key="data-dashboard-streamlit",
+        label="Streamlit data dashboard",
+        description="Streamlit analytics MVP with fixtures, metric contracts, interactive filters, and export-ready views.",
+        discovery_focus=(
+            "dashboard audience, metric glossary, source freshness, and data sensitivity",
+            "primary questions, filter dimensions, chart hierarchy, and export needs",
+            "fixture strategy, refresh cadence, and deployment/sharing assumptions",
+        ),
+        engineering_defaults=(
+            "keep Streamlit page code thin by separating ingestion, metrics, and view models",
+            "ship with sanitized fixtures and deterministic metric calculations before live connectors",
+            "document secrets, caching, and deployment assumptions in the starter docs",
+        ),
+        qa_focus=(
+            "metric fixture correctness, filter interactions, missing data states, and export contracts",
+            "smoke coverage for Streamlit entrypoint plus pure tests for transforms and metrics",
+        ),
+        iteration_hooks=(
+            "record metric glossary and chart review decisions after each Product/UX pass",
+            "keep source adapters replaceable so live data can be added without rewriting views",
+        ),
+        recommended_skills=["product", "data", "ux", "python", "qa", "devops"],
+        starter_files={
+            "README.md": """# $project_name
+
+$idea
+
+Aider Plus scaffolded this as a Streamlit data dashboard MVP with deterministic fixtures and metric contracts.
+
+## Suggested Structure
+- `app.py` — thin Streamlit entrypoint and page composition
+- `data/sample/` — sanitized fixtures
+- `src/$python_package/ingestion/` — source readers and refresh seams
+- `src/$python_package/metrics/` — pure metric calculations and glossary
+- `src/$python_package/presentation/` — chart/table/export view models
+- `tests/` — fixture, metric, filter, and export checks
+""",
+            "app.py": """\"\"\"Streamlit entrypoint for $project_name.\"\"\"
+
+
+def main() -> None:
+    \"\"\"Placeholder entrypoint until Streamlit dependencies are selected.\"\"\"
+    print(\"$project_name dashboard scaffold is ready.\")
+
+
+if __name__ == \"__main__\":
+    main()
+""",
+            "data/sample/README.md": "Place sanitized fixtures and expected metric outcomes here.\n",
+            "src/$python_package/__init__.py": "\"\"\"$project_name dashboard package.\"\"\"\n",
+            "src/$python_package/ingestion/README.md": "Source readers, validation, and cache boundaries live here.\n",
+            "src/$python_package/metrics/README.md": "Metric definitions and pure calculations live here.\n",
+            "src/$python_package/presentation/README.md": "Streamlit-ready chart, filter, table, and export view models live here.\n",
+            "tests/README.md": "Add fixture-driven metric, filter, export, and app smoke tests here.\n",
+        },
+        post_creation_instructions=(
+            "Confirm metric glossary and fixture expectations before styling charts.",
+            "Keep Streamlit secrets and live source credentials out of the repository.",
+            "Ask QA to pin metric outcomes from fixtures before live data connectors are added.",
+        ),
+        qa_gates=[
+            "Metric glossary, fixture rows, and expected outputs are documented together.",
+            "Pure metric tests pass without running Streamlit or connecting live data sources.",
+            "Filters, empty states, dirty-data states, and exports are represented in UX/QA notes.",
+            "Deployment notes cover secrets, caching, sharing, and refresh cadence.",
+        ],
+        example_prd_prompt="Draft a PRD for a Streamlit dashboard MVP covering audiences, metric glossary, fixture data, filters, chart views, exports, and deployment notes.",
+    ),
+    "cli-tool-python": ProjectTemplate(
+        key="cli-tool-python",
+        label="Python CLI tool",
+        description="Python package CLI MVP with subcommands, config, deterministic output, docs, and test seams.",
+        discovery_focus=(
+            "primary command verbs, inputs, outputs, and automation workflows",
+            "configuration sources, environment variables, defaults, and precedence rules",
+            "failure modes, exit codes, stdout/stderr expectations, and packaging target",
+        ),
+        engineering_defaults=(
+            "separate CLI parsing, command handlers, config loading, and core domain logic",
+            "keep command output deterministic and snapshot-friendly for tests",
+            "document packaging, installation, shell completion, and release assumptions",
+        ),
+        qa_focus=(
+            "argument parsing, help text, config precedence, exit codes, and golden outputs",
+            "handler tests that avoid network and filesystem side effects unless fixtures are explicit",
+        ),
+        iteration_hooks=(
+            "record flag naming, defaults, and output format decisions as Product memory",
+            "keep command handlers small so future subcommands can be added without regressions",
+        ),
+        recommended_skills=["product", "python", "backend", "qa", "devops"],
+        starter_files={
+            "README.md": """# $project_name
+
+$idea
+
+Aider Plus scaffolded this as a Python CLI MVP.
+
+## Suggested Structure
+- `src/$python_package/cli.py` — argument parsing and command dispatch
+- `src/$python_package/commands/` — small command handlers
+- `src/$python_package/config.py` — config and environment precedence
+- `src/$python_package/core/` — reusable domain logic
+- `tests/` — parser, handler, config, exit-code, and golden-output checks
+""",
+            "src/$python_package/__init__.py": "\"\"\"$project_name CLI package.\"\"\"\n",
+            "src/$python_package/cli.py": """\"\"\"CLI entrypoint for $project_name.\"\"\"
+
+
+def main(argv: list[str] | None = None) -> int:
+    \"\"\"Placeholder CLI entrypoint until commands are implemented.\"\"\"
+    _ = argv
+    print(\"$project_name CLI scaffold is ready.\")
+    return 0
+""",
+            "src/$python_package/commands/README.md": "Small command handlers live here; keep I/O contracts explicit.\n",
+            "src/$python_package/core/README.md": "Reusable domain logic that can be tested without CLI parsing lives here.\n",
+            "src/$python_package/config.py": "\"\"\"Configuration loading placeholder for $project_name.\"\"\"\n",
+            "tests/README.md": "Add parser, config precedence, exit-code, golden output, and handler tests here.\n",
+        },
+        post_creation_instructions=(
+            "Confirm command verbs and output contracts before choosing CLI dependencies.",
+            "Keep network, filesystem, and credential-dependent behavior behind injectable adapters.",
+            "Ask QA to define golden outputs and exit-code expectations before broadening subcommands.",
+        ),
+        qa_gates=[
+            "Every documented command has help text, success output, failure output, and exit-code expectations.",
+            "Config precedence and environment variables are documented and tested with fixtures.",
+            "Core command logic is testable without invoking a shell or external network.",
+            "Release notes cover installation, packaging, versioning, and backward-compatible output changes.",
+        ],
+        example_prd_prompt="Draft a PRD for a Python CLI MVP covering command verbs, input/output contracts, config precedence, exit codes, and packaging notes.",
     ),
 }
 
@@ -421,6 +608,9 @@ $example_prd_prompt
 ## Recommended Skills
 $recommended_skills_markdown
 
+## QA Gates
+$qa_gates_markdown
+
 ## Post-Creation Instructions
 $post_creation_instructions_markdown
 
@@ -444,6 +634,9 @@ these seams to keep Product → UX → Engineering → Delivery → DevOps align
 - Template: `$template_label` (`$template_key`)
 - Recommended skills: $recommended_skills_inline
 - PRD seed: $example_prd_prompt
+
+## QA Gates
+$qa_gates_markdown
 
 ## Iteration Rule
 Prefer adding explicit notes, tests, and adapters over replacing scaffolding in a
@@ -687,8 +880,14 @@ def get_template(key: str | None) -> ProjectTemplate:
         ) from exc
 
 
-def _markdown_bullets(items: tuple[str, ...]) -> str:
+def _markdown_bullets(items) -> str:
     return "\n".join(f"- {item}" for item in items)
+
+
+def _default_post_creation_steps() -> list[str]:
+    return [
+        "Run Company Mode once to refine the MVP brief before adding major dependencies.",
+    ]
 
 
 def render_template_starter_files(
@@ -717,14 +916,12 @@ def render_template_starter_files(
         "recommended_skills_inline": ", ".join(template.recommended_skills)
         or "generalist",
         "recommended_skills_markdown": _markdown_bullets(
-            template.recommended_skills or ("generalist",)
+            template.recommended_skills or ["generalist"]
         ),
         "post_creation_instructions_markdown": _markdown_bullets(
-            template.post_creation_instructions
-            or (
-                "Run Company Mode once to refine the MVP brief before adding major dependencies.",
-            )
+            template.post_creation_steps() or _default_post_creation_steps()
         ),
+        "qa_gates_markdown": _markdown_bullets(template.all_qa_gates()),
         "example_prd_prompt": template.example_prd_prompt
         or f"Draft a concise PRD for {template.label} covering users, scope, acceptance criteria, risks, and release notes.",
     }
@@ -737,8 +934,9 @@ def render_template_starter_files(
                 "template_label": template.label,
                 "idea": idea.strip(),
                 "recommended_skills": list(template.recommended_skills),
-                "post_creation_instructions": list(template.post_creation_instructions),
+                "post_creation_instructions": template.post_creation_steps(),
                 "example_prd_prompt": values["example_prd_prompt"],
+                "qa_gates": template.all_qa_gates(),
             },
             indent=2,
             sort_keys=True,
@@ -751,7 +949,7 @@ def render_template_starter_files(
             f"Use this placeholder to capture {skill} guidance learned while building `$project_name`.\n"
             "Keep guidance concise, repo-specific, and safe for future Company runs.\n"
         )
-        for skill in (template.recommended_skills or ("generalist",))
+        for skill in (template.recommended_skills or ["generalist"])
     }
     for path, content in {
         **COMMON_STARTER_FILES,
@@ -794,7 +992,7 @@ def render_zero_to_mvp_prompt(
             f"Template description: {template.description}",
             "",
             "Recommended skills to activate or emulate:",
-            bullets(template.recommended_skills or ("generalist",)),
+            bullets(tuple(template.recommended_skills or ["generalist"])),
             "",
             "Example Product/PRD seed for this template:",
             template.example_prd_prompt
@@ -814,13 +1012,18 @@ def render_zero_to_mvp_prompt(
             "QA focus:",
             bullets(template.qa_focus),
             "",
+            "QA gates:",
+            bullets(tuple(template.all_qa_gates())),
+            "",
             "Iteration and memory hooks:",
             bullets(template.iteration_hooks),
             "",
             "Post-creation instructions:",
             bullets(
-                template.post_creation_instructions
-                or ("Run Product discovery before adding major dependencies.",)
+                tuple(
+                    template.post_creation_steps()
+                    or ["Run Product discovery before adding major dependencies."]
+                )
             ),
             "",
             "Required output and behavior:",

@@ -16,7 +16,6 @@ import httpx
 
 from aider.company.tracker import TrackerAdapter, TrackerError, TrackerIssue
 
-
 _OPEN_STATES = {"todo", "ready", "open", "retry"}
 _IN_PROGRESS_LABELS = {"in_progress", "in-progress", "running", "claimed"}
 _DONE_LABELS = {"done", "complete", "completed"}
@@ -81,9 +80,7 @@ class GitHubTrackerAdapter(TrackerAdapter):
             app_private_key or os.environ.get("GITHUB_APP_PRIVATE_KEY") or ""
         )
         self.app_private_key_path = (
-            app_private_key_path
-            or os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH")
-            or ""
+            app_private_key_path or os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH") or ""
         ).strip()
         self.status_labels = _normalize_status_labels(status_labels)
         self.cache_ttl_seconds = _cache_ttl(cache_ttl_seconds)
@@ -92,6 +89,9 @@ class GitHubTrackerAdapter(TrackerAdapter):
         self.max_retry_after_seconds = max(0.0, float(max_retry_after_seconds))
         self._sleep = sleep
         self._issue_cache: dict[tuple[str, ...], _CachedIssues] = {}
+        self.retry_count = 0
+        self.last_error: str | None = None
+        self.retry_events: list[dict[str, Any]] = []
         self._installation_token: str | None = None
         self._installation_token_expires_at = 0.0
         if not self._has_auth_config():
@@ -162,8 +162,29 @@ class GitHubTrackerAdapter(TrackerAdapter):
             raise TrackerError("GitHub issue update response was not an object.")
         return self._issue_from_payload(payload)
 
-    def attach_pr(self, issue: TrackerIssue, pr_url: str) -> None:
-        body = f"Linked pull request: {pr_url}"
+    def attach_pr(self, issue: TrackerIssue, pr_url: str, **kwargs: Any) -> None:
+        proof = kwargs.get("proof")
+        if proof is None:
+            body = f"Linked pull request: {pr_url}"
+        else:
+            proof_link = (
+                getattr(proof, "markdown_path", None)
+                or f"{getattr(proof, 'workspace', '')}/.aider/company/proof-of-work.md"
+            )
+            summary = getattr(proof, "summary", "") or "No summary provided."
+            completed = (
+                ", ".join(getattr(proof, "completed_stages", ()) or ()) or "none"
+            )
+            failed = ", ".join(getattr(proof, "failed_stages", ()) or ()) or "none"
+            body = (
+                "Linked pull request with daemon proof-of-work.\n\n"
+                f"Pull request: {pr_url}\n"
+                f"Proof report: [ProofOfWork Markdown]({proof_link})\n"
+                f"Summary: {summary}\n"
+                f"Completed stages: {completed}\n"
+                f"Failed stages: {failed}\n"
+                f"Human review required: {getattr(proof, 'human_review_required', True)}"
+            )
         self.comment(issue, body)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
@@ -184,8 +205,11 @@ class GitHubTrackerAdapter(TrackerAdapter):
             try:
                 response = client.request(method, url, **kwargs)
             except httpx.HTTPError as exc:
+                self.last_error = str(exc)
                 if attempt < self.max_retries:
-                    self._sleep(self.retry_backoff_seconds * (2**attempt))
+                    delay = self.retry_backoff_seconds * (2**attempt)
+                    self._record_retry(method, path, attempt + 1, delay, str(exc))
+                    self._sleep(delay)
                     continue
                 raise TrackerError(f"GitHub API request failed: {exc}") from exc
             finally:
@@ -195,7 +219,12 @@ class GitHubTrackerAdapter(TrackerAdapter):
             last_response = response
             if not _should_retry_response(response) or attempt >= self.max_retries:
                 break
-            self._sleep(_retry_delay(response, attempt, self))
+            delay = _retry_delay(response, attempt, self)
+            self.last_error = _github_error_message(response)
+            self._record_retry(
+                method, path, attempt + 1, delay, self.last_error, response.status_code
+            )
+            self._sleep(delay)
 
         if last_response is None:
             raise TrackerError(f"GitHub API {method} {path} failed without a response.")
@@ -207,7 +236,37 @@ class GitHubTrackerAdapter(TrackerAdapter):
             )
         if last_response.status_code == 204 or not last_response.content:
             return None
+        self.last_error = None
         return last_response.json()
+
+    def _record_retry(
+        self,
+        method: str,
+        path: str,
+        attempt: int,
+        delay: float,
+        error: str,
+        status_code: int | None = None,
+    ) -> None:
+        self.retry_count += 1
+        event = {
+            "method": method,
+            "path": path,
+            "attempt": attempt,
+            "delay_seconds": delay,
+            "error": error,
+        }
+        if status_code is not None:
+            event["status_code"] = status_code
+        self.retry_events.append(event)
+        del self.retry_events[:-20]
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "retry_count": self.retry_count,
+            "last_error": self.last_error,
+            "recent_retries": list(self.retry_events[-5:]),
+        }
 
     def _auth_token(self) -> str:
         if self.token:
@@ -339,6 +398,11 @@ def _normalize_status(status: str) -> str:
         "completed": "done",
         "open": "todo",
         "ready": "todo",
+        "triage": "todo",
+        "backlog": "todo",
+        "blocked": "retry",
+        "needs_review": "in_progress",
+        "human_review": "in_progress",
     }
     return aliases.get(normalized, normalized or "todo")
 
@@ -353,7 +417,11 @@ def _status_from_github(
         _label_key(label) for label in _IN_PROGRESS_LABELS
     }:
         return "in_progress"
-    if _label_key(status_labels["retry"]) in label_set:
+    if _label_key(status_labels["retry"]) in label_set or label_set & {
+        "blocked",
+        "needs_retry",
+        "failed",
+    }:
         return "retry"
     return "todo"
 
@@ -374,6 +442,11 @@ def _labels_for_status(
             "done",
             "complete",
             "completed",
+            "blocked",
+            "needs_retry",
+            "failed",
+            "needs_review",
+            "human_review",
         }
     )
     cleaned = {

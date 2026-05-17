@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 
-
 class TrackerError(ValueError):
     """Raised when a tracker adapter cannot complete an operation."""
 
@@ -83,7 +82,7 @@ class TrackerAdapter(ABC):
     def transition(self, issue: TrackerIssue, status: str) -> TrackerIssue: ...
 
     @abstractmethod
-    def attach_pr(self, issue: TrackerIssue, pr_url: str) -> None: ...
+    def attach_pr(self, issue: TrackerIssue, pr_url: str, **kwargs: Any) -> None: ...
 
 
 class LocalJsonTrackerAdapter(TrackerAdapter):
@@ -132,13 +131,20 @@ class LocalJsonTrackerAdapter(TrackerAdapter):
                 return TrackerIssue.from_dict(updated)
         raise TrackerError(f"Issue not found: {issue.identifier}")
 
-    def attach_pr(self, issue: TrackerIssue, pr_url: str) -> None:
+    def attach_pr(self, issue: TrackerIssue, pr_url: str, **kwargs: Any) -> None:
         data = self._read()
         now = _utc_now()
         for raw in data.get("issues", []):
             if _issue_id(raw) == issue.identifier:
                 prs = raw.setdefault("pull_requests", [])
-                prs.append({"created_at": now, "url": pr_url})
+                proof = kwargs.get("proof")
+                prs.append(
+                    {
+                        "created_at": now,
+                        "url": pr_url,
+                        "proof": proof.to_dict() if hasattr(proof, "to_dict") else None,
+                    }
+                )
                 raw["updated_at"] = now
                 self._write(data)
                 return
@@ -178,21 +184,25 @@ def create_tracker_adapter(config: Any) -> TrackerAdapter:
 
     if isinstance(config, dict):
         github = dict(config.get("github") or {})
+        linear = dict(config.get("linear") or {})
         kind = str(config.get("type") or config.get("kind") or "local")
         path = config.get("path")
         repo = config.get("repo")
         token = config.get("token")
+        tracker_labels = config.get("labels") or ()
         api_url = str(
             config.get("api_url") or github.get("api_url") or "https://api.github.com"
         )
     else:
         github = dict(getattr(config, "github", None) or {})
+        linear = dict(getattr(config, "linear", None) or {})
         kind = str(
             getattr(config, "type", None) or getattr(config, "kind", None) or "local"
         )
         path = getattr(config, "path", None)
         repo = getattr(config, "repo", None)
         token = getattr(config, "token", None)
+        tracker_labels = getattr(config, "labels", ()) or ()
         api_url = str(
             getattr(config, "api_url", None)
             or github.get("api_url")
@@ -228,7 +238,31 @@ def create_tracker_adapter(config: Any) -> TrackerAdapter:
             status_labels=labels,
             cache_ttl_seconds=github.get("cache_ttl_seconds"),
             max_retries=int(github.get("max_retries", 2) or 0),
+            retry_backoff_seconds=float(github.get("retry_backoff_seconds", 1.0) or 0),
+        )
+    if normalized == "linear":
+        from aider.company.tracker.linear import LinearTrackerAdapter
+
+        auth = (
+            dict(linear.get("auth") or {})
+            if isinstance(linear.get("auth") or {}, dict)
+            else {}
+        )
+        states = (
+            dict(linear.get("states") or {})
+            if isinstance(linear.get("states") or {}, dict)
+            else {}
+        )
+        return LinearTrackerAdapter(
+            token=token or auth.get("token"),
+            api_url=str(linear.get("api_url") or "https://api.linear.app/graphql"),
+            labels=tuple(
+                str(label) for label in (linear.get("labels") or tracker_labels)
+            ),
+            status_states=states,
+            max_retries=int(linear.get("max_retries", 2) or 0),
+            retry_backoff_seconds=float(linear.get("retry_backoff_seconds", 1.0) or 0),
         )
     raise TrackerError(
-        f"Unsupported tracker kind: {kind}. Supported: local, github."
+        f"Unsupported tracker kind: {kind}. Supported: local, github, linear."
     )

@@ -523,6 +523,21 @@ def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
             print(f"Tracker: {status['tracker']}")
             print(f"Workspace root: {status['workspace_root']}")
             print(f"Max concurrent agents: {status['max_concurrent_agents']}")
+            retry_stats = status.get("retry_stats") or {}
+            print(
+                "Retry stats: "
+                f"total_retries={retry_stats.get('total_retries', 0)} "
+                f"retrying_runs={retry_stats.get('retrying_runs', 0)} "
+                f"last_error={retry_stats.get('last_error') or 'none'}"
+            )
+            print(f"Last proof link: {status.get('last_proof_link') or 'none'}")
+            tracker_status = status.get("tracker_status") or {}
+            if tracker_status:
+                print(
+                    "Tracker retry stats: "
+                    f"retry_count={tracker_status.get('retry_count', 0)} "
+                    f"last_error={tracker_status.get('last_error') or 'none'}"
+                )
             recent = status.get("recent_proof_of_work") or []
             if recent:
                 print("Recent proof-of-work:")
@@ -538,7 +553,10 @@ def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
                 for run in status["runs"]:
                     print(
                         f"- {run.get('issue_id', 'unknown')}: {run.get('status', 'unknown')} "
-                        f"attempts={run.get('attempts', 0)} workspace={run.get('workspace', '')}"
+                        f"attempts={run.get('attempts', 0)} "
+                        f"last_error={run.get('last_error') or 'none'} "
+                        f"proof={run.get('last_proof_link') or run.get('proof_path') or 'none'} "
+                        f"workspace={run.get('workspace', '')}"
                     )
             return 0
         if command.run_issue_id:
@@ -565,6 +583,9 @@ def handle_company_daemon_cli(command: CompanyCLICommand) -> int:
                 f"{Path(proof.workspace) / '.aider' / 'company' / 'proof-of-work.json'}"
             )
             print(f"Partial success: {proof.partial_success}")
+            print(f"Retry count: {proof.retry_count}")
+            if proof.last_error:
+                print(f"Last error: {proof.last_error}")
             if proof.completed_stages:
                 print("Completed stages: " + ", ".join(proof.completed_stages))
             if proof.failed_stages:

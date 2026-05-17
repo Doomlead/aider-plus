@@ -22,6 +22,7 @@ class TrackerWorkflowConfig:
     repo: str | None = None
     labels: tuple[str, ...] = ()
     github: dict[str, Any] = field(default_factory=dict)
+    linear: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -126,6 +127,11 @@ class CompanyWorkflow:
                 github=(
                     dict(tracker_data.get("github") or {})
                     if isinstance(tracker_data.get("github") or {}, dict)
+                    else {}
+                ),
+                linear=(
+                    dict(tracker_data.get("linear") or {})
+                    if isinstance(tracker_data.get("linear") or {}, dict)
                     else {}
                 ),
             ),

@@ -15,7 +15,12 @@ from typing import Any, Callable
 
 from aider.company.schemas import ProofOfWork
 from aider.company.templates import DEFAULT_TEMPLATE_KEY, render_zero_to_mvp_prompt
-from aider.company.tracker import TrackerAdapter, TrackerError, TrackerIssue, create_tracker_adapter
+from aider.company.tracker import (
+    TrackerAdapter,
+    TrackerError,
+    TrackerIssue,
+    create_tracker_adapter,
+)
 from aider.company.warehouse import default_warehouse_path
 from aider.company.workflow import CompanyWorkflow, WorkflowError
 
@@ -44,6 +49,7 @@ class RunState:
     updated_at: str = field(default_factory=lambda: _utc_now())
     proof_path: str | None = None
     pr_url: str | None = None
+    last_proof_link: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -66,6 +72,11 @@ class RunState:
                 str(data.get("proof_path")) if data.get("proof_path") else None
             ),
             pr_url=(str(data.get("pr_url")) if data.get("pr_url") else None),
+            last_proof_link=(
+                str(data.get("last_proof_link"))
+                if data.get("last_proof_link")
+                else None
+            ),
         )
 
 
@@ -185,6 +196,9 @@ class CompanyDaemon:
             "workflow": str(self.workflow.path),
             "workflow_exists": configured,
             "tracker": self.workflow.tracker.kind,
+            "tracker_status": (
+                self.tracker.status() if hasattr(self.tracker, "status") else {}
+            ),
             "workspace_root": str(self.workspace_manager.root),
             "running": running,
             "status": "running" if running else ("idle" if configured else "missing"),
@@ -194,6 +208,8 @@ class CompanyDaemon:
             "pending_proof_of_work": len(pending_pow),
             "pending_proof_runs": pending_pow,
             "recent_proof_of_work": recent_proofs,
+            "retry_stats": _retry_stats(runs),
+            "last_proof_link": _last_proof_link(recent_proofs, runs),
             "max_concurrent_agents": self.workflow.agent.max_concurrent_agents,
             "max_concurrent_workspaces": self.workflow.agent.max_concurrent_agents,
             "available_workspace_slots": max(
@@ -252,7 +268,9 @@ class CompanyDaemon:
         issue = self._find_issue(issue_id)
         return await asyncio.to_thread(self._run_issue_sync, issue, dry_run=dry_run)
 
-    def _run_issue_sync(self, issue: TrackerIssue, *, dry_run: bool = False) -> ProofOfWork:
+    def _run_issue_sync(
+        self, issue: TrackerIssue, *, dry_run: bool = False
+    ) -> ProofOfWork:
         workspace = self.workspace_manager.prepare(
             issue, clean=self.workflow.workspace.clean
         )
@@ -269,6 +287,8 @@ class CompanyDaemon:
                     workspace=str(workspace.path),
                     summary="Skipped because max attempts were already reached.",
                     risk_notes=(state.last_error or "max attempts reached",),
+                    retry_count=max(0, state.attempts - 1),
+                    last_error=state.last_error,
                 ),
             )
 
@@ -292,7 +312,12 @@ class CompanyDaemon:
 
             prompt = self._build_company_prompt(issue)
             result = self._run_company_prompt(
-                prompt, workspace.path, issue, dry_run=dry_run
+                prompt,
+                workspace.path,
+                issue,
+                dry_run=dry_run,
+                retry_count=max(0, state.attempts - 1),
+                last_error=state.last_error,
             )
 
             if not dry_run:
@@ -302,9 +327,17 @@ class CompanyDaemon:
                 )
 
             proof = self._proof_from_result(issue, workspace, result, dry_run=dry_run)
+            proof = ProofOfWork.from_dict(
+                {
+                    **proof.to_dict(),
+                    "retry_count": max(0, state.attempts - 1),
+                    "last_error": None,
+                }
+            )
             state.status = "human_review" if proof.human_review_required else "done"
             state.proof_path = str(workspace.proof_path)
             state.pr_url = proof.pr_url
+            state.last_proof_link = proof.markdown_path or str(workspace.markdown_path)
             state.last_error = None
             state.updated_at = _utc_now()
             self._write_state(workspace, state)
@@ -312,7 +345,7 @@ class CompanyDaemon:
 
             if not dry_run:
                 if proof.pr_url:
-                    self.tracker.attach_pr(issue, proof.pr_url)
+                    self.tracker.attach_pr(issue, proof.pr_url, proof=proof)
                 self.tracker.comment(issue, _format_tracker_comment(proof))
                 self.tracker.transition(issue, state.status)
             return proof
@@ -337,12 +370,16 @@ class CompanyDaemon:
                 workspace=str(workspace.path),
                 summary="Run failed before producing a complete Company deliverable.",
                 risk_notes=(str(exc),),
+                retry_count=max(0, state.attempts - 1),
+                last_error=str(exc),
             )
             self._write_proof(workspace, proof)
             return proof
 
     def _find_issue(self, issue_id: str) -> TrackerIssue:
-        for issue in self.tracker.list_candidate_issues(()) + self.tracker.list_candidate_issues(self.workflow.tracker.labels):
+        for issue in self.tracker.list_candidate_issues(
+            ()
+        ) + self.tracker.list_candidate_issues(self.workflow.tracker.labels):
             if issue.identifier == issue_id:
                 return issue
         raise CompanyDaemonError(f"Issue not found or not eligible: {issue_id}")
@@ -353,7 +390,9 @@ class CompanyDaemon:
                 from aider.company.orchestrator import CompanyOrchestrator
                 from aider.memory import ProjectMemory
 
-                self.orchestrator = CompanyOrchestrator(ProjectMemory(str(self.workspace_manager.root)))
+                self.orchestrator = CompanyOrchestrator(
+                    ProjectMemory(str(self.workspace_manager.root))
+                )
             if self.coo is None:
                 from aider.company.coo import NanobotCOO
 
@@ -384,11 +423,32 @@ class CompanyDaemon:
         return f"{workflow_prompt}\n\n---\n\n{company_prompt}".strip()
 
     def _run_company_prompt(
-        self, prompt: str, workspace: Path, issue: TrackerIssue, *, dry_run: bool
+        self,
+        prompt: str,
+        workspace: Path,
+        issue: TrackerIssue,
+        *,
+        dry_run: bool,
+        retry_count: int = 0,
+        last_error: str | None = None,
     ) -> dict[str, Any]:
         if not dry_run:
             runner = self.runner or self._get_default_runner()
-            return runner(prompt, workspace, issue)
+            options = getattr(runner, "options", None)
+            if options is not None:
+                from dataclasses import replace
+
+                try:
+                    runner.options = replace(
+                        options, retry_count=retry_count, last_error=last_error
+                    )
+                except TypeError:
+                    pass
+            result = runner(prompt, workspace, issue)
+            result.setdefault("retry_count", retry_count)
+            if last_error is not None:
+                result.setdefault("last_error", last_error)
+            return result
         prompt_path = workspace / ".aider" / "company" / "daemon-prompt.md"
         prompt_path.write_text(prompt, encoding="utf-8")
         return {
@@ -402,6 +462,8 @@ class CompanyDaemon:
             "qa_result": "not-run" if dry_run else "pending-runner",
             "review_result": "not-run" if dry_run else "pending-runner",
             "human_review_required": True,
+            "retry_count": retry_count,
+            "last_error": last_error,
         }
 
     def _proof_from_result(
@@ -421,7 +483,9 @@ class CompanyDaemon:
             summary=str(result.get("summary") or "Company daemon run completed."),
             changed_files=tuple(str(item) for item in result.get("changed_files", ())),
             diff_summary=tuple(str(item) for item in result.get("diff_summary", ())),
-            commit_messages=tuple(str(item) for item in result.get("commit_messages", ())),
+            commit_messages=tuple(
+                str(item) for item in result.get("commit_messages", ())
+            ),
             checks=tuple(dict(item) for item in result.get("checks", ())),
             qa_result=str(
                 result.get("qa_result") or ("not-run" if dry_run else "unknown")
@@ -429,14 +493,27 @@ class CompanyDaemon:
             review_result=str(
                 result.get("review_result") or ("not-run" if dry_run else "unknown")
             ),
-            review_feedback=tuple(str(item) for item in result.get("review_feedback", ())),
+            review_feedback=tuple(
+                str(item) for item in result.get("review_feedback", ())
+            ),
             delivery_handover=dict(result.get("delivery_handover") or {}),
             devops_status=dict(result.get("devops_status") or {}),
             diffs=tuple(dict(item) for item in result.get("diffs", ())),
             links=tuple(str(item) for item in result.get("links", ())),
             risk_notes=tuple(str(item) for item in result.get("risk_notes", ())),
-            completed_stages=tuple(str(item) for item in result.get("completed_stages", ())),
+            completed_stages=tuple(
+                str(item) for item in result.get("completed_stages", ())
+            ),
             failed_stages=tuple(str(item) for item in result.get("failed_stages", ())),
+            partial_stages=tuple(
+                str(item) for item in result.get("partial_stages", ())
+            ),
+            retry_count=int(result.get("retry_count", 0) or 0),
+            last_error=(
+                str(result.get("last_error"))
+                if result.get("last_error") is not None
+                else None
+            ),
             partial_success=bool(result.get("partial_success", False)),
             human_review_required=bool(result.get("human_review_required", True)),
         )
@@ -458,7 +535,9 @@ class CompanyDaemon:
         )
 
     def _write_proof(self, workspace: RunWorkspace, proof: ProofOfWork) -> ProofOfWork:
-        proof = ProofOfWork.from_dict({**proof.to_dict(), "markdown_path": str(workspace.markdown_path)})
+        proof = ProofOfWork.from_dict(
+            {**proof.to_dict(), "markdown_path": str(workspace.markdown_path)}
+        )
         workspace.proof_path.write_text(
             json.dumps(proof.to_dict(), indent=2), encoding="utf-8"
         )
@@ -535,6 +614,46 @@ def _git_branch(path: Path) -> str | None:
     )
     branch = result.stdout.strip()
     return branch or None
+
+
+def _retry_stats(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    attempts = [int(run.get("attempts", 0) or 0) for run in runs]
+    retrying = [
+        run for run in runs if run.get("status") in {"failed", "retry", "human_review"}
+    ]
+    return {
+        "total_attempts": sum(attempts),
+        "total_retries": sum(max(0, attempts_count - 1) for attempts_count in attempts),
+        "retrying_runs": len(retrying),
+        "last_error": next(
+            (
+                run.get("last_error")
+                for run in sorted(
+                    runs,
+                    key=lambda item: str(item.get("updated_at") or ""),
+                    reverse=True,
+                )
+                if run.get("last_error")
+            ),
+            None,
+        ),
+    }
+
+
+def _last_proof_link(
+    recent_proofs: list[dict[str, Any]], runs: list[dict[str, Any]]
+) -> str | None:
+    for proof in recent_proofs:
+        link = proof.get("markdown_path") or proof.get("path")
+        if link:
+            return str(link)
+    for run in sorted(
+        runs, key=lambda item: str(item.get("updated_at") or ""), reverse=True
+    ):
+        link = run.get("last_proof_link") or run.get("proof_path")
+        if link:
+            return str(link)
+    return None
 
 
 def _format_tracker_comment(proof: ProofOfWork) -> str:

@@ -14,6 +14,7 @@ from aider.company.warehouse import WarehouseManager, default_warehouse_path
 DEPARTMENTS = ("product", "ux", "engineering", "reviewer", "qa", "devops")
 ONBOARDING_STATE = Path(".aider") / "company" / "onboarding.json"
 WORKFLOW_GUIDE = "AIDER_WORKFLOW.md"
+ENV_EXAMPLE = ".env.example"
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,9 @@ class CompanyOnboardingResult:
     config_path: str = ""
     workflow_guide_path: str = ""
     daemon_workflow_path: str = ""
+    env_example_path: str = ""
+    first_product_path: str = ""
+    api_key_validation: dict[str, bool] = field(default_factory=dict)
     model_preferences: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
@@ -86,6 +90,8 @@ class CompanyOnboarding:
         github_token_configured = bool(github_token or os.environ.get("GITHUB_TOKEN"))
 
         model_preferences = self._prompt_department_models()
+        api_key_validation = self.validate_api_keys(model_preferences)
+        self._report_api_key_validation(api_key_validation)
         mcp_enabled = self._prompt_bool(
             "Enable MCP integrations for Company agents?",
             bool(self.defaults.get("mcp_enabled", False)),
@@ -104,11 +110,20 @@ class CompanyOnboarding:
             "github_repo": github_repo,
             "github_token_configured": github_token_configured,
             "mcp_enabled": mcp_enabled,
+            "api_key_validation": api_key_validation,
             "model_preferences": model_preferences,
             "daemon_workflow_path": str(daemon_workflow),
         }
         config_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
         self._write_env_hint(github_token)
+
+        env_example = self.root / ENV_EXAMPLE
+        self.generate_env_example(
+            env_example,
+            model_preferences=model_preferences,
+            github_repo=github_repo,
+            mcp_enabled=mcp_enabled,
+        )
 
         workflow_guide = self.root / WORKFLOW_GUIDE
         self.generate_workflow_guide(
@@ -119,8 +134,16 @@ class CompanyOnboarding:
             daemon_workflow=daemon_workflow,
             mcp_enabled=mcp_enabled,
             model_preferences=model_preferences,
+            env_example=env_example,
         )
         self.output_func(f"✓ Wrote {workflow_guide}")
+        self.output_func(f"✓ Wrote {env_example}")
+
+        first_product_path = self._maybe_create_first_product(warehouse_path, template)
+        if first_product_path:
+            state["first_product_path"] = first_product_path
+            config_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
         self.output_func("✅ Company Mode onboarding complete")
         return CompanyOnboardingResult(
             warehouse_path=str(warehouse_path),
@@ -131,6 +154,9 @@ class CompanyOnboarding:
             config_path=str(config_path),
             workflow_guide_path=str(workflow_guide),
             daemon_workflow_path=str(daemon_workflow),
+            env_example_path=str(env_example),
+            first_product_path=first_product_path,
+            api_key_validation=api_key_validation,
             model_preferences=model_preferences,
         )
 
@@ -144,6 +170,7 @@ class CompanyOnboarding:
         daemon_workflow: str | Path,
         mcp_enabled: bool,
         model_preferences: Mapping[str, Mapping[str, object]],
+        env_example: str | Path,
     ) -> Path:
         """Write a quickstart guide for the configured Company workflow."""
 
@@ -161,15 +188,16 @@ Welcome to Company Mode. This repo has been prepared for a guided Product → UX
 ## Quickstart
 
 1. Review the warehouse: `{warehouse_path}`.
-2. Create your first product:
+2. Copy `{env_example}` to `.env` and fill any missing provider keys.
+3. Create your first product:
    ```bash
    aider company new "Build my MVP" --template {template_obj.key} --warehouse {warehouse_path}
    ```
-3. Run the issue daemon when you are ready to pick up GitHub or local tracker work:
+4. Run the issue daemon when you are ready to pick up GitHub or local tracker work:
    ```bash
    aider company daemon --workflow {daemon_workflow}{repo_flag} --once
    ```
-4. Use approvals to keep humans in control of requirements, design, implementation, QA, and release gates.
+5. Use approvals to keep humans in control of requirements, design, implementation, QA, and release gates.
 
 ## Selected Template
 
@@ -200,6 +228,127 @@ MCP integrations are {'enabled' if mcp_enabled else 'disabled'}. Enable MCP late
         path = Path(path)
         path.write_text(content, encoding="utf-8")
         return path
+
+    def generate_env_example(
+        self,
+        path: str | Path,
+        *,
+        model_preferences: Mapping[str, Mapping[str, object]],
+        github_repo: str,
+        mcp_enabled: bool,
+    ) -> Path:
+        """Write a provider-specific environment template for onboarding choices."""
+
+        required_keys = self.required_api_keys(model_preferences)
+        lines = [
+            "# Aider Plus Company Mode environment",
+            "# Copy this file to .env and fill in only the keys your selected models need.",
+            "",
+        ]
+        for env_name in required_keys:
+            lines.append(f"{env_name}=your_{env_name.lower()}_here")
+        if github_repo:
+            lines.extend(
+                [
+                    "",
+                    "# Required for the GitHub Issues daemon.",
+                    "GITHUB_TOKEN=ghp_your_token_here",
+                ]
+            )
+            lines.append(f"GITHUB_REPO={github_repo}")
+        if mcp_enabled:
+            lines.extend(
+                [
+                    "",
+                    "# Optional: point Company agents at your MCP configuration.",
+                    "AIDER_MCP_CONFIG=.aider/mcp.json",
+                ]
+            )
+        if len(lines) == 3:
+            lines.append(
+                "# No provider-specific keys were inferred from the selected models."
+            )
+        path = Path(path)
+        path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        return path
+
+    def validate_api_keys(
+        self, model_preferences: Mapping[str, Mapping[str, object]]
+    ) -> dict[str, bool]:
+        """Return whether each inferred provider key is currently configured."""
+
+        return {
+            env_name: bool(os.environ.get(env_name))
+            for env_name in self.required_api_keys(model_preferences)
+        }
+
+    def required_api_keys(
+        self, model_preferences: Mapping[str, Mapping[str, object]]
+    ) -> tuple[str, ...]:
+        env_names: set[str] = set()
+        for prefs in model_preferences.values():
+            model = str(prefs.get("model") or "").lower()
+            if not model:
+                continue
+            if "openrouter/" in model:
+                env_names.add("OPENROUTER_API_KEY")
+            elif "anthropic/" in model or "claude" in model or "sonnet" in model:
+                env_names.add("ANTHROPIC_API_KEY")
+            elif "gemini" in model:
+                env_names.add("GEMINI_API_KEY")
+            elif "deepseek" in model:
+                env_names.add("DEEPSEEK_API_KEY")
+            elif model.startswith(("gpt-", "openai/", "o1", "o3", "o4")):
+                env_names.add("OPENAI_API_KEY")
+        return tuple(sorted(env_names))
+
+    def _report_api_key_validation(self, validation: Mapping[str, bool]) -> None:
+        if not validation:
+            self.output_func("✓ No provider API keys inferred from selected models.")
+            return
+        missing = [env_name for env_name, present in validation.items() if not present]
+        if missing:
+            self.output_func(
+                "⚠ Missing API keys for selected models: " + ", ".join(missing)
+            )
+            self.output_func("  Add them to .env using the generated .env.example.")
+        else:
+            self.output_func("✓ Required API keys are present for selected models.")
+
+    def _maybe_create_first_product(self, warehouse_path: Path, template: str) -> str:
+        create_now = bool(self.defaults.get("first_product_now", False))
+        if "first_product_now" not in self.defaults:
+            create_now = self._prompt_bool(
+                "Would you like to create your first product now?", False
+            )
+        if not create_now:
+            self.output_func(
+                'Next step: run `aider company new "Build my MVP" --template '
+                f"{template} --warehouse {warehouse_path}` when you are ready."
+            )
+            return ""
+
+        idea = self._prompt(
+            "First product idea",
+            str(
+                self.defaults.get("first_product_idea")
+                or "Build my first MVP with Aider Plus"
+            ),
+        ).strip()
+        name = self._prompt(
+            "First product name",
+            str(self.defaults.get("first_product_name") or "first-product"),
+        ).strip()
+        if not idea or not name:
+            self.output_func(
+                "Skipping first product creation because idea/name was blank."
+            )
+            return ""
+        record = WarehouseManager(warehouse_path).create_product(
+            name=name, idea=idea, template=template
+        )
+        self.output_func(f"✓ Created first product repo at {record.path}")
+        return record.path
 
     def _write_daemon_workflow(
         self, path: Path, warehouse_path: Path, github_repo: str

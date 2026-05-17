@@ -47,6 +47,8 @@ class CompanyCLICommand:
     model: str | None = None
     mcp_enabled: bool | None = None
     yes: bool = False
+    first_product_idea: str | None = None
+    first_product_name: str | None = None
 
 
 class CompanyCLIError(ValueError):
@@ -54,7 +56,7 @@ class CompanyCLIError(ValueError):
 
 
 USAGE = """Usage:
-  aider company init [--warehouse PATH] [--template TEMPLATE] [--github-repo OWNER/REPO] [--github-token TOKEN] [--model MODEL] [--enable-mcp|--skip-mcp] [--yes]
+  aider company init [--warehouse PATH] [--template TEMPLATE] [--github-repo OWNER/REPO] [--github-token TOKEN] [--model MODEL] [--enable-mcp|--skip-mcp] [--product-idea IDEA] [--product-name NAME] [--yes]
   aider company setup [same options as init]
   aider company templates
   aider company create <idea> [--template TEMPLATE] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
@@ -66,7 +68,7 @@ USAGE = """Usage:
   aider warehouse status [--warehouse PATH]
 
 Examples:
-  aider company init --warehouse ./AiderPlusWarehouse --template nextjs-app --yes
+  aider company init --warehouse ./AiderPlusWarehouse --template nextjs-app --product-idea "Build my MVP" --product-name my-mvp --yes
   aider company templates
   aider company create "Build a habit tracker web app with login, dashboard, and streaks"
   aider company new "Build a habit tracker" --name habit-tracker --template nextjs-app
@@ -177,6 +179,8 @@ def _parse_company_onboarding(action: str, args: Sequence[str]) -> CompanyCLICom
     model: str | None = None
     mcp_enabled: bool | None = None
     yes: bool = False
+    first_product_idea: str | None = None
+    first_product_name: str | None = None
     rest = list(args)
     index = 0
     while index < len(rest):
@@ -210,6 +214,20 @@ def _parse_company_onboarding(action: str, args: Sequence[str]) -> CompanyCLICom
             mcp_enabled = True
         elif token == "--skip-mcp":
             mcp_enabled = False
+        elif token == "--product-idea":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError(
+                    "--product-idea requires a product idea.\n" + USAGE
+                )
+            first_product_idea = rest[index]
+        elif token == "--product-name":
+            index += 1
+            if index >= len(rest):
+                raise CompanyCLIError(
+                    "--product-name requires a product name.\n" + USAGE
+                )
+            first_product_name = rest[index]
         elif token == "--yes":
             yes = True
         else:
@@ -230,6 +248,8 @@ def _parse_company_onboarding(action: str, args: Sequence[str]) -> CompanyCLICom
         model=model,
         mcp_enabled=mcp_enabled,
         yes=yes,
+        first_product_idea=first_product_idea,
+        first_product_name=first_product_name,
     )
 
 
@@ -397,10 +417,15 @@ def handle_company_onboarding_cli(command: CompanyCLICommand) -> int:
     }
     if command.model:
         defaults["model"] = command.model
+    if command.first_product_idea:
+        defaults["first_product_idea"] = command.first_product_idea
+    if command.first_product_name:
+        defaults["first_product_name"] = command.first_product_name
     if command.yes:
         defaults["model_preferences"] = {
             dept: {"model": command.model or "", "cache": True} for dept in DEPARTMENTS
         }
+        defaults["first_product_now"] = True
         prompts = iter(["", "", *("" for _ in range(20))])
         input_func = lambda _prompt: next(prompts, "")
     else:

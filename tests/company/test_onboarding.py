@@ -10,7 +10,8 @@ def _blank_prompts():
         yield ""
 
 
-def test_onboarding_flow_writes_state_workflow_and_guide(tmp_path):
+def test_onboarding_flow_writes_state_workflow_and_guide(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     prompts = _blank_prompts()
     defaults = {
         "warehouse_path": tmp_path / "warehouse",
@@ -34,6 +35,7 @@ def test_onboarding_flow_writes_state_workflow_and_guide(tmp_path):
     assert Path(result.config_path).exists()
     assert Path(result.workflow_guide_path).exists()
     assert Path(result.daemon_workflow_path).exists()
+    assert Path(result.env_example_path).exists()
     assert (tmp_path / "warehouse" / "warehouse.json").exists()
 
     state = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
@@ -41,12 +43,18 @@ def test_onboarding_flow_writes_state_workflow_and_guide(tmp_path):
     assert state["github_repo"] == "octo/demo"
     assert state["github_token_configured"] is True
     assert state["mcp_enabled"] is True
+    assert state["api_key_validation"] == {"OPENAI_API_KEY": False}
     assert state["model_preferences"]["engineering"]["model"] == "gpt-5.5"
 
     guide = Path(result.workflow_guide_path).read_text(encoding="utf-8")
     assert "aider company new" in guide
     assert "aider company daemon" in guide
     assert "octo/demo" in guide
+
+    env_example = Path(result.env_example_path).read_text(encoding="utf-8")
+    assert "OPENAI_API_KEY=your_openai_api_key_here" in env_example
+    assert "GITHUB_TOKEN=ghp_your_token_here" in env_example
+    assert "AIDER_MCP_CONFIG=.aider/mcp.json" in env_example
 
 
 def test_onboarding_flow_prompts_department_models(tmp_path):
@@ -58,6 +66,7 @@ def test_onboarding_flow_prompts_department_models(tmp_path):
             "",  # github token
             *sum(([f"model-{dept}", "n"] for dept in DEPARTMENTS), []),
             "y",  # mcp
+            "n",  # first product
         ]
     )
     onboarding = CompanyOnboarding(
@@ -98,6 +107,10 @@ def test_company_init_cli_parses_and_runs_non_interactive(
             "--model",
             "gpt-5.5",
             "--enable-mcp",
+            "--product-idea",
+            "Build a CLI dashboard",
+            "--product-name",
+            "CLI Dashboard",
             "--yes",
         ]
     )
@@ -115,3 +128,6 @@ def test_company_init_cli_parses_and_runs_non_interactive(
     )
     assert state["github_repo"] == "octo/demo"
     assert state["model_preferences"]["qa"]["model"] == "gpt-5.5"
+    assert Path(state["first_product_path"]).name == "cli-dashboard"
+    assert Path(state["first_product_path"]).joinpath(".git").exists()
+    assert (tmp_path / ".env.example").exists()

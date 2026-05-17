@@ -29,13 +29,15 @@ The `CompanyOnboarding` flow walks through the core studio setup:
 2. Pick the default `aider company new --template ...` starter.
 3. Configure a GitHub token/repo pair for the issue daemon, or leave it blank for local tracker use.
 4. Choose preferred department models and prompt caching for Product, UX, Engineering, Reviewer, QA, and DevOps.
-5. Decide whether MCP integrations should be enabled for external tools/context.
-6. Generate `AIDER_WORKFLOW.md` and `.aider/company/workflow.yml` with the quickstart commands and daemon entry point.
+5. Validate whether the provider API keys inferred from those models are already available in the environment.
+6. Decide whether MCP integrations should be enabled for external tools/context.
+7. Generate a tailored `.env.example`, `AIDER_WORKFLOW.md`, and `.aider/company/workflow.yml` with the quickstart commands and daemon entry point.
+8. Optionally create the first Git-backed product repo immediately; `--yes` auto-runs that final step with defaults or `--product-idea`/`--product-name`.
 
 The same helper is exposed in the Streamlit browser UI and the native Tkinter desktop UI under **Onboarding / Quick Start**. Use `--skip-onboarding` on normal `aider` launches when you do not want the first-run offer.
 
 ```bash
-aider company init --warehouse ~/AiderPlusWarehouse --template nextjs-app --github-repo owner/repo --model gpt-5.5 --enable-mcp --yes
+aider company init --warehouse ~/AiderPlusWarehouse --template nextjs-app --github-repo owner/repo --model gpt-5.5 --enable-mcp --product-idea "Build my MVP" --product-name my-mvp --yes
 ```
 
 ## Command

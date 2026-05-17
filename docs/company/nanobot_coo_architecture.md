@@ -16,6 +16,12 @@ Nanobot-like: an intentionally small and readable core, research-ready decision
 objects, built-in chat/API/memory/MCP/deployment extension paths, and hackable
 adapters that make the runtime easy to inspect or replace.
 
+For the end-to-end contributor path around this architecture, start with the
+[First Code Tour](../architecture/first-code-tour.md). It places the COO in the
+full runtime flow from `aider/main.py` and the Coder through
+`CompanyOrchestrator`, departments, shared memory/skills/EventBus services, the
+daemon, templates/warehouse, and the DevOps release path.
+
 ```text
 CEO (CLI / chat apps / Browser / Desktop / API)
         |

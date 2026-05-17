@@ -15,6 +15,18 @@ placeholder skills, post-creation hooks, QA gates, and an initial scaffold commi
 then runs the same template-grounded Company brief through Aider's repo-aware implementation loop
 so the result remains reviewable, testable, and ready for future iteration.
 
+## How it works under the hood
+
+For the full contributor walkthrough, read the
+[First Code Tour](../architecture/first-code-tour.md). In short,
+`aider/main.py` parses `aider company create` and `aider company new`, the
+warehouse/template layer prepares a normal Git repository and a template-grounded
+Company brief, the COO/orchestrator route that work through Product, UX,
+Delivery, Engineering, Reviewer, QA, Delivery, and DevOps, and shared
+memory/skills/EventBus/audit services keep the run inspectable. The daemon uses
+the same concepts for issue-backed workspaces, but adds proof-of-work files and
+tracker updates for human review.
+
 ## Guided onboarding flow
 
 Run the first-time setup before creating your first product:

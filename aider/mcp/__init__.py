@@ -10,6 +10,7 @@ __all__ = [
     "MCPServerConfig",
     "MCPToolPolicy",
     "MCPToolRef",
+    "list_builtin_mcp_tools",
     "mcp_tool_to_aider_tool",
 ]
 
@@ -28,7 +29,12 @@ def __getattr__(name):
             "MCPToolPolicy": MCPToolPolicy,
         }[name]
     if name in {"MCPClientManager", "MCPConnector", "MCPDependencyError", "MCPToolRef"}:
-        from aider.mcp.manager import MCPClientManager, MCPConnector, MCPDependencyError, MCPToolRef
+        from aider.mcp.manager import (
+            MCPClientManager,
+            MCPConnector,
+            MCPDependencyError,
+            MCPToolRef,
+        )
 
         return {
             "MCPClientManager": MCPClientManager,
@@ -36,11 +42,20 @@ def __getattr__(name):
             "MCPDependencyError": MCPDependencyError,
             "MCPToolRef": MCPToolRef,
         }[name]
-    if name in {"AiderPlusMCPServer", "AiderPlusMCPServerConfig"}:
-        from aider.mcp.server import AiderPlusMCPServer, AiderPlusMCPServerConfig
+    if name in {
+        "AiderPlusMCPServer",
+        "AiderPlusMCPServerConfig",
+        "list_builtin_mcp_tools",
+    }:
+        from aider.mcp.server import (
+            AiderPlusMCPServer,
+            AiderPlusMCPServerConfig,
+            list_builtin_mcp_tools,
+        )
 
         return {
             "AiderPlusMCPServer": AiderPlusMCPServer,
             "AiderPlusMCPServerConfig": AiderPlusMCPServerConfig,
+            "list_builtin_mcp_tools": list_builtin_mcp_tools,
         }[name]
     raise AttributeError(name)

@@ -15,6 +15,7 @@ from aider.agent.tools import Tool, ToolPermissionError, ToolRegistry
 from aider.mcp.adapters import mcp_tool_to_aider_tool
 from aider.mcp.config import MCPConfig
 from aider.mcp.manager import MCPClientManager
+from aider.mcp.server import list_builtin_mcp_tools
 
 
 @dataclass
@@ -43,7 +44,6 @@ class AgentContext:
     conversation_buffer: list[Message]
     project_memory: dict[str, Any]
 
-
     def get_user_turn_content(self) -> str:
         """Return a single user-turn payload for the current loop step."""
         parts: list[str] = []
@@ -66,7 +66,10 @@ class AgentContext:
             )
 
         if self.project_memory:
-            parts.append("Project memory:\n" + json.dumps(self.project_memory, separators=(",", ":")))
+            parts.append(
+                "Project memory:\n"
+                + json.dumps(self.project_memory, separators=(",", ":"))
+            )
 
         parts.append(f"Current user request:\n{self.user_message}")
         return "\n\n".join(parts)
@@ -102,6 +105,21 @@ class AiderAgentLoop:
         self.mcp_manager = mcp_manager
         self.mcp_approval_handler = None
         self._mcp_initialized_scopes: set[str] = set()
+        self.tool_registry.register(
+            Tool(
+                name="list_available_mcp_tools",
+                description="List built-in MCP tools and their approval permission levels.",
+                func=self._list_available_mcp_tools,
+                parameters={
+                    "type": "function",
+                    "function": {
+                        "name": "list_available_mcp_tools",
+                        "description": "List built-in MCP tools and their approval permission levels.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+            )
+        )
         self.tool_registry.register(
             Tool(
                 name="aider_coder",
@@ -142,7 +160,10 @@ class AiderAgentLoop:
         elif isinstance(self.coder.project_memory, ProjectMemory):
             self.coder.project_memory.load()
 
-        cfg_exists = onboarding_paths()["config_path"].exists() or Path(".aider.conf.yml").exists()
+        cfg_exists = (
+            onboarding_paths()["config_path"].exists()
+            or Path(".aider.conf.yml").exists()
+        )
         if not cfg_exists:
             print("Tip: run `aider onboard` for guided Company setup.")
 
@@ -179,7 +200,9 @@ class AiderAgentLoop:
         root = Path(repo.root)
         tracked_files = []
         try:
-            tracked_files = sorted([str(Path(f)) for f in repo.get_tracked_files()])[: self.config.max_repo_files]
+            tracked_files = sorted([str(Path(f)) for f in repo.get_tracked_files()])[
+                : self.config.max_repo_files
+            ]
         except Exception:
             tracked_files = []
 
@@ -198,7 +221,9 @@ class AiderAgentLoop:
     def _build_history_context(self) -> List[dict]:
         history = []
         for msg in (self.coder.done_messages or [])[-6:]:
-            history.append({"role": msg.get("role"), "content": msg.get("content", "")[:1000]})
+            history.append(
+                {"role": msg.get("role"), "content": msg.get("content", "")[:1000]}
+            )
         return history
 
     def _build_coder_results_context(self) -> List[dict]:
@@ -232,8 +257,14 @@ class AiderAgentLoop:
         conversation_memory = getattr(self.coder, "conversation_memory", None)
         project_memory = getattr(self.coder, "project_memory", None)
 
-        conversation_buffer = conversation_memory.get() if isinstance(conversation_memory, ConversationMemory) else self._build_history_context()
-        project_state = project_memory.data if isinstance(project_memory, ProjectMemory) else {}
+        conversation_buffer = (
+            conversation_memory.get()
+            if isinstance(conversation_memory, ConversationMemory)
+            else self._build_history_context()
+        )
+        project_state = (
+            project_memory.data if isinstance(project_memory, ProjectMemory) else {}
+        )
 
         return AgentContext(
             system_prompt=self._system_prompt(),
@@ -330,7 +361,9 @@ class AiderAgentLoop:
             **extra_params,
             **kwargs,
         }
-        request_kwargs = self._apply_cache_request_options(request_kwargs, cache_override)
+        request_kwargs = self._apply_cache_request_options(
+            request_kwargs, cache_override
+        )
         return await asyncio.to_thread(litellm.completion, **request_kwargs)
 
     async def run_structured(
@@ -401,7 +434,9 @@ class AiderAgentLoop:
                 args = json.loads(call.function.arguments or "{}")
                 exec_args = self._tool_call_arguments(call.function.name, args, idx + 1)
                 try:
-                    coder_result = await self.tool_registry.execute(call.function.name, exec_args)
+                    coder_result = await self.tool_registry.execute(
+                        call.function.name, exec_args
+                    )
                 except ToolPermissionError as err:
                     await self._emit("permission_violation", err.to_dict())
                     return {
@@ -419,12 +454,18 @@ class AiderAgentLoop:
             if not handled_tool:
                 break
 
-        await self._emit("response_complete", {"iteration": self.config.max_iterations, "reason": "max_iterations"})
+        await self._emit(
+            "response_complete",
+            {"iteration": self.config.max_iterations, "reason": "max_iterations"},
+        )
         return {
             "summary": "Completed agent loop iterations.",
             "agent_iterations": min(self.config.max_iterations, 3),
             "coder_result": last_coder_result,
         }
+
+    async def _list_available_mcp_tools(self) -> dict[str, Any]:
+        return {"tools": list_builtin_mcp_tools()}
 
     async def _initialize_mcp_tools(self) -> None:
         mcp_config = self.config.mcp
@@ -436,7 +477,9 @@ class AiderAgentLoop:
             return
         if self.mcp_approval_handler is not None:
             self.mcp_manager.approval_handler = self.mcp_approval_handler
-        project_dir = getattr(getattr(self.coder, "root", None), "as_posix", lambda: None)()
+        project_dir = getattr(
+            getattr(self.coder, "root", None), "as_posix", lambda: None
+        )()
         if project_dir is None:
             project_dir = str(getattr(self.coder, "root", "") or "")
         task_dir = project_dir
@@ -447,7 +490,9 @@ class AiderAgentLoop:
             project_dir=project_dir, task_dir=task_dir, scope_key=scope_key
         )
         for tool_ref in tools:
-            self.tool_registry.register(mcp_tool_to_aider_tool(self.mcp_manager, tool_ref))
+            self.tool_registry.register(
+                mcp_tool_to_aider_tool(self.mcp_manager, tool_ref)
+            )
         self._mcp_initialized_scopes.add(scope_key)
 
     @staticmethod
@@ -457,8 +502,14 @@ class AiderAgentLoop:
         task = args.get("task", "")
         constraints = args.get("constraints", "")
         include_diff = bool(args.get("include_diff", False))
-        composed_task = task if not constraints else f"{task}\n\nConstraints:\n{constraints}"
-        return {"task": composed_task, "include_diff": include_diff, "iteration": iteration}
+        composed_task = (
+            task if not constraints else f"{task}\n\nConstraints:\n{constraints}"
+        )
+        return {
+            "task": composed_task,
+            "include_diff": include_diff,
+            "iteration": iteration,
+        }
 
     @staticmethod
     def _tool_result_to_dict(result: Any) -> dict:
@@ -468,12 +519,18 @@ class AiderAgentLoop:
             return result
         return {"result": result}
 
-    async def _run_architect_then_editor(self, *, task: str, include_diff: bool, iteration: int):
+    async def _run_architect_then_editor(
+        self, *, task: str, include_diff: bool, iteration: int
+    ):
         if not self.config.use_architect_mode:
             await self._emit("executing_edits", {"iteration": iteration, "task": task})
-            return await self.editor_coder.run_structured_async(task, preproc=True, include_diff=include_diff)
+            return await self.editor_coder.run_structured_async(
+                task, preproc=True, include_diff=include_diff
+            )
 
-        await self._emit("planning_with_architect", {"iteration": iteration, "task": task})
+        await self._emit(
+            "planning_with_architect", {"iteration": iteration, "task": task}
+        )
         architect_prompt = (
             "Create a concise, implementation-ready plan for the editor. "
             "List assumptions, target files, and step-by-step edits.\n\n"
@@ -491,7 +548,9 @@ class AiderAgentLoop:
             f"Architect plan/proposal:\n{plan_text}\n\n"
             "Implement the request faithfully following the plan."
         )
-        await self._emit("executing_edits", {"iteration": iteration, "task": task, "plan": plan_text})
+        await self._emit(
+            "executing_edits", {"iteration": iteration, "task": task, "plan": plan_text}
+        )
         return await self.editor_coder.run_structured_async(
             editor_instruction,
             preproc=True,

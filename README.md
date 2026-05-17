@@ -582,11 +582,27 @@ Aider Plus includes an optional MCP layer under `aider/mcp/`:
 - configuration parsing and enable/disable flags;
 - manager lifecycle for connected tools;
 - adapters that expose tool calls to department agent loops;
-- approval handlers so sensitive MCP requests can appear in the same approval
-  surfaces as Company gates.
+- approval handlers so sensitive MCP requests appear in the same approval
+  surfaces as Company gates;
+- built-in approval-aware tools for skills, skill proposals, daemon runs,
+  institutional knowledge, and Company status.
+
+Inspect the built-in MCP surface with:
+
+```bash
+aider mcp tools
+```
+
+Built-in read-only tools include `list_skills`, `get_skill`,
+`list_pending_skill_proposals`, `get_recent_daemon_runs`,
+`get_knowledge_overview`, `search_knowledge`, and `get_company_status`. Built-in
+mutating tools such as `approve_skill_proposal` and `trigger_daemon_run` are
+registered as `requires_approval` and must route through Company approval gates
+before execution.
 
 MCP should be treated as an operations surface. Keep approval gates enabled for
-filesystem, network, deployment, ticketing, or production-adjacent tools.
+filesystem, network, deployment, ticketing, daemon-control, skill-installation, or
+production-adjacent tools.
 
 ---
 

@@ -597,6 +597,20 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
             print(str(exc))
             return 1
 
+    if argv and argv[0] == "mcp":
+        if len(argv) >= 2 and argv[1] == "tools":
+            from aider.mcp import list_builtin_mcp_tools
+
+            print("MCP tools (approval-aware):")
+            for tool in list_builtin_mcp_tools():
+                print(
+                    f"- {tool['name']} [{tool['permission_level']}] "
+                    f"{tool['description']}"
+                )
+            return 0
+        print("Usage: aider mcp tools")
+        return 1
+
     if argv and argv[0] in {"onboard", "init"}:
         io = InputOutput(pretty=True, yes=False, input=input, output=output)
         return run_onboarding(io)

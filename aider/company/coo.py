@@ -1357,6 +1357,25 @@ class NanobotCOO:
             self.orchestrator.state, self.orchestrator.company_config.skill_learning
         ).search_knowledge(query)
 
+    def list_available_mcp_tools(self) -> list[dict[str, str]]:
+        """COO personal action: list approval-aware MCP tools."""
+
+        from aider.mcp.server import list_builtin_mcp_tools
+
+        return list_builtin_mcp_tools()
+
+    def explain_mcp_tool(self, tool_name: str) -> dict[str, str]:
+        """COO personal action: explain an MCP tool and its approval policy."""
+
+        for tool in self.list_available_mcp_tools():
+            if tool["name"] == tool_name:
+                return tool
+        return {
+            "name": tool_name,
+            "permission_level": "unknown",
+            "description": "No MCP tool with that name is registered.",
+        }
+
     def list_daemon_workflows(self) -> dict[str, Any]:
         """COO tool: inspect repo-local daemon workflow status when configured."""
 

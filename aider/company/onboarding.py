@@ -10,6 +10,7 @@ from typing import Callable, Mapping
 
 from aider.company.templates import DEFAULT_TEMPLATE_KEY, get_template, list_templates
 from aider.company.warehouse import WarehouseManager, default_warehouse_path
+from aider.mcp.server import list_builtin_mcp_tools
 
 DEPARTMENTS = ("product", "ux", "engineering", "reviewer", "qa", "devops")
 ONBOARDING_STATE = Path(".aider") / "company" / "onboarding.json"
@@ -96,6 +97,7 @@ class CompanyOnboarding:
             "Enable MCP integrations for Company agents?",
             bool(self.defaults.get("mcp_enabled", False)),
         )
+        mcp_tools = self._prompt_mcp_tools(mcp_enabled)
 
         company_dir = self.root / ".aider" / "company"
         company_dir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +112,7 @@ class CompanyOnboarding:
             "github_repo": github_repo,
             "github_token_configured": github_token_configured,
             "mcp_enabled": mcp_enabled,
+            "mcp_tools": mcp_tools,
             "api_key_validation": api_key_validation,
             "model_preferences": model_preferences,
             "daemon_workflow_path": str(daemon_workflow),
@@ -215,7 +218,7 @@ Welcome to Company Mode. This repo has been prepared for a guided Product → UX
 
 ## MCP
 
-MCP integrations are {'enabled' if mcp_enabled else 'disabled'}. Enable MCP later if Company agents need external tools or context servers.
+MCP integrations are {'enabled' if mcp_enabled else 'disabled'}. When enabled, built-in tools use approval defaults: read-only inspection tools execute directly; mutating tools require human approval before they run. Inspect tool policies with `aider mcp tools`.
 
 ## Core Loop
 
@@ -384,6 +387,21 @@ runner:
                 + line,
                 encoding="utf-8",
             )
+
+    def _prompt_mcp_tools(self, mcp_enabled: bool) -> list[dict[str, str]]:
+        """Choose MCP built-in tools and preserve approval-first defaults."""
+
+        if not mcp_enabled:
+            return []
+        configured = self.defaults.get("mcp_tools")
+        tools = list_builtin_mcp_tools()
+        if isinstance(configured, dict):
+            tools = [tool for tool in tools if bool(configured.get(tool["name"], True))]
+        self.output_func(
+            "✓ MCP tool defaults: read-only tools enabled; mutating tools require approval. "
+            "Run `aider mcp tools` to inspect or adjust policy."
+        )
+        return tools
 
     def _prompt_department_models(self) -> dict[str, dict[str, object]]:
         default_model = str(self.defaults.get("model") or "")

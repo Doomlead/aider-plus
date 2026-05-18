@@ -9,6 +9,7 @@ from .communication import (
 )
 from .conversation import ConversationMemory, Message
 from .dream import consolidate_conversation
+from .evidence import SkillEvidenceCluster, collect_evidence_for_project
 from .project import ProjectMemory
 from .records import MemoryQuery, MemoryRecord
 from .store import MemoryStore
@@ -25,6 +26,7 @@ __all__ = [
     "task_received",
     "user_instruction",
     "JsonMemoryRepository",
+    "SkillEvidenceCluster",
     "MemoryQuery",
     "MemoryRecord",
     "MemoryRepository",
@@ -33,5 +35,6 @@ __all__ = [
     "Message",
     "ProjectMemory",
     "SQLiteMemoryRepository",
+    "collect_evidence_for_project",
     "consolidate_conversation",
 ]

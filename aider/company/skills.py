@@ -57,6 +57,10 @@ class SkillProposal:
     rationale: str
     source_tasks: list[str] = field(default_factory=list)
     source_audit_events: list[str] = field(default_factory=list)
+    source_memory_records: list[str] = field(default_factory=list)
+    procedure_steps: list[str] = field(default_factory=list)
+    outcome_summary: str | None = None
+    suggested_scope: str | None = None
     confidence: float = 0.5
     status: str = "pending"
     created_at: str = field(
@@ -229,6 +233,10 @@ class CompanySkillManager:
             "approval_status": "approved",
             "source_tasks": proposal.source_tasks,
             "source_audit_events": proposal.source_audit_events,
+            "source_memory_records": proposal.source_memory_records,
+            "procedure_steps": proposal.procedure_steps,
+            "outcome_summary": proposal.outcome_summary,
+            "suggested_scope": proposal.suggested_scope,
             "confidence": proposal.confidence,
             **proposal.metadata,
         }

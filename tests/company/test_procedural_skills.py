@@ -31,7 +31,9 @@ def test_skill_manager_rejects_path_escape_and_queries_role_skill(tmp_path):
 
     assert [match.name for match in matches] == ["add-cli-command"]
     try:
-        manager.write_skill_file("engineering", "add-cli-command", "../escape.txt", "bad")
+        manager.write_skill_file(
+            "engineering", "add-cli-command", "../escape.txt", "bad"
+        )
     except ValueError as err:
         assert "escapes" in str(err)
     else:
@@ -59,7 +61,6 @@ def test_context_builder_injects_role_scoped_skill_guidance(tmp_path):
 
     assert context["skills"][0]["name"] == "run-focused-tests"
     assert "engineering/run-focused-tests" in context["skill_guidance"][0]
-
 
 
 def test_relevant_skill_retrieval_scores_and_injects_top_summaries(tmp_path):

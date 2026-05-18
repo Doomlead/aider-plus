@@ -7,7 +7,7 @@ warehouse-backed product creation, browser and desktop control surfaces, local
 memory, skills, MCP tooling, Discord/headless adapters, and an issue-driven
 Company daemon.
 
-**Memory Fabric Architecture:** Phase 0 of the Neocortex-inspired memory fabric is documented in [docs/architecture/memory-fabric.md](docs/architecture/memory-fabric.md). The spec defines scoped memory, visibility rules, evidence-backed records, skill promotion, recall policy, migration strategy, and the future file plan without changing runtime behavior.
+**Memory Fabric Architecture:** Phase 0 of the Neocortex-inspired memory fabric is documented in [docs/architecture/memory-fabric.md](docs/architecture/memory-fabric.md). The spec defines scoped memory, visibility rules, evidence-backed records, skill promotion, recall policy, migration strategy, and the future file plan. Phase 4 now uses structured memory evidence to propose approval-gated procedural skills while preserving audit-log fallback learning.
 
 Aider Plus is intentionally **not** a synthetic project runtime. Product work
 still happens inside normal Git repositories. The extra layers coordinate people,
@@ -134,7 +134,7 @@ aider company templates
 - **Zero-to-MVP templates:** templates for Next.js SaaS apps, FastAPI APIs, Electron desktop apps, Streamlit/data dashboards, Python CLI tools, SaaS dashboards, Discord bots, browser extensions, and internal admin tools.
 - **Browser and desktop GUIs:** shared Company dashboards, direct chat, per-agent tabs, settings, approvals, audit views, memory views, Delivery summaries, daemon status/proof panels, and guide pages.
 - **Headless and chat-adapter operation:** `--headless`/`--bot-mode` supports scripted tasks, queues, CI, services, Discord, and future chat adapters.
-- **Durable local memory and procedural skills:** local memory, playbook extraction, role-scoped `SKILL.md` retrieval, skill usage tracking, and approval-gated skill proposals.
+- **Durable local memory and procedural skills:** local memory, playbook extraction, role-scoped `SKILL.md` retrieval, skill usage tracking, structured memory evidence clustering, richer source-backed skill proposals, and approval-gated skill promotion.
 - **MCP integration:** department loops can use Model Context Protocol tools through approval-aware adapters and manager configuration.
 - **Company daemon:** an issue workflow daemon can pull eligible issues, prepare per-issue workspaces, run Company prompts, write proof-of-work artifacts, update tracker state, attach PRs, and require human review.
 

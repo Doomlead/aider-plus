@@ -929,3 +929,5 @@ focuses on functional, test, integration, and non-README documentation changes.
 - `c5d43a1` — Added product warehouse scaffolding.
 - `cf0c5ba` — Polished settings UI and added Discord token configuration.
 - `1f0b86c` — Improved Company skill retrieval and dashboard visibility.
+
+- Knowledge UI now surfaces Active Skills, Skills Needing Patch/Retirement, Recent Injections with why-included rationale, and proposal review actions (approve/reject/patch/retire) in both Streamlit and Tkinter interfaces.

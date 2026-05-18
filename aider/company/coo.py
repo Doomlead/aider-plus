@@ -1386,6 +1386,42 @@ class NanobotCOO:
             self.orchestrator.state, self.orchestrator.company_config.skill_learning
         ).search_knowledge(query)
 
+
+    def list_skills_needing_attention(self) -> dict[str, Any]:
+        """COO personal action: list pending patch/retirement skill proposals."""
+
+        km = KnowledgeManager(
+            self.orchestrator.state, self.orchestrator.company_config.skill_learning
+        )
+        return {
+            "skills_needing_patch": km.get_skills_needing_patch(),
+            "skills_needing_retirement": km.get_skills_needing_retirement(),
+        }
+
+    def explain_skill(self, skill_name: str) -> dict[str, Any]:
+        """COO personal action: explain a skill/proposal with evidence."""
+
+        km = KnowledgeManager(
+            self.orchestrator.state, self.orchestrator.company_config.skill_learning
+        )
+        for skill in km.get_all_skills():
+            if skill.get("name") == skill_name or skill.get("id") == skill_name:
+                return km.get_evidence_for_skill(str(skill.get("id")))
+        for proposal in km.get_skill_proposals():
+            if proposal.get("name") == skill_name or proposal.get("proposal_id") == skill_name:
+                return km.get_evidence_for_skill(str(proposal.get("proposal_id")))
+        return {"skill_name": skill_name, "status": "not_found"}
+
+    def review_proposal(self, proposal_id: str, decision: str = "approve") -> dict[str, Any]:
+        """COO personal action: approve/reject pending skill proposal."""
+
+        km = KnowledgeManager(
+            self.orchestrator.state, self.orchestrator.company_config.skill_learning
+        )
+        if decision == "reject":
+            return km.reject_skill_proposal(proposal_id)
+        return km.approve_skill_proposal(proposal_id)
+
     def list_available_mcp_tools(self) -> list[dict[str, str]]:
         """COO personal action: list approval-aware MCP tools."""
 

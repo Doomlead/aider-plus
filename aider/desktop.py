@@ -1596,12 +1596,13 @@ class AiderPlusDesktop:
         panes.pack(fill="both", expand=True)
 
         list_frame = ttk.LabelFrame(panes, text="Knowledge Items", padding=4)
-        columns = ("type", "title", "status")
+        columns = ("section", "type", "title", "status")
         self.knowledge_tree = ttk.Treeview(
             list_frame, columns=columns, show="headings", height=16
         )
         for col, heading, width in (
-            ("type", "Type", 130),
+            ("section", "Section", 150),
+            ("type", "Type", 120),
             ("title", "Title", 360),
             ("status", "Status/Time", 180),
         ):
@@ -1616,11 +1617,10 @@ class AiderPlusDesktop:
         self.knowledge_detail.pack(fill="both", expand=True)
         action_frame = ttk.Frame(detail_frame)
         action_frame.pack(fill="x", pady=(8, 0))
-        ttk.Button(
-            action_frame,
-            text="Approve Proposal",
-            command=self.approve_selected_knowledge,
-        ).pack(side="right")
+        ttk.Button(action_frame, text="Approve", command=self.approve_selected_knowledge).pack(side="right")
+        ttk.Button(action_frame, text="Reject", command=lambda: self._review_selected_knowledge("reject")).pack(side="right", padx=(0, 6))
+        ttk.Button(action_frame, text="Patch", command=lambda: self._review_selected_knowledge("patch")).pack(side="right", padx=(0, 6))
+        ttk.Button(action_frame, text="Retire", command=lambda: self._review_selected_knowledge("retire")).pack(side="right", padx=(0, 6))
         panes.add(detail_frame, weight=3)
         self.knowledge_items_by_id: dict[str, dict[str, Any]] = {}
 
@@ -1944,10 +1944,13 @@ class AiderPlusDesktop:
         items = overview.get("search_results") if query else None
         if not items:
             items = []
-            items.extend(overview.get("playbooks") or [])
-            items.extend(overview.get("skills") or [])
-            items.extend(overview.get("proposals") or [])
-            items.extend((overview.get("coo_memory") or {}).get("entries") or [])
+            for key, section in (("playbooks", "Playbooks"), ("skills", "Active Skills"), ("skills_needing_patch", "Skills Needing Patch"), ("skills_needing_retirement", "Skills Needing Retirement"), ("proposals", "Proposals")):
+                for item in (overview.get(key) or []):
+                    items.append({**item, "section": section})
+            for item in (overview.get("recently_injected") or []):
+                items.append({**item, "section": "Recent Injections"})
+            for item in ((overview.get("coo_memory") or {}).get("entries") or []):
+                items.append({**item, "section": "COO Memory"})
         self.knowledge_items_by_id = {}
         self.knowledge_tree.delete(*self.knowledge_tree.get_children())
         for idx, item in enumerate(items):
@@ -1973,6 +1976,7 @@ class AiderPlusDesktop:
                 tk.END,
                 iid=item_id,
                 values=(
+                    item.get("section", "General"),
                     item.get(
                         "type", "proposal" if item.get("proposal_id") else "knowledge"
                     ),
@@ -2013,7 +2017,7 @@ class AiderPlusDesktop:
             self.knowledge_detail, json.dumps(item, indent=2, ensure_ascii=False)
         )
 
-    def approve_selected_knowledge(self):
+    def _review_selected_knowledge(self, decision: str):
         if not self.company:
             return
         selected = (
@@ -2030,12 +2034,15 @@ class AiderPlusDesktop:
             )
             return
         try:
-            self.company.approve_skill_proposal(proposal_id)
+            self.company.reject_skill_proposal(proposal_id) if decision == "reject" else self.company.approve_skill_proposal(proposal_id)
         except Exception as err:
             messagebox.showerror(APP_TITLE, f"Could not approve proposal: {err}")
             return
         self.refresh_knowledge()
-        messagebox.showinfo(APP_TITLE, f"Approved skill proposal {proposal_id}.")
+        messagebox.showinfo(APP_TITLE, f"{decision.title()} skill proposal {proposal_id}.")
+
+    def approve_selected_knowledge(self):
+        self._review_selected_knowledge("approve")
 
     def run_security_scan_now(self):
         if not self.company:

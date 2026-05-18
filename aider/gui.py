@@ -1797,7 +1797,7 @@ class GUI:
         m2.metric("Approvals pending", metrics["approvals_pending"])
         m3.metric("Last activity", metrics["last_activity"])
 
-        st.subheader("Skills")
+        st.subheader("Active Skills")
         skills = company.skills_summary()
         recent_skills = skills.get("recently_used") or []
         available_skills = skills.get("available") or []
@@ -1989,14 +1989,14 @@ class GUI:
                 st.caption("No retained knowledge-related EventBus events yet.")
 
         recently_injected = overview.get("recently_injected") or []
-        st.subheader("Recently Injected")
+        st.subheader("Recent Injections")
         if not recently_injected:
             st.caption("No memories or skills have been injected in this session yet.")
         for item in recently_injected[:5]:
             st.caption(
                 f"{item.get('type', 'knowledge')} · {item.get('injected_at', 'unknown time')}"
             )
-            st.write(item.get("explanation") or "")
+            st.write(item.get("why_included") or item.get("explanation") or "")
 
         if query:
             st.subheader("Search Results")
@@ -2037,7 +2037,7 @@ class GUI:
                 if item.get("metadata"):
                     st.json(item.get("metadata"))
 
-        st.subheader("Skills")
+        st.subheader("Active Skills")
         recent = overview.get("recent_skills") or []
         if recent:
             st.write("**Recently used**")
@@ -2061,6 +2061,21 @@ class GUI:
                 if skill.get("metadata"):
                     st.json(skill.get("metadata"))
 
+
+        st.subheader("Skills Needing Patch")
+        patch_items = overview.get("skills_needing_patch") or []
+        if not patch_items:
+            st.caption("No pending patch proposals.")
+        for proposal in patch_items:
+            st.info(f"{proposal.get('proposal_id')} · {proposal.get('scope')}/{proposal.get('name')}")
+
+        st.subheader("Skills Needing Retirement")
+        retire_items = overview.get("skills_needing_retirement") or []
+        if not retire_items:
+            st.caption("No pending retirement proposals.")
+        for proposal in retire_items:
+            st.warning(f"{proposal.get('proposal_id')} · {proposal.get('scope')}/{proposal.get('name')}")
+
         st.subheader("Skill Proposals")
         proposals = overview.get("proposals") or []
         if not proposals:
@@ -2075,14 +2090,22 @@ class GUI:
                 st.write(proposal.get("rationale") or "")
                 st.code(proposal.get("content") or "", language="markdown")
                 if proposal.get("status") == "pending" and proposal_id:
-                    col_a, col_b = st.columns(2)
+                    col_a, col_b, col_c, col_d = st.columns(4)
                     if col_a.button(
                         "Approve", key=f"approve_skill_proposal_{proposal_id}"
                     ):
                         company.approve_skill_proposal(proposal_id)
                         st.success(f"Approved {proposal_id}")
                         st.rerun()
-                    if col_b.button(
+                    if col_b.button("Patch", key=f"patch_skill_proposal_{proposal_id}"):
+                        company.approve_skill_proposal(proposal_id)
+                        st.success(f"Patched via {proposal_id}")
+                        st.rerun()
+                    if col_c.button("Retire", key=f"retire_skill_proposal_{proposal_id}"):
+                        company.approve_skill_proposal(proposal_id)
+                        st.success(f"Retired via {proposal_id}")
+                        st.rerun()
+                    if col_d.button(
                         "Reject", key=f"reject_skill_proposal_{proposal_id}"
                     ):
                         company.reject_skill_proposal(proposal_id)

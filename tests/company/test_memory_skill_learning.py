@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from aider.company.orchestrator import CompanyOrchestrator
+from aider.company.coo import NanobotCOO
 from aider.company.project import Project
 from aider.company.self_improvement import SelfImprovementService
 from aider.company.skills import CompanySkillManager, SkillLearningConfig, SkillProposal
@@ -378,3 +379,23 @@ def test_recall_filters_retired_skills(tmp_path):
     ids = [item["id"] for item in skills]
     assert active.id in ids
     assert retired.id not in ids
+
+
+def test_coo_review_proposal_flow(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    orchestrator = CompanyOrchestrator(memory)
+    proposal = SkillProposal(
+        proposal_id="skill-eng-retry",
+        action="create",
+        scope="engineering",
+        name="retry",
+        title="Retry",
+        content="# Retry",
+        rationale="repeat success",
+    )
+    CompanySkillManager(orchestrator.state).create_proposal(proposal)
+    coo = NanobotCOO(orchestrator=orchestrator)
+    result = coo.review_proposal("skill-eng-retry", decision="approve")
+    assert result["status"] == "approved"
+    attention = coo.list_skills_needing_attention()
+    assert "skills_needing_patch" in attention

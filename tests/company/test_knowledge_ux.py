@@ -77,3 +77,27 @@ def test_knowledge_overview_and_search_include_all_surfaces(tmp_path):
         "skill",
         "coo_memory",
     }
+
+
+def test_knowledge_evidence_and_attention_lists(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    orchestrator = CompanyOrchestrator(memory)
+    state = orchestrator.state
+    manager = KnowledgeManager(state)
+
+    proposal = SkillProposal(
+        proposal_id="skill-shared-cleanup",
+        action="patch",
+        scope="shared",
+        name="cleanup",
+        title="Cleanup",
+        content="# Cleanup",
+        rationale="Needs update",
+    )
+    CompanySkillManager(state).create_proposal(proposal)
+
+    assert manager.get_skills_needing_patch()
+    assert manager.get_skills_needing_retirement() == []
+    assert manager.get_memory_record("missing") is None
+    evidence = manager.get_evidence_for_skill("skill-shared-cleanup")
+    assert evidence["proposal"]["proposal_id"] == "skill-shared-cleanup"

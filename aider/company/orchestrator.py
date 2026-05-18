@@ -27,6 +27,7 @@ from aider.company.schemas import (
     Deliverable,
     EventMessage,
     ProjectPlan,
+    SecurityPatchRequest,
 )
 
 CompanyMessage = Union[Deliverable, EventMessage]
@@ -260,6 +261,9 @@ class CompanyOrchestrator:
         self._record_token_usage(d)
         await self._emit(d)
 
+        if await self._route_security_scan_result(d):
+            return
+
         if await self._route_project_state(d):
             return
 
@@ -269,6 +273,90 @@ class CompanyOrchestrator:
         next_target = d.metadata.get("handoff_to")
         if next_target and next_target in self.departments:
             await self.submit(self._handoff_task(d, next_target))
+
+    async def _route_security_scan_result(self, d: Deliverable) -> bool:
+        if d.artifact_type != "security_scan_result":
+            return False
+
+        result = d.payload if isinstance(d.payload, dict) else {}
+        severity = str(result.get("severity") or d.metadata.get("severity") or "info")
+        status = (
+            "red"
+            if severity == "critical"
+            else "yellow" if severity in {"high", "medium"} else "green"
+        )
+        latest = {
+            "status": status,
+            "severity": severity,
+            "department": d.department,
+            "task_id": d.task_id,
+            "scan_type": result.get("scan_type"),
+            "finding_count": len(result.get("findings") or []),
+            "result": result,
+        }
+        self.memory.data["security"] = latest
+        with contextlib.suppress(Exception):
+            self.memory.persist()
+
+        if severity != "critical":
+            return False
+
+        findings = result.get("findings") or d.metadata.get("critical_findings") or []
+        if not findings:
+            findings = [
+                {
+                    "id": f"{d.task_id}:critical",
+                    "description": result.get(
+                        "raw_output_summary", "Critical security finding"
+                    ),
+                    "recommendation": "Create an immediate patch plan and remediate.",
+                }
+            ]
+        for index, finding in enumerate(findings, start=1):
+            if not isinstance(finding, dict):
+                finding = {"description": str(finding)}
+            finding_id = str(
+                finding.get("id")
+                or finding.get("finding_id")
+                or f"{d.task_id}:finding-{index}"
+            )
+            patch_request = SecurityPatchRequest(
+                finding_id=finding_id,
+                patch_plan=str(
+                    finding.get("recommendation")
+                    or "Investigate the critical security finding, design a patch, implement it, and verify with regression tests."
+                ),
+                target_department="architect",
+                urgency="immediate",
+            )
+            target = "architect" if "architect" in self.departments else "engineering"
+            if target not in self.departments:
+                continue
+            context = dict(d.metadata.get("context", {}))
+            context.update(
+                {
+                    "security_scan_result": result,
+                    "security_patch_request": patch_request.to_dict(),
+                    "security_source_department": d.department,
+                }
+            )
+            await self.submit(
+                CompanyTask(
+                    task_id=f"{d.task_id}:security-patch:{index}",
+                    origin=d.department,
+                    target=target,
+                    artifact_type="security_patch_request",
+                    payload={
+                        "security_scan_result": result,
+                        "finding": finding,
+                        "patch_request": patch_request.to_dict(),
+                        "instruction": "Critical security finding: produce an immediate patch plan and route implementation to Engineering.",
+                    },
+                    blocking=False,
+                    context=context,
+                )
+            )
+        return True
 
     async def _route_project_state(self, d: Deliverable) -> bool:
         project = self.active_project
@@ -1214,6 +1302,20 @@ class CompanyOrchestrator:
                     ]
                 )
         lines.append("Departments: " + (", ".join(sorted(self.departments)) or "none"))
+        security = (
+            self.memory.data.get("security", {})
+            if isinstance(self.memory.data, dict)
+            else {}
+        )
+        if security:
+            lines.append(
+                "Security: "
+                f"{str(security.get('status', 'unknown')).upper()} "
+                f"({security.get('severity', 'info')} {security.get('scan_type', 'scan')}; "
+                f"findings={security.get('finding_count', 0)})"
+            )
+        else:
+            lines.append("Security: not scanned")
         caching_agents = []
         for name in sorted({"coo", *self.departments.keys()}):
             agent_config = self.company_config.get_department_config(name)

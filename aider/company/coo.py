@@ -1035,6 +1035,22 @@ class NanobotCOO:
         if any(
             phrase in prompt_lower
             for phrase in (
+                "current vulnerabilities",
+                "current vulnerability",
+                "what are our vulnerabilities",
+                "security status",
+                "latest security",
+            )
+        ):
+            return COOActionDecision(
+                action="inspect_status",
+                response_to_ceo=self._format_security_status_for_ceo(session),
+                confidence=0.94,
+                reasoning="CEO asked for current security posture or vulnerabilities.",
+            )
+        if any(
+            phrase in prompt_lower
+            for phrase in (
                 "what skills",
                 "recall a skill",
                 "recall skill",
@@ -1480,6 +1496,7 @@ class NanobotCOO:
             "skills_summary": self._skills_status_summary(),
             "daemon": self.list_daemon_workflows(),
             "last_deployment": self._last_deployment_payload(),
+            "security": self._security_status_payload(),
         }
 
     def _last_deployment_payload(self) -> dict[str, Any] | None:
@@ -1662,6 +1679,7 @@ class NanobotCOO:
             f"- Skills: {status['skills_summary'].get('available_count', 0)} available / "
             f"{status['skills_summary'].get('recently_used_count', 0)} recently used",
             f"- Daemon: {status['daemon'].get('status', 'not_configured')}",
+            self._format_security_status_line(status.get("security")),
             self._format_last_deployment_status_line(status.get("last_deployment")),
         ]
         if status.get("delivery_status"):
@@ -1676,6 +1694,47 @@ class NanobotCOO:
             lines.append("  - " + ", ".join(status["pending_approvals"]))
         if status["recent_errors"]:
             lines.append(f"- Recent COO errors: {len(status['recent_errors'])}")
+        return "\n".join(lines)
+
+    def _security_status_payload(self) -> dict[str, Any]:
+        data = getattr(self.orchestrator.memory, "data", {})
+        security = data.get("security", {}) if isinstance(data, dict) else {}
+        if not isinstance(security, dict) or not security:
+            return {"status": "not_scanned", "severity": "info", "finding_count": 0}
+        return dict(security)
+
+    @staticmethod
+    def _format_security_status_line(security: dict[str, Any] | None) -> str:
+        if not security or security.get("status") == "not_scanned":
+            return "- Security: not scanned"
+        return (
+            "- Security: "
+            f"{str(security.get('status', 'unknown')).upper()} "
+            f"({security.get('severity', 'info')} {security.get('scan_type') or 'scan'}, "
+            f"{security.get('finding_count', 0)} finding(s))"
+        )
+
+    def _format_security_status_for_ceo(self, session: COOSession) -> str:
+        security = self._company_status_payload(session).get("security") or {}
+        lines = [
+            "CEO, current security posture:",
+            self._format_security_status_line(security),
+        ]
+        result = security.get("result") if isinstance(security, dict) else None
+        findings = result.get("findings", []) if isinstance(result, dict) else []
+        if findings:
+            lines.append("- Current vulnerabilities:")
+            for finding in findings[:5]:
+                if not isinstance(finding, dict):
+                    lines.append(f"  - {finding}")
+                    continue
+                lines.append(
+                    "  - "
+                    f"{finding.get('id') or finding.get('location') or 'finding'}: "
+                    f"{finding.get('description') or finding.get('recommendation') or 'No details'}"
+                )
+        else:
+            lines.append("- Current vulnerabilities: none recorded")
         return "\n".join(lines)
 
     @staticmethod
@@ -2087,6 +2146,28 @@ class NanobotCOO:
                 )
         prompt_lower = prompt.lower()
         keyword_routes = (
+            (
+                "security_app",
+                (
+                    "run security scan",
+                    "security scan",
+                    "vulnerability scan",
+                    "vuln scan",
+                    "pentest",
+                    "appsec",
+                ),
+            ),
+            (
+                "security_platform",
+                (
+                    "platform security",
+                    "platform audit",
+                    "prompt injection",
+                    "tool policy",
+                    "mcp sandbox",
+                    "agent isolation",
+                ),
+            ),
             ("qa", ("test", "tests", "qa", "quality", "bug reproduction")),
             (
                 "delivery",

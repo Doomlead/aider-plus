@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from aider.company.schemas import ProofOfWork
+from aider.company.schemas import CompanyTask, ProofOfWork
 from aider.company.templates import DEFAULT_TEMPLATE_KEY, render_zero_to_mvp_prompt
 from aider.company.tracker import (
     TrackerAdapter,
@@ -23,6 +23,17 @@ from aider.company.tracker import (
 )
 from aider.company.warehouse import default_warehouse_path
 from aider.company.workflow import CompanyWorkflow, WorkflowError
+
+
+@dataclass(frozen=True)
+class SecurityCheckTask:
+    """Idle-time daemon task that asks Security to scan the product and platform."""
+
+    task_id: str = field(
+        default_factory=lambda: f"security-check-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    )
+    app_scan_type: str = "vuln"
+    platform_scan_type: str = "platform_audit"
 
 
 class CompanyDaemonError(ValueError):
@@ -166,6 +177,8 @@ class CompanyDaemon:
         proofs: list[ProofOfWork] = []
         for issue in selected:
             proofs.append(self._run_issue_sync(issue, dry_run=dry_run))
+        if not issues and not dry_run and active_workspaces == 0:
+            self.run_idle_security_check()
         return proofs
 
     def status(self) -> dict[str, Any]:
@@ -222,7 +235,97 @@ class CompanyDaemon:
                 "hook_timeout_seconds": self.workflow.hooks.timeout_seconds,
             },
             "runs": runs,
+            "security": self._current_security_status(),
         }
+
+    def run_idle_security_check(self) -> dict[str, Any]:
+        """Run AppSec and PlatformSec checks when the daemon has no issue work."""
+        task = SecurityCheckTask()
+        result = {"task_id": task.task_id, "status": "skipped", "departments": []}
+        if self.orchestrator is None or self.coo is None:
+            self._get_default_runner()
+        departments = (
+            getattr(self.orchestrator, "departments", {}) if self.orchestrator else {}
+        )
+        if not departments:
+            self._record_security_status(
+                {
+                    "status": "not_scanned",
+                    "severity": "info",
+                    "scan_type": "idle_security_check",
+                    "finding_count": 0,
+                    "summary": "Idle security check skipped because no Security departments are registered.",
+                }
+            )
+            return result
+        try:
+            return asyncio.run(self._run_idle_security_check(task))
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(self._run_idle_security_check(task))
+            finally:
+                loop.close()
+
+    async def _run_idle_security_check(self, task: SecurityCheckTask) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "task_id": task.task_id,
+            "status": "success",
+            "departments": [],
+        }
+        for department, scan_type in (
+            ("security_app", task.app_scan_type),
+            ("security_platform", task.platform_scan_type),
+        ):
+            if department not in getattr(self.orchestrator, "departments", {}):
+                continue
+            company_task = CompanyTask(
+                task_id=f"{task.task_id}:{department}",
+                origin="daemon",
+                target=department,
+                artifact_type="raw_prompt",
+                payload={
+                    "instruction": "Run an idle-time security scan and report structured findings.",
+                    "scan_type": scan_type,
+                },
+                blocking=False,
+                context={"scan_type": scan_type, "security_check_task": task.task_id},
+            )
+            deliverable = await self.coo.run_department_task(company_task)
+            result["departments"].append(
+                {
+                    "department": department,
+                    "status": deliverable.status,
+                    "artifact_type": deliverable.artifact_type,
+                }
+            )
+        if not result["departments"]:
+            result["status"] = "skipped"
+        return result
+
+    def _record_security_status(self, security: dict[str, Any]) -> None:
+        memory = (
+            getattr(self.orchestrator, "memory", None) if self.orchestrator else None
+        )
+        data = getattr(memory, "data", None)
+        if isinstance(data, dict):
+            data["security"] = security
+            persist = getattr(memory, "persist", None)
+            if callable(persist):
+                try:
+                    persist()
+                except Exception:
+                    pass
+
+    def _current_security_status(self) -> dict[str, Any]:
+        memory = (
+            getattr(self.orchestrator, "memory", None) if self.orchestrator else None
+        )
+        data = getattr(memory, "data", None)
+        security = data.get("security", {}) if isinstance(data, dict) else {}
+        if isinstance(security, dict) and security:
+            return dict(security)
+        return {"status": "not_scanned", "severity": "info", "finding_count": 0}
 
     def _load_run_states(self) -> list[dict[str, Any]]:
         runs: list[dict[str, Any]] = []

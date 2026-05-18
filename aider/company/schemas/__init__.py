@@ -3,7 +3,7 @@ import json as _json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Optional, Union, List
 
 from aider.company.schemas.design_spec import DesignSpecV2
 from aider.company.interfaces import (
@@ -1038,6 +1038,42 @@ Full diffs are stored in the JSON proof artifact when available. This Markdown r
 
 
 @dataclass
+class SecurityScanResult:
+    scan_type: Literal["vuln", "pentest", "code_review", "platform_audit"]
+    severity: Literal["critical", "high", "medium", "low", "info"]
+    findings: List[dict]  # {location, description, recommendation, cve?}
+    fixed_count: int = 0
+    risk_score: float = 0.0
+    raw_output_summary: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "scan_type": self.scan_type,
+            "severity": self.severity,
+            "findings": list(self.findings),
+            "fixed_count": self.fixed_count,
+            "risk_score": self.risk_score,
+            "raw_output_summary": self.raw_output_summary,
+        }
+
+
+@dataclass
+class SecurityPatchRequest:
+    finding_id: str
+    patch_plan: str
+    target_department: Literal["engineering", "architect"]
+    urgency: Literal["immediate", "scheduled"]
+
+    def to_dict(self) -> dict:
+        return {
+            "finding_id": self.finding_id,
+            "patch_plan": self.patch_plan,
+            "target_department": self.target_department,
+            "urgency": self.urgency,
+        }
+
+
+@dataclass
 class CompanyTask:
     task_id: str
     origin: str  # e.g. "ceo", "product"
@@ -1052,6 +1088,8 @@ class CompanyTask:
         "deploy_request",
         "memo",
         "clarification",
+        "security_scan_result",
+        "security_patch_request",
         "general",
     ]
     payload: Any
@@ -1081,5 +1119,7 @@ __all__ = [
     "ProcessResult",
     "QAFeedback",
     "RiskRegister",
+    "SecurityPatchRequest",
+    "SecurityScanResult",
     "Timeline",
 ]

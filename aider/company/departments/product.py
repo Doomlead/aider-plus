@@ -81,6 +81,8 @@ exactly these keys:
 Rules:
 - Consult any Procedural Skills included in the task context before drafting;
   use them when their summaries match the request.
+- Use relevant recalled memories from this thread, channel, project, user,
+  and Product private context when they apply.
 - acceptance_criteria must be testable (Given/When/Then style preferred).
 - success_metrics must be measurable (include numbers or events).
 - out_of_scope must include at least one item to set expectations.
@@ -92,7 +94,8 @@ _REVIEW_SYSTEM = """\
 You are a senior Product Manager reviewing a PRD for quality.
 
 Before reviewing, consult any Procedural Skills included in the task context
-when their summaries match this PRD.
+when their summaries match this PRD. Also consider relevant recalled memories
+from the recall packet when they apply.
 
 Check for these problems only:
 1. acceptance_criteria items that are not testable (vague words: "works well",
@@ -129,7 +132,13 @@ class ProductDepartment(Department):
         self.agent_loop = agent_loop
 
     def get_context_requirements(self) -> list[str]:
-        return ["playbook.*", "skills.shared", "skills.product", "project.name", "project.phase"]
+        return [
+            "playbook.*",
+            "skills.shared",
+            "skills.product",
+            "project.name",
+            "project.phase",
+        ]
 
     async def process(self, task: CompanyTask) -> Deliverable:
         if task.origin == "engineering" or task.artifact_type == "memo":
@@ -195,11 +204,16 @@ class ProductDepartment(Department):
         playbook_text = self._format_playbook(context)
         if playbook_text:
             parts.append(f"Playbook guidance:\n{playbook_text}")
+        recall_text = self._format_recall_packet(context.get("recall_packet"))
+        if recall_text and recall_text != "No recall packet available.":
+            parts.append(
+                "Relevant recalled memories (thread/channel/project/user/Product private):"
+                f"\n{recall_text}"
+            )
         skill_text = self._format_skill_guidance(context)
         if skill_text:
             parts.append(
-                "Procedural skills available (consult when relevant):"
-                f"\n{skill_text}"
+                "Procedural skills available (consult when relevant):" f"\n{skill_text}"
             )
         clarification_answers = context.get("clarification_answers")
         if clarification_answers:
@@ -337,6 +351,9 @@ class ProductDepartment(Department):
         playbook_text = self._format_playbook(context)
         if playbook_text:
             parts.append(f"Relevant playbook guidance:\n{playbook_text}")
+        recall_text = self._format_recall_packet(context.get("recall_packet"))
+        if recall_text and recall_text != "No recall packet available.":
+            parts.append(f"Relevant recalled memories:\n{recall_text}")
         structured = previous_prd_structured
         if isinstance(previous_prd, PRD):
             structured = previous_prd.to_dict()

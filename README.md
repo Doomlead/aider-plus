@@ -564,6 +564,11 @@ Aider Plus keeps learning artifacts local and inspectable:
   playbook patterns, skill usage, approval state, and recent outcomes.
 - Warehouses keep shared COO memory under `.aider/coo/` for cross-product context.
 - Retrieval pulls relevant memory into department context before work is executed.
+  Departments now receive an additive `recall_packet` with scoped, ranked,
+  explainable memories from the current thread, department-private records,
+  channel, project, user, and skill evidence. Each recalled item carries a
+  short “Why included” explanation while existing playbook and procedural skill
+  injection remains unchanged.
 - Audit pattern extraction can turn repeated outcomes into playbook guidance.
 - The communication ledger writes structured memory records for major boundaries
   such as user instructions, department task receipt, deliverables, handoffs,

@@ -35,9 +35,7 @@ def is_visible(record: MemoryRecord, query: MemoryQuery | None = None) -> bool:
     if visibility == VISIBILITY_PRIVATE:
         if query.requester and record.author and query.requester == record.author:
             return True
-        return bool(
-            requester_scope and validate_scope(requester_scope) == record.scope
-        )
+        return bool(requester_scope and validate_scope(requester_scope) == record.scope)
 
     if visibility == VISIBILITY_SKILL:
         return _skill_visible(record, requester_scope)
@@ -58,6 +56,8 @@ def is_visible(record: MemoryRecord, query: MemoryQuery | None = None) -> bool:
             "role",
             "department",
             "thread",
+            "channel",
+            "user",
             "skill",
         }
     return rec == requester

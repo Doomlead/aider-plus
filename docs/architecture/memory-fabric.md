@@ -637,3 +637,10 @@ company:
 ```
 
 Embeddings remain optional and disabled by default to preserve deterministic local behavior without adding required external services.
+
+
+Performance notes:
+
+- `LocalTFIDFIndex` is best for smaller/local record sets and fully deterministic runs. It has near-zero setup cost but ranking recomputes per-query vectors in-memory.
+- `SQLiteFTSIndex` is a better fit as record counts grow (for example, many thousands of records) or when repeated queries dominate runtime. It pays an indexing/storage cost up front and then uses FTS ranking.
+- If SQLite FTS initialization or query execution fails, runtime degrades to `LocalTFIDFIndex` automatically so recall remains available.

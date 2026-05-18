@@ -23,6 +23,7 @@ from aider.company.tracker import (
 )
 from aider.company.warehouse import default_warehouse_path
 from aider.company.workflow import CompanyWorkflow, WorkflowError
+from aider.memory.store import MemoryStore
 
 
 @dataclass(frozen=True)
@@ -239,6 +240,7 @@ class CompanyDaemon:
             },
             "runs": runs,
             "security": self._current_security_status(),
+            "memory_health": MemoryStore(self.orchestrator.state.memory).get_metrics() if self.orchestrator is not None else {},
         }
 
     def run_idle_security_check(self, *, force: bool = False) -> dict[str, Any]:

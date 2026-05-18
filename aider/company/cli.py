@@ -9,6 +9,8 @@ from typing import Sequence
 
 from aider.company.daemon import CompanyDaemon, CompanyDaemonError, load_daemon
 from aider.company.workflow import TrackerWorkflowConfig, WorkflowError
+from aider.memory import ProjectMemory
+from aider.memory.store import MemoryStore
 from aider.company.templates import (
     DEFAULT_TEMPLATE_KEY,
     get_template,
@@ -65,6 +67,8 @@ USAGE = """Usage:
   aider company create <idea> [--template TEMPLATE] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
   aider company new <idea> [--template TEMPLATE] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
   aider company daemon --workflow PATH [--tracker TYPE] [--repo OWNER/REPO] [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N] [--watch] [--filter EVENT_TYPE]
+  aider company memory status
+  aider company memory repair [--yes]
   aider warehouse init [PATH]
   aider warehouse list [--warehouse PATH]
   aider warehouse open PRODUCT [--warehouse PATH]
@@ -114,6 +118,10 @@ def parse_company_cli(
 
     if action == "daemon":
         return _parse_company_daemon(rest), aider_args
+    if action == "memory":
+        if not rest or rest[0] not in {"status", "repair"}:
+            raise CompanyCLIError("`aider company memory` supports `status` or `repair`.\n" + USAGE)
+        return CompanyCLICommand(action=f"memory-{rest[0]}", yes="--yes" in rest), aider_args
 
     if action not in {"create", "new"}:
         raise CompanyCLIError(f"Unknown company command: {action}\n{USAGE}")
@@ -417,6 +425,14 @@ def handle_company_cli_pre_coder(command: CompanyCLICommand) -> int | None:
         return 0
     if command.action == "daemon":
         return handle_company_daemon_cli(command)
+    if command.action in {"memory-status", "memory-repair"}:
+        store = MemoryStore(ProjectMemory(str(Path.cwd())))
+        if command.action == "memory-status":
+            print(store.get_metrics())
+            return 0
+        result = store.repair(confirm=command.yes)
+        print(result if command.yes else {"dry_run": True, **result})
+        return 0
     if command.action in {"create", "new"} and command.dry_plan:
         if command.action == "new":
             warehouse = (

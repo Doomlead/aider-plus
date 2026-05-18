@@ -94,6 +94,8 @@ class CompanyConfig:
     enable_coo_llm_routing: bool = False
     mcp: MCPConfig = field(default_factory=MCPConfig)
     skill_learning: SkillLearningConfig = field(default_factory=SkillLearningConfig)
+    memory_backend: str = "local_tfidf"
+    enable_embeddings: bool = False
 
     def get_department_config(self, name: str) -> DepartmentConfig:
         """

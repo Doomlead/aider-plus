@@ -607,3 +607,33 @@ Phase 0 is complete when:
 - `README.md` links to this document near the top.
 - No runtime behavior changes are included.
 - Future implementation work has enough structure to proceed in small, testable phases.
+
+
+## Backend Adapters (Phase 9)
+
+Memory retrieval now supports pluggable local indexes behind adapter interfaces:
+
+- `MemoryIndex`: rank/rebuild/add contract used by `MemoryStore`.
+- `MemoryBackendAdapter`: adapter identity hook for backend-specific implementations.
+- `MemoryEmbeddingProvider`: optional embedding provider contract for future semantic retrieval.
+
+Current local-first backends:
+
+- `LocalTFIDFIndex` (default): deterministic TF-IDF ranking with no external dependencies.
+- `SQLiteFTSIndex` (optional): local SQLite FTS5 ranking; falls back safely when unavailable.
+
+Configuration examples:
+
+```yaml
+company:
+  memory_backend: local_tfidf
+  enable_embeddings: false
+```
+
+```yaml
+company:
+  memory_backend: sqlite_fts
+  enable_embeddings: false
+```
+
+Embeddings remain optional and disabled by default to preserve deterministic local behavior without adding required external services.

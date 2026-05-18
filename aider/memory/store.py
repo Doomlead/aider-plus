@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Optional
 
 from .index import LocalTFIDFIndex, MemoryIndex
+from .metrics import summarize_memory_metrics
 from .project import ProjectMemory
 from .records import MemoryQuery, MemoryRecord, ensure_record
 from .scopes import scope_matches
@@ -27,6 +28,8 @@ class MemoryStore:
         self.project_memory.update({"memory": memory})
         self.project_memory.persist()
         self.add_to_index(memory_record)
+        self._increment_metric("memory_records_total_events")
+        self._auto_compaction_check()
         return memory_record
 
     def query_records(
@@ -110,8 +113,146 @@ class MemoryStore:
             changed += 1
         if changed:
             self.project_memory.update({"memory": self._memory_namespace()})
+            self._increment_metric("decay_runs")
             self.project_memory.persist()
         return changed
+
+    def prune_stale(self, threshold_days: int = 90, max_pruned: int = 500) -> int:
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=max(1, int(threshold_days)))
+        kept: list[dict[str, Any]] = []
+        pruned = 0
+        for item in self._record_dicts():
+            ts = item.get("updated_at") or item.get("created_at")
+            if ts and pruned < max_pruned:
+                try:
+                    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    if dt < cutoff:
+                        pruned += 1
+                        continue
+                except ValueError:
+                    pass
+            kept.append(item)
+        if pruned:
+            memory = self._memory_namespace()
+            memory["records"] = kept
+            self.project_memory.update({"memory": memory})
+            self.project_memory.persist()
+            self.rebuild_index()
+        return pruned
+
+    def enforce_limits(self, max_records_per_scope: int = 5000, max_total: int = 50000) -> int:
+        removed = 0
+        records = list(self._record_dicts())
+        if len(records) > max_total:
+            drop = len(records) - max_total
+            records = records[drop:]
+            removed += drop
+        by_scope: dict[str, list[dict[str, Any]]] = {}
+        for item in records:
+            by_scope.setdefault(str(item.get("scope") or "unknown"), []).append(item)
+        trimmed: list[dict[str, Any]] = []
+        for _, scoped in by_scope.items():
+            if len(scoped) > max_records_per_scope:
+                removed += len(scoped) - max_records_per_scope
+                scoped = scoped[-max_records_per_scope:]
+            trimmed.extend(scoped)
+        if removed:
+            trimmed.sort(key=lambda r: str(r.get("updated_at") or r.get("created_at") or ""))
+            memory = self._memory_namespace()
+            memory["records"] = trimmed
+            self.project_memory.update({"memory": memory})
+            self.project_memory.persist()
+            self.rebuild_index()
+        return removed
+
+    def compact(self, threshold_days: int = 120, min_signal: int = -2, *, dry_run: bool = True) -> int:
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=max(1, int(threshold_days)))
+        doomed: list[str] = []
+        for item in self._record_dicts():
+            ts = item.get("updated_at") or item.get("created_at")
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            signal = int(metadata.get("reinforcement_signal") or 0)
+            if dt < cutoff and signal <= min_signal:
+                doomed.append(str(item.get("id") or item.get("record_id") or ""))
+        if dry_run or not doomed:
+            return len(doomed)
+        return self._drop_records(doomed)
+
+    def repair(self, *, confirm: bool = False) -> dict[str, int]:
+        repaired = {"invalid_records_removed": 0}
+        if not confirm:
+            return repaired
+        valid: list[dict[str, Any]] = []
+        for item in self._record_dicts():
+            try:
+                ensure_record(item)
+                valid.append(item)
+            except Exception:
+                repaired["invalid_records_removed"] += 1
+        if repaired["invalid_records_removed"]:
+            memory = self._memory_namespace()
+            memory["records"] = valid
+            self.project_memory.update({"memory": memory})
+            self.project_memory.persist()
+            self.rebuild_index()
+        return repaired
+
+    def get_metrics(self) -> dict[str, Any]:
+        memory = self._memory_namespace()
+        summary = summarize_memory_metrics(memory)
+        observed = self.project_memory.data.get("observability", {}).get("memory_metrics", {})
+        metrics = dict(observed) if isinstance(observed, dict) else {}
+        metrics.update(summary)
+        metrics.setdefault("recall_hit_rate", 0.0)
+        metrics.setdefault("skill_success_rate", 0.0)
+        metrics.setdefault("decay_runs", 0)
+        metrics.setdefault("skill_proposals_created", 0)
+        total = int(summary.get("memory_records_total", 0))
+        max_total = int(metrics.get("max_total_limit", 50000))
+        utilization = min(1.0, (total / max_total) if max_total > 0 else 1.0)
+        stale_ratio = (int(summary.get("stale_memory_count", 0)) / total) if total else 0.0
+        recall_hit_rate = float(metrics.get("recall_hit_rate", 0.0) or 0.0)
+        score = 100.0 * (0.5 * (1.0 - utilization) + 0.3 * (1.0 - stale_ratio) + 0.2 * recall_hit_rate)
+        metrics["memory_health_score"] = max(0.0, min(100.0, round(score, 1)))
+        return metrics
+
+    def _drop_records(self, ids: list[str]) -> int:
+        doomed = set(ids)
+        kept = [item for item in self._record_dicts() if str(item.get("id") or item.get("record_id") or "") not in doomed]
+        removed = len(list(self._record_dicts())) - len(kept)
+        if removed:
+            memory = self._memory_namespace()
+            memory["records"] = kept
+            self.project_memory.update({"memory": memory})
+            self.project_memory.persist()
+            self.rebuild_index()
+        return removed
+
+    def _increment_metric(self, key: str, amount: int = 1) -> None:
+        observability = self.project_memory.data.setdefault("observability", {})
+        metrics = observability.setdefault("memory_metrics", {})
+        metrics[key] = int(metrics.get(key) or 0) + int(amount)
+
+    def _auto_compaction_check(self) -> None:
+        metrics = self.get_metrics()
+        total = int(metrics.get("memory_records_total", 0))
+        max_total = int(metrics.get("max_total_limit", 50000))
+        if max_total <= 0:
+            return
+        if total >= int(max_total * 0.9):
+            self._increment_metric("auto_compaction_suggested")
 
     def _memory_namespace(self) -> Dict[str, Any]:
         self.project_memory._ensure_schema()

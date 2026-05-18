@@ -44,6 +44,7 @@ from aider.dump import dump  # noqa: F401
 from aider.io import InputOutput
 from aider.main import main as cli_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
+from aider.memory.store import MemoryStore
 from aider.scrape import Scraper, has_playwright
 from aider.gui_settings_manager import (
     SETTINGS_SECTIONS,
@@ -626,6 +627,15 @@ class DesktopCompanySession:
         return KnowledgeManager(
             self.orchestrator.state, self.orchestrator.company_config.skill_learning
         ).reject_skill_proposal(proposal_id, reason=reason)
+
+    def memory_status(self) -> dict[str, Any]:
+        return MemoryStore(self.coder.project_memory).get_metrics()
+
+    def compact_memory(self) -> int:
+        return MemoryStore(self.coder.project_memory).compact(dry_run=False)
+
+    def repair_memory(self) -> dict[str, int]:
+        return MemoryStore(self.coder.project_memory).repair(confirm=True)
 
     def daemon_status(self) -> dict[str, Any]:
         workflow_path = Path(self.repo_path) / "AIDER_WORKFLOW.md"
@@ -1958,6 +1968,23 @@ class GUI:
         c2.metric("Skills", counts.get("skills", 0))
         c3.metric("Pending Proposals", counts.get("pending_proposals", 0))
         c4.metric("COO Memory", counts.get("coo_memory_entries", 0))
+        memory_health = overview.get("memory_health") or {}
+        score = float(memory_health.get("memory_health_score", 0.0) or 0.0)
+        badge = "🟢" if score >= 80 else ("🟡" if score >= 60 else "🔴")
+        st.subheader(f"Memory Health: {score:.1f}% {badge}")
+        mc1, mc2, mc3 = st.columns(3)
+        mc1.metric("Records", int(memory_health.get("memory_records_total", 0) or 0))
+        mc2.metric("Stale", int(memory_health.get("stale_memory_count", 0) or 0))
+        mc3.metric("Recall Hit Rate", f"{float(memory_health.get('recall_hit_rate', 0.0) or 0.0):.2f}")
+        ba, bb = st.columns(2)
+        if ba.button("Compact Now", key="memory_compact_now"):
+            removed = company.compact_memory()
+            st.success(f"Compacted memory, removed {removed} records.")
+            st.rerun()
+        if bb.button("Repair", key="memory_repair_now"):
+            result = company.repair_memory()
+            st.success(f"Repair complete: {result}")
+            st.rerun()
 
         with st.expander("Knowledge EventBus replay", expanded=False):
             knowledge_limit = int(

@@ -1,6 +1,6 @@
 # Memory Fabric Architecture Specification
 
-Status: Phase 0 architecture specification only. This document describes the target design for the Neocortex-inspired memory fabric; it does not require runtime behavior changes in this phase.
+Status: milestone architecture specification only. This document describes the target design for the Neocortex-inspired memory fabric; it does not require runtime behavior changes in this phase.
 
 ## 1. Purpose and Design Goals
 
@@ -25,7 +25,7 @@ The design goals are:
 | `ContextBuilder` | Builds task context from requirements, project state, playbook, PRD slices, and skill summaries using retrieval/ranking. | Becomes the recall orchestrator: it resolves allowed scopes, applies department recall order, ranks records, and emits explanations. |
 | `CompanySkillManager` | Lists, queries, records usage of, proposes, and approves role-scoped skills under `.aider/skills` and `.aider/skill_proposals`. | Owns approved skill artifacts and skill proposal state; reads `skill_evidence` links from memory records to explain provenance. |
 | `SelfImprovementService` | Learns from post-mortems/audit logs and creates approval-gated skill proposals by department. | Becomes the promotion coordinator for the `raw -> evidence -> cluster -> proposal -> approved skill -> reinforced/retired` lifecycle. |
-| `MemoryRetriever` | Lightweight TF-IDF scorer for text chunks. | Remains the first-stage local scorer; later phases can add embeddings/vector indexes behind the same recall API. |
+| `MemoryRetriever` | Lightweight TF-IDF scorer for text chunks. | Remains the first-stage local scorer; later milestone can add embeddings/vector indexes behind the same recall API. |
 | `ProjectMemoryMigrator` / repositories | Forward-only migration and JSON/SQLite persistence boundary. | Adds schema-versioned migration for canonical memory records without destructively rewriting legacy fields. |
 
 ## 3. Memory Scopes
@@ -95,7 +95,7 @@ Canonical records live in a future `memory.records` collection while legacy fiel
 | Field | Required | Description |
 | --- | --- | --- |
 | `id` | Yes | Stable unique identifier, preferably `mem_<scope>_<ulid>` or content-addressed ID. |
-| `schema_version` | Yes | Canonical memory record schema version. Phase 0 target starts at `1`. |
+| `schema_version` | Yes | Canonical memory record schema version. milestone target starts at `1`. |
 | `kind` | Yes | `observation`, `preference`, `decision`, `pattern`, `playbook`, `skill_evidence`, `skill`, `audit_summary`, `policy`, or `artifact_summary`. |
 | `scope` | Yes | Primary scope from Section 3. |
 | `visibility` | Yes | Visibility from Section 4. |
@@ -445,25 +445,25 @@ Legacy fields are not deleted. Backfill creates canonical records that point to 
 | `skills.recently_used[]` | Reinforcement metadata linked by `scope/name`. |
 | `knowledge.recently_injected[]` | Recall telemetry, not promoted unless tied to successful outcome. |
 
-### 8.4 Migration phases
+### 8.4 Migration milestone
 
-1. **Phase 0: specification**
+1. **milestone: specification**
    - Write this architecture document and README link only.
-2. **Phase 1: schema scaffolding**
+2. **milestone: schema scaffolding**
    - Add dataclasses/types for `MemoryRecord`, `MemoryScope`, `Visibility`, and `SkillEvidence`.
    - Add repository migration that creates empty `memory.records` without changing behavior.
-3. **Phase 2: write adapters**
+3. **milestone: write adapters**
    - Add helper methods that write canonical records alongside existing audit/playbook/skill proposal writes.
    - Add privacy/redaction checks before persistence.
-4. **Phase 3: recall integration**
+4. **milestone: recall integration**
    - Extend ContextBuilder to query canonical records after legacy playbook/skill retrieval or in a feature-flagged path.
    - Emit explanations for canonical records.
-5. **Phase 4: promotion integration**
+5. **milestone: promotion integration**
    - Update SelfImprovementService to cluster canonical evidence and create proposals with record links.
    - Update CompanySkillManager approval metadata to include evidence record IDs.
-6. **Phase 5: reinforcement and retirement**
+6. **milestone: reinforcement and retirement**
    - Record skill outcomes, reinforce useful skills, and mark stale or harmful skills retired.
-7. **Phase 6: storage/index optimization**
+7. **milestone: storage/index optimization**
    - Add optional SQLite tables or vector indexes behind `MemoryRepository` only after behavior is covered by tests.
 
 ### 8.5 Rollback plan
@@ -475,21 +475,21 @@ Legacy fields are not deleted. Backfill creates canonical records that point to 
 
 ## 9. Test Plan by Future Phase
 
-### Phase 1: schema scaffolding
+### milestone: schema scaffolding
 
 - Unit-test scope and visibility validation.
 - Unit-test `MemoryRecord` serialization/deserialization with full `skill_evidence` blocks.
 - Unit-test repository migration adds empty canonical collections while preserving existing `audit_log`, `playbook`, `skill_proposals`, `observability`, `skills`, and `knowledge` keys.
 - Property-style tests for unknown legacy keys: migrations must preserve them.
 
-### Phase 2: write adapters
+### milestone: write adapters
 
 - Unit-test audit/playbook writes create linked canonical records when the feature flag is enabled.
 - Unit-test private/thread records are not promoted to project visibility without explicit policy.
 - Unit-test redaction rejects or redacts records marked as containing secrets.
 - Integration-test JSON and SQLite repositories produce equivalent canonical memory documents.
 
-### Phase 3: recall integration
+### milestone: recall integration
 
 - Unit-test per-department recall order and visibility filtering.
 - Unit-test ranking factors: relevance, keyword match, scope proximity, confidence, recency, usage, and diversity.
@@ -497,21 +497,21 @@ Legacy fields are not deleted. Backfill creates canonical records that point to 
 - Regression-test existing ContextBuilder behavior for playbook, PRD truncation, and skill guidance.
 - Token-budget tests ensure injected memory stays bounded.
 
-### Phase 4: promotion integration
+### milestone: promotion integration
 
 - Unit-test raw observations become evidence only with provenance.
 - Unit-test evidence clustering groups related records and avoids unrelated records with similar keywords.
 - Unit-test proposal creation includes evidence record IDs and respects `require_human_approval`.
 - Integration-test approval creates a skill with metadata back-links to evidence.
 
-### Phase 5: reinforcement and retirement
+### milestone: reinforcement and retirement
 
 - Unit-test successful skill usage increments reinforcement and updates confidence/recency.
 - Unit-test failed outcomes lower confidence and can trigger review.
 - Unit-test retirement hides skills from recall while preserving audit history.
 - Integration-test superseded skills point to replacement skills or records.
 
-### Phase 6: storage/index optimization
+### milestone: storage/index optimization
 
 - Performance tests for projects with thousands of records.
 - Consistency tests between JSON, SQLite, and optional vector indexes.
@@ -557,7 +557,7 @@ Legacy fields are not deleted. Backfill creates canonical records that point to 
 
 ## 11. High-Level File Plan
 
-No runtime files are changed in Phase 0. Future implementation phases should add or extend the following files.
+No runtime files are changed in milestone. Future implementation milestone should add or extend the following files.
 
 ### 11.1 New modules/classes
 
@@ -599,17 +599,17 @@ No runtime files are changed in Phase 0. Future implementation phases should add
 | `tests/company/test_context_memory_fabric.py` | ContextBuilder integration with canonical recall and legacy fallback. |
 | `tests/company/test_skill_evidence.py` | CompanySkillManager and SelfImprovementService evidence links. |
 
-## 12. Phase 0 Acceptance Criteria
+## 12. milestone Acceptance Criteria
 
-Phase 0 is complete when:
+milestone is complete when:
 
 - This document exists at `docs/architecture/memory-fabric.md`.
 - `README.md` links to this document near the top.
 - No runtime behavior changes are included.
-- Future implementation work has enough structure to proceed in small, testable phases.
+- Future implementation work has enough structure to proceed in small, testable milestone.
 
 
-## Backend Adapters (Phase 9)
+## Backend Adapters (milestone)
 
 Memory retrieval now supports pluggable local indexes behind adapter interfaces:
 

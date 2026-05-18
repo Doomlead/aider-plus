@@ -7,7 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 class MemoryRepository(ABC):
@@ -47,6 +47,9 @@ class ProjectMemoryMigrator:
         if version < 4:
             migrated = self._migrate_to_v4(migrated)
             version = 4
+        if version < 5:
+            migrated = self._migrate_to_v5(migrated)
+            version = 5
 
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         self._ensure_defaults(migrated)
@@ -135,6 +138,20 @@ class ProjectMemoryMigrator:
         memory.setdefault("threads", [])
         return data
 
+    def _migrate_to_v5(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Add memory metrics namespace and migration backup metadata."""
+        observability = data.get("observability")
+        if not isinstance(observability, dict):
+            observability = {}
+            data["observability"] = observability
+        observability.setdefault("memory_metrics", {})
+        migration = data.get("migration")
+        if not isinstance(migration, dict):
+            migration = {}
+            data["migration"] = migration
+        migration.setdefault("last_schema_backup", None)
+        return data
+
     def _ensure_defaults(self, data: Dict[str, Any]) -> None:
         for key, value in self.defaults.items():
             if key not in data:
@@ -164,6 +181,24 @@ class ProjectMemoryMigrator:
             observability["turns_per_phase"] = {}
         if not isinstance(observability.get("token_usage_per_department"), dict):
             observability["token_usage_per_department"] = {}
+        if not isinstance(observability.get("memory_metrics"), dict):
+            observability["memory_metrics"] = {}
+
+
+class MemoryMigrator:
+    """Utility wrapper for future non-destructive schema migrations."""
+
+    def __init__(self, migrator: ProjectMemoryMigrator):
+        self.migrator = migrator
+
+    def migrate_with_backup(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        original = deepcopy(data) if isinstance(data, dict) else {}
+        migrated = self.migrator.migrate(data)
+        if migrated != original:
+            migration = migrated.setdefault("migration", {})
+            if isinstance(migration, dict):
+                migration["last_schema_backup"] = original
+        return migrated
 
         # v3 keys
         observability.setdefault(
@@ -193,6 +228,7 @@ class JsonMemoryRepository(MemoryRepository):
     def __init__(self, memory_path: Path, defaults: Dict[str, Any]):
         self.memory_path = memory_path
         self.migrator = ProjectMemoryMigrator(defaults)
+        self.memory_migrator = MemoryMigrator(self.migrator)
 
     def load(self) -> Dict[str, Any]:
         if not self.memory_path.exists():
@@ -207,7 +243,7 @@ class JsonMemoryRepository(MemoryRepository):
         )
 
     def migrate(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return self.migrator.migrate(data)
+        return self.memory_migrator.migrate_with_backup(data)
 
 
 class SQLiteMemoryRepository(MemoryRepository):
@@ -217,6 +253,7 @@ class SQLiteMemoryRepository(MemoryRepository):
         self.db_path = db_path
         self.key = key
         self.migrator = ProjectMemoryMigrator(defaults)
+        self.memory_migrator = MemoryMigrator(self.migrator)
 
     def load(self) -> Dict[str, Any]:
         self._ensure_database()
@@ -248,7 +285,7 @@ class SQLiteMemoryRepository(MemoryRepository):
             )
 
     def migrate(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return self.migrator.migrate(data)
+        return self.memory_migrator.migrate_with_backup(data)
 
     def _ensure_database(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

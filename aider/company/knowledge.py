@@ -8,6 +8,7 @@ from typing import Any
 
 from aider.company.skills import CompanySkillManager, SkillLearningConfig, SkillProposal
 from aider.company.state import CompanyStateManager
+from aider.memory.store import MemoryStore
 
 
 class KnowledgeManager:
@@ -207,6 +208,7 @@ class KnowledgeManager:
         skill_snapshot = self.skill_manager.inspect_skills()
         retired_archive = skill_snapshot.get("retired_skills_archive", [])
         search_results = self.search_knowledge(query) if query else []
+        memory_health = MemoryStore(self.memory).get_metrics()
         return {
             "playbooks": playbooks,
             "skills": skills,
@@ -228,6 +230,7 @@ class KnowledgeManager:
             "retired_skills_archive": retired_archive,
             "coo_memory": coo_memory,
             "search_results": search_results,
+            "memory_health": memory_health,
             "counts": {
                 "playbooks": len(playbooks),
                 "skills": len(skills),

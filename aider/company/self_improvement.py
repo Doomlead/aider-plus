@@ -12,7 +12,7 @@ from aider.company.skills import (
     slugify_skill_name,
 )
 from aider.company.state import CompanyStateManager
-from aider.memory.evidence import SkillEvidenceCluster, collect_evidence_for_project
+from aider.memory.evidence import SkillEvidenceCluster, cluster_channel_patterns, collect_evidence_for_project
 from aider.memory.reinforcement import record_memory_outcome, record_skill_outcome
 from aider.memory.store import MemoryStore
 
@@ -42,7 +42,8 @@ class SelfImprovementService:
 
         audit_proposals = self._audit_proposals(project, final_deliverable)
         memory_proposals = self.learn_from_memory(project, persist=False)
-        return self._store_new_proposals([*audit_proposals, *memory_proposals])
+        channel_proposals = self.learn_from_communication_patterns(project, persist=False)
+        return self._store_new_proposals([*audit_proposals, *memory_proposals, *channel_proposals])
 
     def learn_from_memory(
         self, project: Project, *, persist: bool = True
@@ -61,6 +62,35 @@ class SelfImprovementService:
             if (proposal := self._proposal_for_evidence_cluster(project, cluster))
             is not None
         ]
+        if persist:
+            return self._store_new_proposals(proposals)
+        return proposals
+
+    def learn_from_communication_patterns(
+        self, project: Project, *, persist: bool = True
+    ) -> list[SkillProposal]:
+        if not self.config.enabled:
+            return []
+        store = MemoryStore(self.state.memory)
+        channel_ids = {
+            str((record.metadata or {}).get("channel_id") or (record.metadata or {}).get("channel") or "").lower().strip()
+            for record in store.query_records()
+            if isinstance(record.metadata, dict)
+        }
+        proposals: list[SkillProposal] = []
+        for channel_id in sorted(cid for cid in channel_ids if ":" in cid):
+            clusters = cluster_channel_patterns(
+                store, channel_id, min_records=self.config.min_successful_repetitions
+            )
+            for cluster in clusters:
+                proposal = self._proposal_for_evidence_cluster(project, cluster)
+                if proposal is None:
+                    continue
+                proposal.scope = "shared"
+                proposal.suggested_scope = "shared"
+                proposal.metadata["source"] = "channel"
+                proposal.metadata["channel_scope"] = channel_id
+                proposals.append(proposal)
         if persist:
             return self._store_new_proposals(proposals)
         return proposals
@@ -226,6 +256,7 @@ class SelfImprovementService:
                 "channel": cluster.channel,
                 "thread_id": cluster.thread_id,
                 "outcome": cluster.outcome,
+                "channel_scope": cluster.channel if ":" in cluster.channel else None,
             },
         )
 

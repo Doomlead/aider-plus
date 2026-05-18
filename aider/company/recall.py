@@ -59,8 +59,9 @@ class RecallEngine:
             if thread_id
             else []
         )
+        related_channel_scopes = self._department_channel_scopes(str(task.target))
         packet.department_private = self._recall_many_scopes(
-            scopes=(department_scope, role_scope),
+            scopes=(department_scope, role_scope, *related_channel_scopes),
             requester_scope=department_scope,
             query_text=query_text,
             category="department_private",
@@ -113,6 +114,25 @@ class RecallEngine:
             if item.get("id") or item.get("record_id")
         }
         return packet
+
+
+    def _department_channel_scopes(self, department: str) -> list[str]:
+        dept = str(department or "").lower().strip()
+        if not dept:
+            return []
+        scopes: set[str] = set()
+        for record in self.store.query_records():
+            scope = str(record.scope or "")
+            if not scope.startswith("channel:"):
+                continue
+            parts = [p for p in scope.split(":")[1:] if p]
+            if dept in parts:
+                scopes.add(scope)
+            metadata = record.metadata if isinstance(record.metadata, dict) else {}
+            cid = str(metadata.get("channel_id") or metadata.get("channel") or "").lower().strip()
+            if cid and dept in cid.split(":"):
+                scopes.add(f"channel:{cid}")
+        return sorted(scopes)
 
     def _recall_many_scopes(
         self,

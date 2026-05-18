@@ -252,6 +252,13 @@ class CompanyDaemonRunner:
             failed_stages=failed_stages,
             total_stages=len(sequence),
         )
+        reinforcement_summary = {}
+        try:
+            from aider.company.self_improvement import SelfImprovementService
+
+            reinforcement_summary = SelfImprovementService(self.orchestrator.state).apply_reinforcement_and_decay()
+        except Exception:
+            reinforcement_summary = {"decayed_records": 0, "review_candidates": []}
         return {
             "summary": _summarize(issue, deliverables, changed_files, failed_stages),
             "changed_files": changed_files,
@@ -273,6 +280,7 @@ class CompanyDaemonRunner:
             ),
             "partial_success": partial_success,
             "human_review_required": human_review_required,
+            "reinforcement": reinforcement_summary,
         }
 
     def _selected_sequence(self) -> tuple[tuple[str, str], ...]:

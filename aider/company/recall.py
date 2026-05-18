@@ -180,6 +180,11 @@ class RecallEngine:
         for record, text in zip(records, texts):
             keyword_terms = self._matching_terms(query_text, text)
             score = tfidf_scores.get(text, 0.0) + (0.20 * len(keyword_terms))
+            metadata = record.metadata if isinstance(record.metadata, dict) else {}
+            reinforcement = int(metadata.get("reinforcement_count") or 0)
+            signal = int(metadata.get("reinforcement_signal") or 0)
+            score += min(0.6, reinforcement * 0.05)
+            score += max(-0.4, min(0.4, signal * 0.04))
             if score >= _MIN_RECALL_SCORE or keyword_terms or not query_text:
                 scored.append(
                     (
@@ -238,7 +243,18 @@ class RecallEngine:
             match_reason = f"matched task keyword(s): {', '.join(matching_terms)}"
         else:
             match_reason = "ranked as relevant visible memory"
-        return f"Included from {scope_reason} scope because it {match_reason}."
+        metadata = record.metadata if isinstance(record.metadata, dict) else {}
+        reinforcement = int(metadata.get("reinforcement_count") or 0)
+        signal = int(metadata.get("reinforcement_signal") or 0)
+        reinforcement_summary = (
+            f" Reinforcement: count={reinforcement}, signal={signal}."
+            if reinforcement or signal
+            else ""
+        )
+        return (
+            f"Included from {scope_reason} scope because it {match_reason}."
+            f"{reinforcement_summary}"
+        )
 
     @staticmethod
     def _first_value(context: dict, payload: Any, *keys: str) -> str | None:

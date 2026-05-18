@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import wraps
 from abc import ABC, abstractmethod
 from typing import Awaitable, Optional, List, Callable
 
@@ -8,12 +9,37 @@ from aider.company.audit import append_audit_event
 from aider.company.config import DepartmentConfig
 from aider.company.interfaces import Deliverable
 from aider.memory import ProjectMemory, ConversationMemory
+from aider.memory import communication as communication_memory
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
 
 
 class Department(ABC):
     name: str = "abstract"
     allowed_tools: List[str] = []
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        process = cls.__dict__.get("process")
+        if process is None or getattr(
+            process, "_communication_recording_wrapped", False
+        ):
+            return
+
+        @wraps(process)
+        async def _recording_process(self, task: CompanyTask) -> Deliverable:
+            communication_memory.task_received(self.memory, task, department=self.name)
+            try:
+                deliverable = await process(self, task)
+            except Exception as exc:
+                communication_memory.failure(
+                    self.memory, exc, task=task, department=self.name, stage="process"
+                )
+                raise
+            communication_memory.deliverable_produced(self.memory, deliverable)
+            return deliverable
+
+        _recording_process._communication_recording_wrapped = True
+        cls.process = _recording_process
 
     def __init__(
         self,
@@ -108,6 +134,9 @@ class Department(ABC):
                 if self._on_deliverable:
                     self._on_deliverable(d)
             except Exception as e:
+                communication_memory.failure(
+                    self.memory, e, task=task, department=self.name, stage="run_loop"
+                )
                 if self._on_deliverable:
                     self._on_deliverable(
                         Deliverable(

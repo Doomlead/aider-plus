@@ -17,6 +17,7 @@ from aider.company.workflow import WorkflowError
 from aider.company.schemas import CompanyTask, Deliverable
 from aider.company.skills import CompanySkillManager
 from aider.memory import ProjectMemory
+from aider.memory import communication as communication_memory
 
 
 @dataclass
@@ -773,6 +774,16 @@ class NanobotCOO:
             "task_id": task_id,
             "origin": origin or surface,
         }
+        communication_memory.user_instruction(
+            self.orchestrator.memory,
+            inbound.content,
+            surface=surface,
+            session_id=session_id,
+            task_id=task_id,
+            origin=origin or surface,
+            target=target,
+            metadata={"artifact_type": artifact_type},
+        )
         return await self.run_personal_turn(
             session=session,
             message=inbound,
@@ -1912,6 +1923,17 @@ class NanobotCOO:
             }
         )
         self.session_manager.save(session)
+
+        communication_memory.route_decision(
+            self.orchestrator.memory,
+            task=task,
+            target=target,
+            strategy="coo_route",
+            reason="COO routed user message",
+        )
+        communication_memory.handoff(
+            self.orchestrator.memory, task, source=task.origin, reason="coo_route"
+        )
 
         if not payload.get("wait", True):
             await self.orchestrator.submit(task)

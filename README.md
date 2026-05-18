@@ -7,7 +7,7 @@ warehouse-backed product creation, browser and desktop control surfaces, local
 memory, skills, MCP tooling, Discord/headless adapters, and an issue-driven
 Company daemon.
 
-**Memory Fabric Architecture:** Phase 0 of the Neocortex-inspired memory fabric is documented in [docs/architecture/memory-fabric.md](docs/architecture/memory-fabric.md). The spec defines scoped memory, visibility rules, evidence-backed records, skill promotion, recall policy, migration strategy, and the future file plan. Phase 4 now uses structured memory evidence to propose approval-gated procedural skills while preserving audit-log fallback learning.
+**Memory Fabric Architecture:** Phase 0 of the memory-fabric memory fabric is documented in [docs/architecture/memory-fabric.md](docs/architecture/memory-fabric.md). The spec defines scoped memory, visibility rules, evidence-backed records, skill promotion, recall policy, migration strategy, and the future file plan. Phase 4 now uses structured memory evidence to propose approval-gated procedural skills while preserving audit-log fallback learning.
 
 Aider Plus is intentionally **not** a synthetic project runtime. Product work
 still happens inside normal Git repositories. The extra layers coordinate people,
@@ -17,14 +17,14 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
 
 ## Architecture Overview
 
-New contributors should start with the [First Code Tour](docs/architecture/first-code-tour.md). It walks from `aider/main.py` through the Coder, `NanobotCOO`, `CompanyOrchestrator`, departments, shared memory/skills/EventBus services, daemon workspaces, templates, warehouse-backed product repos, and the DevOps release path.
+New contributors should start with the [First Code Tour](docs/architecture/first-code-tour.md). It walks from `aider/main.py` through the Coder, `COO assistant`, `CompanyOrchestrator`, departments, shared memory/skills/EventBus services, daemon workspaces, templates, warehouse-backed product repos, and the DevOps release path.
 
 At a glance:
 
 ```text
 User / issue / GUI / chat adapter
   -> aider/main.py
-  -> Coder or NanobotCOO
+  -> Coder or COO assistant
   -> CompanyOrchestrator
   -> Product -> UX -> Delivery -> Engineering -> Reviewer -> QA -> Delivery -> DevOps
   -> Git-backed repo + proof-of-work + audit + release metadata
@@ -43,7 +43,7 @@ Core implementation files to know first:
 
 ## Core Concepts
 
-- **COO / `NanobotCOO`** — the CEO-facing operations assistant. It answers, clarifies, remembers, inspects status, routes work, delegates to Company workflow, and escalates when humans are needed.
+- **COO / `COO assistant`** — the CEO-facing operations assistant. It answers, clarifies, remembers, inspects status, routes work, delegates to Company workflow, and escalates when humans are needed.
 - **Company Mode** — the multi-department product workflow layered on top of normal Aider rather than a replacement runtime.
 - **Department** — a role-specific agent loop that consumes tasks and emits structured deliverables. Current departments are Product, UX, Delivery, Engineering, Reviewer, QA, and DevOps.
 - **Delivery** — the coordination and readiness owner. Delivery tracks milestones, blockers, validation confidence, and the explicit handoff into DevOps.

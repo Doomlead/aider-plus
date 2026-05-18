@@ -242,3 +242,81 @@ def test_reinforcement_and_decay_reduce_salience_without_deleting(tmp_path):
     assert result["decayed_records"] >= 1
     assert refreshed is not None
     assert int((refreshed.metadata or {}).get("decay_count") or 0) >= 1
+
+from aider.company.context import ContextBuilder
+from aider.memory.evidence import cluster_channel_patterns
+
+
+def _channel_record(task_id: str, content: str, *, scope: str = "channel:engineering:qa") -> MemoryRecord:
+    return MemoryRecord(
+        kind="deliverable_produced",
+        content=content,
+        scope=scope,
+        visibility="team",
+        metadata={
+            "department": "engineering",
+            "status": "success",
+            "task_id": task_id,
+            "channel_id": "engineering:qa",
+        },
+        skill_evidence={"task_id": task_id, "role": "engineering", "outcome": "success"},
+    )
+
+
+def test_channel_pattern_clustering(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    store = MemoryStore(memory)
+    store.append_record(_channel_record("c1", "Failure report from QA with repro"))
+    store.append_record(_channel_record("c2", "Targeted test added then minimal fix"))
+    store.append_record(_channel_record("c3", "Verification passed in QA"))
+
+    clusters = cluster_channel_patterns(store, "engineering:qa", min_records=2)
+
+    assert len(clusters) == 1
+    assert clusters[0].suggested_scope == "shared"
+    assert clusters[0].procedure_steps
+
+
+def test_channel_pattern_proposal_generation_and_dedup(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    store = MemoryStore(memory)
+    store.append_record(_channel_record("c1", "Failure report from QA with repro"))
+    store.append_record(_channel_record("c2", "Targeted test and minimal fix"))
+    store.append_record(_channel_record("c3", "Verification passed"))
+    orchestrator = CompanyOrchestrator(memory)
+    project = Project(project_id="p1", name="Demo", phase="post_mortem")
+    service = SelfImprovementService(orchestrator.state, SkillLearningConfig(min_successful_repetitions=2))
+
+    first = service.learn_from_post_mortem(project, final_deliverable={})
+    second = service.learn_from_post_mortem(project, final_deliverable={})
+
+    channel = [p for p in first if p.metadata.get("source") == "channel"]
+    assert channel
+    assert channel[0].metadata.get("channel_scope") == "engineering:qa"
+    assert second == []
+
+
+def test_channel_scoped_visibility_engineering_yes_ux_no(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    store = MemoryStore(memory)
+    record = store.append_record(_channel_record("c1", "Failure report -> test -> minimal fix -> verification"))
+    eng_task = CompanyTask(task_id="e1", origin="coo", target="engineering", artifact_type="code", payload={"description": "eng qa loop test", "channel_id": "engineering:qa"})
+    ux_task = CompanyTask(task_id="u1", origin="coo", target="ux", artifact_type="design", payload={"description": "retry"})
+
+    eng_packet = RecallEngine(store).build_recall_packet(eng_task)
+    assert any(item["id"] == record.id for item in eng_packet.channel)
+
+    ux_packet = RecallEngine(store).build_recall_packet(ux_task)
+    assert not any(item["id"] == record.id for item in ux_packet.department_private)
+
+    mgr = CompanySkillManager(CompanyOrchestrator(memory).state)
+    mgr.manager.create_skill(
+        scope="shared",
+        name="eng-qa-loop",
+        content="# Eng QA loop\nDescription: test",
+        metadata={"channel_scope": "engineering:qa"},
+    )
+    eng_skills = ContextBuilder(CompanyOrchestrator(memory).state)._get_relevant_skills(eng_task, ["skills.*"])
+    ux_skills = ContextBuilder(CompanyOrchestrator(memory).state)._get_relevant_skills(ux_task, ["skills.*"])
+    assert any(skill.name == "eng-qa-loop" for skill in eng_skills)
+    assert not any(skill.name == "eng-qa-loop" for skill in ux_skills)

@@ -202,8 +202,21 @@ class ContextBuilder:
         for role in requested_roles:
             scopes.update(manager.scopes_for_role(role))
         candidates = manager.manager.list_skills(scopes=sorted(scopes))
+        allowed = {str(task.target).lower().strip()}
+        for requirement in requested_roles:
+            allowed.add(str(requirement).lower().strip())
+        filtered = []
+        for skill in candidates:
+            metadata = getattr(skill, "metadata", {}) or {}
+            channel_scope = str(metadata.get("channel_scope") or "").lower().strip()
+            if not channel_scope:
+                filtered.append(skill)
+                continue
+            participants = set(part for part in channel_scope.split(":") if part)
+            if allowed & participants:
+                filtered.append(skill)
         return self._rank_skills(
-            self._task_query(task), candidates, limit=_MAX_SKILL_ITEMS
+            self._task_query(task), filtered, limit=_MAX_SKILL_ITEMS
         )
 
     def _requested_skills(self, requirements: list[str], task: CompanyTask):

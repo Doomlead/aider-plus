@@ -250,3 +250,53 @@ def _cluster_id(
         )
     )
     return safe[:160]
+
+
+def cluster_channel_patterns(store: MemoryStore, channel_id: str, *, min_records: int = 2) -> list[SkillEvidenceCluster]:
+    """Cluster successful records for a department-to-department channel."""
+
+    cid = str(channel_id or "").lower().strip()
+    if not cid:
+        return []
+    records = [
+        record
+        for record in _candidate_records(store.query_records())
+        if str((record.metadata or {}).get("channel_id") or (record.metadata or {}).get("channel") or "").lower().strip() == cid
+    ]
+    if len(records) < min_records:
+        return []
+    ordered = sorted(records, key=lambda rec: rec.created_at)
+    successful = [record for record in ordered if _outcome(record) == "success"]
+    if len(successful) < min_records:
+        return []
+    steps = _channel_procedure_steps(successful, cid)
+    scope = "shared"
+    cluster = SkillEvidenceCluster(
+        cluster_id=f"channel-{cid}-0",
+        department=cid.split(":",1)[0],
+        channel=cid,
+        thread_id="channel",
+        outcome="success",
+        records=successful,
+        procedure_steps=steps,
+        outcome_summary=f"{len(successful)} successful interactions on {cid}.",
+        suggested_scope=scope,
+    )
+    return [cluster]
+
+
+def _channel_procedure_steps(records: list[MemoryRecord], channel_id: str) -> list[str]:
+    buckets = [
+        ("failure report", ("failure", "bug", "regression", "error")),
+        ("targeted test", ("test", "repro", "targeted")),
+        ("minimal fix", ("fix", "patch", "minimal")),
+        ("verification", ("verify", "verified", "pass", "green")),
+    ]
+    found: list[str] = []
+    text_blob = "\n".join(str(r.content or "").lower() for r in records)
+    for label, terms in buckets:
+        if any(term in text_blob for term in terms):
+            found.append(f"{label.title()} in {channel_id} before handoff.")
+    if not found:
+        found.append(f"Follow the proven collaboration sequence used in {channel_id}.")
+    return found

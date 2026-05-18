@@ -5,7 +5,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Literal, Optional
 
 from aider.company.schemas import CompanyTask
 from aider.company.state import CompanyStateManager
@@ -49,7 +49,7 @@ class SkillLearningConfig:
 @dataclass
 class SkillProposal:
     proposal_id: str
-    action: str
+    action: Literal["create", "patch", "retire"]
     scope: str
     name: str
     title: str
@@ -62,6 +62,11 @@ class SkillProposal:
     outcome_summary: str | None = None
     suggested_scope: str | None = None
     confidence: float = 0.5
+    target_skill_id: str | None = None
+    patch_reason: str | None = None
+    old_evidence: list[str] = field(default_factory=list)
+    new_evidence: list[str] = field(default_factory=list)
+    retirement_reason: str | None = None
     status: str = "pending"
     created_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
@@ -247,6 +252,20 @@ class CompanySkillManager:
                 content=proposal.content,
                 metadata=metadata,
             )
+        elif proposal.action == "patch":
+            if not proposal.target_skill_id:
+                raise ValueError("Patch proposal missing target_skill_id")
+            target_scope, target_name = self._parse_skill_id(proposal.target_skill_id)
+            old_text = "\n".join(proposal.old_evidence).strip()
+            new_text = "\n".join(proposal.new_evidence).strip() or proposal.content
+            self.manager.patch_skill(
+                scope=target_scope,
+                name=target_name,
+                old=old_text,
+                new=new_text,
+            )
+        elif proposal.action == "retire":
+            self._archive_skill(proposal)
         else:
             raise ValueError(f"Unsupported proposal action: {proposal.action}")
         proposal.status = "approved"
@@ -255,6 +274,54 @@ class CompanySkillManager:
         )
         self._record_proposal_index(proposal)
         return proposal
+
+    def approve_patch_proposal(self, proposal_id: str, feedback: str = "") -> SkillProposal:
+        proposal = self.approve_proposal(proposal_id)
+        if feedback:
+            self._append_feedback(proposal, feedback)
+        return proposal
+
+    def approve_retire_proposal(self, proposal_id: str, feedback: str = "") -> SkillProposal:
+        proposal = self.approve_proposal(proposal_id)
+        if feedback:
+            self._append_feedback(proposal, feedback)
+        return proposal
+
+    def _append_feedback(self, proposal: SkillProposal, feedback: str) -> None:
+        path = self._proposal_path(proposal.proposal_id)
+        proposal.metadata = {
+            **proposal.metadata,
+            "approval_feedback": feedback,
+            "feedback_at": datetime.now(timezone.utc).isoformat(),
+        }
+        path.write_text(json.dumps(proposal.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+
+    def _archive_skill(self, proposal: SkillProposal) -> None:
+        if not proposal.target_skill_id:
+            raise ValueError("Retire proposal missing target_skill_id")
+        scope, name = self._parse_skill_id(proposal.target_skill_id)
+        skills = self.state.memory.data.setdefault("skills", {})
+        if not isinstance(skills, dict):
+            skills = {}
+        archived = skills.setdefault("archived", {})
+        if not isinstance(archived, dict):
+            archived = {}
+        archived[proposal.target_skill_id] = {
+            "scope": scope,
+            "name": name,
+            "inactive": True,
+            "retired_at": datetime.now(timezone.utc).isoformat(),
+            "retirement_reason": proposal.retirement_reason or proposal.rationale,
+            "source_proposal_id": proposal.proposal_id,
+        }
+        skills["archived"] = archived
+        self.state.memory.data["skills"] = skills
+        self.state.memory.persist()
+
+    @staticmethod
+    def _parse_skill_id(skill_id: str) -> tuple[str, str]:
+        scope, name = str(skill_id).split(":", 1)
+        return scope, name
 
     def _proposal_path(self, proposal_id: str) -> Path:
         for path in self.proposals_root.glob(f"*/{proposal_id}.json"):
@@ -274,9 +341,11 @@ class CompanySkillManager:
         proposals.append(
             {
                 "proposal_id": proposal.proposal_id,
+                "action": proposal.action,
                 "scope": proposal.scope,
                 "name": proposal.name,
                 "status": proposal.status,
+                "target_skill_id": proposal.target_skill_id,
                 "created_at": proposal.created_at,
                 "confidence": proposal.confidence,
             }

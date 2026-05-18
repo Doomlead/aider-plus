@@ -62,6 +62,7 @@ class SelfImprovementService:
             if (proposal := self._proposal_for_evidence_cluster(project, cluster))
             is not None
         ]
+        proposals.extend(self._maintenance_proposals_from_reinforcement())
         if persist:
             return self._store_new_proposals(proposals)
         return proposals
@@ -91,8 +92,58 @@ class SelfImprovementService:
                 proposal.metadata["source"] = "channel"
                 proposal.metadata["channel_scope"] = channel_id
                 proposals.append(proposal)
+        proposals.extend(self._maintenance_proposals_from_reinforcement())
         if persist:
             return self._store_new_proposals(proposals)
+        return proposals
+
+    def _maintenance_proposals_from_reinforcement(self) -> list[SkillProposal]:
+        skills = self.state.memory.data.get("skills", {})
+        reinforcement = skills.get("reinforcement", {}) if isinstance(skills, dict) else {}
+        proposals: list[SkillProposal] = []
+        for skill_id, item in reinforcement.items():
+            if not isinstance(item, dict):
+                continue
+            failure_count = int(item.get("failure_count") or 0)
+            success_count = int(item.get("success_count") or item.get("reinforcement_count") or 0)
+            scope = str(item.get("scope") or "shared")
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            if failure_count >= 3 and success_count <= 1:
+                proposals.append(
+                    SkillProposal(
+                        proposal_id=f"skill-retire-{scope}-{slugify_skill_name(name)}",
+                        action="retire",
+                        scope=scope,
+                        name=name,
+                        title=f"Retire {scope}/{name}",
+                        content="Retire due to repeated negative outcomes.",
+                        rationale="Repeated failures with low reinforcement value.",
+                        target_skill_id=f"{scope}:{name}",
+                        retirement_reason="Repeated negative outcomes from reinforcement data.",
+                        confidence=0.8,
+                        metadata={"source": "reinforcement"},
+                    )
+                )
+            elif failure_count >= 2 and success_count >= 1:
+                proposals.append(
+                    SkillProposal(
+                        proposal_id=f"skill-patch-{scope}-{slugify_skill_name(name)}",
+                        action="patch",
+                        scope=scope,
+                        name=name,
+                        title=f"Patch {scope}/{name}",
+                        content="Updated procedure should prefer most recent successful evidence.",
+                        rationale="Contradictory evidence found between success and failure outcomes.",
+                        target_skill_id=f"{scope}:{name}",
+                        patch_reason="Contradictory evidence across outcomes.",
+                        old_evidence=["Procedure based on older, conflicting steps."],
+                        new_evidence=["Procedure updated to align with latest successful outcomes."],
+                        confidence=0.7,
+                        metadata={"source": "reinforcement"},
+                    )
+                )
         return proposals
 
     def apply_reinforcement_and_decay(self, *, threshold_days: int = 30) -> dict[str, Any]:

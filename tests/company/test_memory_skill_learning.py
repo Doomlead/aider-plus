@@ -320,3 +320,61 @@ def test_channel_scoped_visibility_engineering_yes_ux_no(tmp_path):
     ux_skills = ContextBuilder(CompanyOrchestrator(memory).state)._get_relevant_skills(ux_task, ["skills.*"])
     assert any(skill.name == "eng-qa-loop" for skill in eng_skills)
     assert not any(skill.name == "eng-qa-loop" for skill in ux_skills)
+
+
+def test_patch_and_retirement_proposals_from_reinforcement(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    orchestrator = CompanyOrchestrator(memory)
+    service = SelfImprovementService(orchestrator.state)
+    service.record_outcome(skill_name="stale-skill", scope="engineering", task_id="a1", outcome="failure")
+    service.record_outcome(skill_name="stale-skill", scope="engineering", task_id="a2", outcome="failure")
+    service.record_outcome(skill_name="stale-skill", scope="engineering", task_id="a3", outcome="failure")
+    service.record_outcome(skill_name="conflicting-skill", scope="engineering", task_id="b1", outcome="failure")
+    service.record_outcome(skill_name="conflicting-skill", scope="engineering", task_id="b2", outcome="failure")
+    service.record_outcome(skill_name="conflicting-skill", scope="engineering", task_id="b3", outcome="success")
+    service.record_outcome(skill_name="conflicting-skill", scope="engineering", task_id="b4", outcome="success")
+    project = Project(project_id="p1", name="Demo", phase="post_mortem")
+    proposals = service.learn_from_memory(project)
+    assert any(p.action == "retire" and p.target_skill_id == "engineering:stale-skill" for p in proposals)
+    assert any(p.action == "patch" and p.target_skill_id == "engineering:conflicting-skill" for p in proposals)
+
+
+def test_retirement_approval_archives_not_deletes(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    orchestrator = CompanyOrchestrator(memory)
+    manager = CompanySkillManager(orchestrator.state)
+    manager.manager.create_skill(scope="engineering", name="legacy-flow", content="# Legacy\nold")
+    proposal = SkillProposal(
+        proposal_id="retire-1",
+        action="retire",
+        scope="engineering",
+        name="legacy-flow",
+        title="retire",
+        content="retire",
+        rationale="bad outcomes",
+        target_skill_id="engineering:legacy-flow",
+        retirement_reason="repeated failures",
+    )
+    manager.create_proposal(proposal)
+    approved = manager.approve_retire_proposal("retire-1", "approved")
+    assert approved.status == "approved"
+    archived = memory.data["skills"]["archived"]["engineering:legacy-flow"]
+    assert archived["inactive"] is True
+    assert (tmp_path / ".aider" / "skills" / "engineering" / "legacy-flow" / "SKILL.md").exists()
+
+
+def test_recall_filters_retired_skills(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    store = MemoryStore(memory)
+    retired = store.append_record(
+        MemoryRecord(kind="note", content="old", scope="skill:engineering", metadata={"skill_id": "engineering:legacy-flow"})
+    )
+    active = store.append_record(
+        MemoryRecord(kind="note", content="new", scope="skill:engineering", metadata={"skill_id": "engineering:new-flow"})
+    )
+    memory.data.setdefault("skills", {})["archived"] = {"engineering:legacy-flow": {"inactive": True}}
+    task = CompanyTask(task_id="r1", origin="coo", target="engineering", artifact_type="code", payload={"description": "flow"})
+    skills = RecallEngine(store).build_recall_packet(task).skills
+    ids = [item["id"] for item in skills]
+    assert active.id in ids
+    assert retired.id not in ids

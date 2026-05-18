@@ -160,6 +160,12 @@ class KnowledgeManager:
         recent_skills = self.get_recent_skills()
         recently_injected = self.get_recently_injected()
         proposals = self.get_skill_proposals()
+        needing_patch = [
+            p for p in proposals if p.get("status") == "pending" and p.get("action") == "patch"
+        ]
+        needing_retirement = [
+            p for p in proposals if p.get("status") == "pending" and p.get("action") == "retire"
+        ]
         coo_memory = self.get_coo_memory_summary()
         search_results = self.search_knowledge(query) if query else []
         return {
@@ -172,6 +178,8 @@ class KnowledgeManager:
             "approved_proposals": [
                 p for p in proposals if p.get("status") == "approved"
             ],
+            "skills_needing_patch": needing_patch,
+            "skills_needing_retirement": needing_retirement,
             "coo_memory": coo_memory,
             "search_results": search_results,
             "counts": {
@@ -184,6 +192,8 @@ class KnowledgeManager:
                     [p for p in proposals if p.get("status") == "pending"]
                 ),
                 "coo_memory_entries": coo_memory.get("entry_count", 0),
+                "skills_needing_patch": len(needing_patch),
+                "skills_needing_retirement": len(needing_retirement),
             },
         }
 

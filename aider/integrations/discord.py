@@ -27,6 +27,7 @@ from aider.company.surface_messages import (
 )
 from aider.main import main as aider_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
+from aider.memory import communication as communication_memory
 
 
 def subscribe_discord_event_forwarder(
@@ -234,6 +235,16 @@ class DiscordAiderBot(ThinAdapter):
 
         coder = await self.get_or_create_session(key, repo_path, model=model)
         self.on_reconnect_or_ping(key)
+        project_memory = getattr(coder, "project_memory", None)
+        if isinstance(project_memory, ProjectMemory):
+            communication_memory.user_instruction(
+                project_memory,
+                prompt,
+                surface="discord",
+                session_id=str(key.channel_id),
+                origin=str(user_id),
+                metadata={"repo_path": repo_path},
+            )
 
         async def run_coder():
             return await asyncio.to_thread(coder.run, prompt)

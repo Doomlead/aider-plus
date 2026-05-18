@@ -544,6 +544,27 @@ def _handle_approval_cli(
         print(f"Failed to write resolution: {exc}")
         return 1
 
+    try:
+        from aider.memory import ProjectMemory
+        from aider.memory import communication as communication_memory
+
+        project_memory = ProjectMemory(str(Path.cwd()))
+        project_memory.load()
+        communication_memory.approval_decision(
+            project_memory,
+            task_id=gate_id,
+            approved=action == "approve",
+            source="cli",
+            reason=matched["cli_resolution"].get("reason"),
+            metadata={
+                "gate_name": matched.get("gate_name"),
+                "source": "cli",
+                "action": action,
+            },
+        )
+    except Exception:
+        pass
+
     symbol = "✅" if action == "approve" else "❌"
     gate_name = matched.get("gate_name", "approval")
     print(f"{symbol} Gate '{gate_name}' ({gate_id}) {action}d via CLI.")

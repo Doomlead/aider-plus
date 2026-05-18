@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Dict, List, Optional, Union
 
 from aider.memory import ProjectMemory
+from aider.memory import communication as communication_memory
 from aider.memory.pattern_extractor import AuditPatternExtractor
 from aider.company.approval import ApprovalManager
 from aider.company.config import CompanyConfig, default_company_config
@@ -168,6 +169,12 @@ class CompanyOrchestrator:
                     "Company orchestrator background task failed: %s",
                     label or completed.get_name(),
                 )
+                communication_memory.failure(
+                    self.memory,
+                    err,
+                    department="orchestrator",
+                    stage=label or completed.get_name(),
+                )
                 if not self._shutdown:
                     self.create_task(
                         self._emit_background_error(label or completed.get_name(), err),
@@ -259,6 +266,15 @@ class CompanyOrchestrator:
                 "artifact_type": d.artifact_type,
             },
         )
+        communication_memory.route_decision(
+            self.memory,
+            deliverable=d,
+            target=(
+                d.metadata.get("handoff_to") if isinstance(d.metadata, dict) else None
+            ),
+            strategy="deliverable_route",
+            reason="deliverable produced",
+        )
         self._record_token_usage(d)
         self._record_security_patch_completion(d)
         await self._emit(d)
@@ -274,7 +290,14 @@ class CompanyOrchestrator:
         # receives the generated PRD, not just the original user prompt.
         next_target = d.metadata.get("handoff_to")
         if next_target and next_target in self.departments:
-            await self.submit(self._handoff_task(d, next_target))
+            handoff_task = self._handoff_task(d, next_target)
+            communication_memory.handoff(
+                self.memory,
+                handoff_task,
+                source=d.department,
+                reason="metadata.handoff_to",
+            )
+            await self.submit(handoff_task)
 
     async def _route_security_scan_result(self, d: Deliverable) -> bool:
         if d.artifact_type != "security_scan_result":
@@ -871,6 +894,18 @@ class CompanyOrchestrator:
                 "artifact_type": task.artifact_type,
             },
         )
+        communication_memory.route_decision(
+            self.memory,
+            task=task,
+            target=task.target,
+            strategy="submit",
+            reason="task submitted",
+        )
+        if task.origin != task.target:
+            communication_memory.handoff(
+                self.memory, task, source=task.origin, reason="orchestrator.submit"
+            )
+
         if task.target not in self.departments:
             raise ValueError(f"No department: {task.target}")
 

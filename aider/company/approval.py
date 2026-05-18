@@ -5,6 +5,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Dict, List, Optional
 
+from aider.memory import communication as communication_memory
 from aider.company.schemas import (
     ApprovalDecision,
     CompanyEvent,
@@ -68,7 +69,9 @@ class ApprovalManager:
 
     async def recover_pending_approvals(
         self,
-        on_recovered_decision: Callable[[CompanyTask, ApprovalDecision], Awaitable[None]],
+        on_recovered_decision: Callable[
+            [CompanyTask, ApprovalDecision], Awaitable[None]
+        ],
     ) -> None:
         """Recreate in-memory approval gates from ProjectMemory and re-emit their UIs."""
         pending_task_ids = {
@@ -82,7 +85,11 @@ class ApprovalManager:
                 # Check if this was CLI-resolved and we have a live gate waiting
                 cli_res = approval.get("cli_resolution")
                 task_id = str(approval.get("task_id", ""))
-                if cli_res and task_id in self._gates and not self._gates[task_id].done():
+                if (
+                    cli_res
+                    and task_id in self._gates
+                    and not self._gates[task_id].done()
+                ):
                     approved = cli_res.get("action") == "approve"
                     reason = cli_res.get("reason", "CLI resolution")
                     await self.handle_approval_response(
@@ -102,7 +109,9 @@ class ApprovalManager:
     async def _complete_recovered_gate(
         self,
         task: CompanyTask,
-        on_recovered_decision: Callable[[CompanyTask, ApprovalDecision], Awaitable[None]],
+        on_recovered_decision: Callable[
+            [CompanyTask, ApprovalDecision], Awaitable[None]
+        ],
     ) -> None:
         try:
             decision = self.normalize_decision(await self._gates[task.task_id])
@@ -133,7 +142,9 @@ class ApprovalManager:
         if approved:
             self.approve(task_id, metadata=response_metadata)
         else:
-            self.reject(task_id, reason=reason or "Rejected by CEO", metadata=response_metadata)
+            self.reject(
+                task_id, reason=reason or "Rejected by CEO", metadata=response_metadata
+            )
         return True
 
     def approve(self, task_id: str, metadata: Optional[dict] = None) -> None:
@@ -165,8 +176,12 @@ class ApprovalManager:
     def approval_required_event(self, task: CompanyTask) -> EventMessage:
         context = task.context if isinstance(task.context, dict) else {}
         metadata = dict(context.get("prd_metadata", {}))
-        gate_name = context.get("gate_name") or metadata.get("gate_name", "prd_approval")
-        artifact_preview = context.get("artifact_preview") or self.artifact_preview(task)
+        gate_name = context.get("gate_name") or metadata.get(
+            "gate_name", "prd_approval"
+        )
+        artifact_preview = context.get("artifact_preview") or self.artifact_preview(
+            task
+        )
         return EventMessage(
             event=CompanyEvent.APPROVAL_REQUIRED,
             task_id=task.task_id,
@@ -200,7 +215,9 @@ class ApprovalManager:
         if isinstance(task_data, dict):
             return CompanyTask(
                 task_id=str(task_data.get("task_id") or approval.get("task_id")),
-                origin=str(task_data.get("origin") or approval.get("department") or "ceo"),
+                origin=str(
+                    task_data.get("origin") or approval.get("department") or "ceo"
+                ),
                 target=str(task_data.get("target") or "engineering"),
                 artifact_type=task_data.get("artifact_type", "general"),
                 payload=task_data.get("payload", approval.get("artifact_preview", "")),
@@ -276,8 +293,19 @@ class ApprovalManager:
             if metadata.get("feedback"):
                 event_metadata["feedback"] = metadata.get("feedback")
         self._log("approval_resolved", payload, department, event_metadata)
+        communication_memory.approval_decision(
+            getattr(self.state, "memory", None),
+            task_id=task_id,
+            approved=approved,
+            source=event_metadata.get("approved_by"),
+            reason=reason,
+            task=task,
+            metadata=event_metadata,
+        )
 
-    def _log(self, event_type: str, payload, department: str, metadata: Optional[dict]) -> None:
+    def _log(
+        self, event_type: str, payload, department: str, metadata: Optional[dict]
+    ) -> None:
         if self._audit_logger is None:
             return
         try:

@@ -81,6 +81,47 @@ class KnowledgeManager:
             items, key=lambda item: item.get("injected_at", ""), reverse=True
         )[:limit]
 
+
+    def get_skills_needing_patch(self) -> list[dict[str, Any]]:
+        return [
+            proposal
+            for proposal in self.get_skill_proposals(status="pending")
+            if proposal.get("action") == "patch"
+        ]
+
+    def get_skills_needing_retirement(self) -> list[dict[str, Any]]:
+        return [
+            proposal
+            for proposal in self.get_skill_proposals(status="pending")
+            if proposal.get("action") == "retire"
+        ]
+
+    def get_evidence_for_skill(self, skill_id: str) -> dict[str, Any]:
+        skill = next((s for s in self.get_all_skills() if s.get("id") == skill_id), None)
+        if skill:
+            meta = skill.get("metadata") if isinstance(skill.get("metadata"), dict) else {}
+            return {
+                "skill": skill,
+                "source_memory_records": meta.get("source_memory_records") or [],
+                "source_tasks": meta.get("source_tasks") or [],
+                "outcome_summary": meta.get("outcome_summary") or "",
+                "recent_injections": [
+                    item for item in self.get_recently_injected(limit=25)
+                    if skill.get("name") and skill.get("name") in json.dumps(item, default=str)
+                ][:5],
+            }
+        proposal = next((p for p in self.get_skill_proposals() if p.get("proposal_id") == skill_id), None)
+        if proposal:
+            return {"proposal": proposal, "source_memory_records": proposal.get("source_memory_records") or [], "source_tasks": proposal.get("source_tasks") or []}
+        return {}
+
+    def get_memory_record(self, record_id: str) -> dict[str, Any] | None:
+        records = ((self.memory.data.get("memory") or {}).get("records") or [])
+        for record in records:
+            if isinstance(record, dict) and record.get("id") == record_id:
+                return dict(record)
+        return None
+
     def explain_retrieval(self, query: str, context_items) -> list[str]:
         """Explain why memories or skills were selected for a query."""
         explanations: list[str] = []
@@ -160,12 +201,8 @@ class KnowledgeManager:
         recent_skills = self.get_recent_skills()
         recently_injected = self.get_recently_injected()
         proposals = self.get_skill_proposals()
-        needing_patch = [
-            p for p in proposals if p.get("status") == "pending" and p.get("action") == "patch"
-        ]
-        needing_retirement = [
-            p for p in proposals if p.get("status") == "pending" and p.get("action") == "retire"
-        ]
+        needing_patch = self.get_skills_needing_patch()
+        needing_retirement = self.get_skills_needing_retirement()
         coo_memory = self.get_coo_memory_summary()
         skill_snapshot = self.skill_manager.inspect_skills()
         retired_archive = skill_snapshot.get("retired_skills_archive", [])
@@ -174,7 +211,13 @@ class KnowledgeManager:
             "playbooks": playbooks,
             "skills": skills,
             "recent_skills": recent_skills,
-            "recently_injected": recently_injected,
+            "recently_injected": [
+                {
+                    **item,
+                    "why_included": item.get("explanation") or item.get("retrieval_explanation") or "Included by recall ranking.",
+                }
+                for item in recently_injected
+            ],
             "proposals": proposals,
             "pending_proposals": [p for p in proposals if p.get("status") == "pending"],
             "approved_proposals": [
@@ -235,6 +278,9 @@ class KnowledgeManager:
             seen.add(key)
             result = dict(item)
             result["match_score"] = score
+            result.setdefault("lifecycle_status", result.get("status") or ("approved" if result.get("type") == "skill" else "active"))
+            if result.get("type") == "skill_proposal":
+                result["evidence_summary"] = ", ".join((result.get("source_memory_records") or [])[:3])
             results.append(result)
         return sorted(
             results,

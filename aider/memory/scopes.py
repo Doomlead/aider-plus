@@ -11,6 +11,7 @@ SCOPE_ROLE = "role"
 SCOPE_SKILL = "skill"
 SCOPE_DEPARTMENT = "department"
 SCOPE_CHANNEL = "channel"
+SCOPE_CHANNEL_PAIR = "channel_pair"
 SCOPE_USER = "user"
 
 VALID_SCOPE_PREFIXES = frozenset(
@@ -23,6 +24,7 @@ VALID_SCOPE_PREFIXES = frozenset(
         SCOPE_SKILL,
         SCOPE_DEPARTMENT,
         SCOPE_CHANNEL,
+        SCOPE_CHANNEL_PAIR,
         SCOPE_USER,
     }
 )
@@ -65,6 +67,7 @@ def parse_scope(scope: str | MemoryScope) -> MemoryScope:
         SCOPE_SKILL,
         SCOPE_DEPARTMENT,
         SCOPE_CHANNEL,
+        SCOPE_CHANNEL_PAIR,
         SCOPE_USER,
     }:
         raise ValueError(f"memory scope {prefix!r} requires a qualifier")

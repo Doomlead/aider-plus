@@ -21,7 +21,7 @@ class MemoryStore:
 
     def append_record(self, record: MemoryRecord | Dict[str, Any]) -> MemoryRecord:
         memory_record = ensure_record(record)
-        validate_visibility(memory_record.visibility)
+        memory_record.visibility = validate_visibility(memory_record.visibility)
         memory = self._memory_namespace()
         records = memory.setdefault("records", [])
         records.append(memory_record.to_dict())
@@ -194,15 +194,23 @@ class MemoryStore:
         repaired = {"invalid_records_removed": 0}
         if not confirm:
             return repaired
+
+        memory = self._memory_namespace()
+        raw_records = memory.get("records", [])
+        if not isinstance(raw_records, list):
+            raw_records = []
+
         valid: list[dict[str, Any]] = []
-        for item in self._record_dicts():
+        for item in raw_records:
+            if not isinstance(item, dict):
+                repaired["invalid_records_removed"] += 1
+                continue
             try:
-                ensure_record(item)
-                valid.append(item)
+                record = ensure_record(item)
+                valid.append(record.to_dict())
             except Exception:
                 repaired["invalid_records_removed"] += 1
         if repaired["invalid_records_removed"]:
-            memory = self._memory_namespace()
             memory["records"] = valid
             self.project_memory.update({"memory": memory})
             self.project_memory.persist()
@@ -284,8 +292,11 @@ class MemoryStore:
                 if scope_matches(record.scope, query.scope)
             ]
         if query.visibility:
+            requested_visibility = validate_visibility(query.visibility)
             filtered = [
-                record for record in filtered if record.visibility == query.visibility
+                record
+                for record in filtered
+                if validate_visibility(record.visibility) == requested_visibility
             ]
         if query.kind:
             filtered = [record for record in filtered if record.kind == query.kind]

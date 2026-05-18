@@ -54,7 +54,7 @@ A memory scope is the namespace that owns a record. Scope is separate from visib
 
 ## 4. Visibility Rules
 
-Visibility is the retrieval boundary applied after scope resolution. It is intentionally coarse and auditable.
+Visibility is the retrieval boundary applied after scope resolution. It is intentionally coarse and auditable. The implementation accepts legacy aliases (`team`, `public`, and `skill`) only to read old records, and normalizes new writes to the canonical values below.
 
 | Visibility | Semantics | Retrieval examples | Non-examples |
 | --- | --- | --- | --- |
@@ -114,6 +114,8 @@ Canonical records live in a future `memory.records` collection while legacy fiel
 | `created_at` / `updated_at` | Yes | UTC ISO-8601 timestamps. |
 | `supersedes` | No | Prior record IDs this record replaces. |
 | `related_records` | No | Cross-links to supporting or conflicting records. |
+
+Implementation note: the MVP `MemoryRecord` dataclass now exposes the canonical owner fields (`schema_version`, `department`, `project_id`, `thread_id`, `channel_id`, and `user_id`) directly. Extended canonical fields such as `source`, `evidence`, `ranking`, `retention`, `redaction`, `supersedes`, and `related_records` may still live in `metadata` until each subsystem needs typed access.
 
 ### 5.2 Full JSON example
 
@@ -349,7 +351,11 @@ Required ranking factors:
 - **Diversity:** avoid injecting many near-duplicates from the same cluster.
 - **Token budget:** high-confidence summaries rank above long raw content.
 
-### 7.4 Explanation generation
+### 7.4 Channel scope naming
+
+Use `channel:<surface_id>` for records owned by one external or runtime channel, for example `channel:discord-prod`. Use `channel_pair:<department_a>:<department_b>` when the memory is specifically about a repeated department-to-department communication pattern. During the current rollout, recall also recognizes legacy department-pair channel scopes such as `channel:engineering:qa` so existing evidence remains retrievable while new code moves to the explicit `channel_pair:` form.
+
+### 7.5 Explanation generation
 
 Every injected memory or skill summary must include a concise explanation. The explanation should be stored in task context and recent-injection telemetry.
 
@@ -364,7 +370,7 @@ Examples:
 - `project:billing-api/pattern/mem_... — included because it matches "migration" and "rollback", is project-visible, confidence 0.78, last updated 2026-05-17, evidence 2 records.`
 - `qa/billing-release-rollback-checks — included because skill name matches the QA release task, usage count 3, last successful use 2026-05-10.`
 
-### 7.5 Recall output shape
+### 7.6 Recall output shape
 
 ContextBuilder should eventually emit:
 

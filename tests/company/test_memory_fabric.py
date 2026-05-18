@@ -27,7 +27,7 @@ def test_memory_schema_migration_preserves_existing_project_data(tmp_path):
     project_memory = ProjectMemory(str(tmp_path))
     data = project_memory.load()
 
-    assert data["schema_version"] == 4
+    assert data["schema_version"] == 5
     assert data["audit_log"] == [{"event_type": "kept"}]
     assert data["playbook"]["coding_standards"] == ["preserve me"]
     assert data["skill_proposals"] == [{"proposal_id": "skill-1"}]
@@ -41,6 +41,8 @@ def test_memory_schema_migration_preserves_existing_project_data(tmp_path):
         == 12
     )
     assert data["memory"] == {"records": [], "threads": []}
+    assert "memory_metrics" in data["observability"]
+    assert "migration" in data
 
 
 def test_memory_store_appends_persists_and_queries_records(tmp_path):
@@ -52,7 +54,7 @@ def test_memory_store_appends_persists_and_queries_records(tmp_path):
             kind="decision",
             content="Use a local-first memory fabric for Phase 1.",
             scope="project",
-            visibility="team",
+            visibility="project",
             tags=["phase-1", "architecture"],
             metadata={"source": "test"},
         )
@@ -75,13 +77,13 @@ def test_memory_store_appends_persists_and_queries_records(tmp_path):
 def test_memory_store_applies_basic_visibility_filtering(tmp_path):
     store = MemoryStore(ProjectMemory(str(tmp_path)))
     shared = store.append_record(
-        MemoryRecord(content="shared rollout note", scope="shared", visibility="public")
+        MemoryRecord(content="shared rollout note", scope="shared", visibility="project")
     )
     engineering = store.append_record(
         MemoryRecord(
             content="engineering-only retry note",
             scope="role:engineering",
-            visibility="team",
+            visibility="project",
         )
     )
     product_private = store.append_record(
@@ -103,8 +105,8 @@ def test_memory_store_applies_basic_visibility_filtering(tmp_path):
     )
     assert [record.id for record in product_view] == [shared.id, product_private.id]
 
-    public_only = store.query_records(MemoryQuery(visibility="public"))
-    assert [record.id for record in public_only] == [shared.id]
+    public_only = store.query_records(MemoryQuery(visibility="project"))
+    assert [record.id for record in public_only] == [shared.id, engineering.id]
 
 
 def test_memory_record_serializes_skill_evidence_block(tmp_path):
@@ -121,7 +123,7 @@ def test_memory_record_serializes_skill_evidence_block(tmp_path):
             kind="skill_evidence",
             content="Focused tests helped validate the change.",
             scope="skill:engineering/run-focused-tests",
-            visibility="skill",
+            visibility="project",
             skill_evidence=evidence,
         )
     )
@@ -187,7 +189,7 @@ def test_communication_helpers_create_standard_records(tmp_path):
 
     assert record.kind == "user_instruction"
     assert record.scope == "thread:session-1"
-    assert record.visibility == "team"
+    assert record.visibility == "project"
     assert record.metadata["event_type"] == "user_instruction"
     assert record.metadata["task_id"] == "task-1"
     assert record.metadata["thread_id"] == "session-1"

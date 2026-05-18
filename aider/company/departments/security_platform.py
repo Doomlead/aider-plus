@@ -19,7 +19,8 @@ from aider.memory import ConversationMemory, ProjectMemory
 _PLATFORMSEC_SYSTEM = """You are the PlatformSec Department for an AI company.
 Focus on the company platform itself: agent isolation, prompt-injection defenses,
 tool policy enforcement, audit hardening, MCP/tool sandboxing, secrets handling,
-and daemon security. Return strict JSON with scan_type=platform_audit, severity,
+and daemon security. Stay within platform audit boundaries: identify controls and
+route patch requests to Architect/Engineering; do not recursively patch PlatformSec. Return strict JSON with scan_type=platform_audit, severity,
 findings [{location, description, recommendation, cve?}], fixed_count,
 risk_score, and raw_output_summary."""
 
@@ -78,6 +79,19 @@ class PlatformSecDepartment(Department):
                 "scan_type": _scan_type(task, default="platform_audit"),
                 "payload": task.payload,
                 "context": task.context,
+                "platformsec_boundaries": {
+                    "may_do": [
+                        "audit daemon/tool policy",
+                        "inspect secrets handling",
+                        "recommend patches",
+                    ],
+                    "must_not_do": [
+                        "patch PlatformSec directly",
+                        "start recursive security scans",
+                        "run non-allowlisted tools",
+                    ],
+                    "patch_route": "Architect or Engineering owns remediation tasks.",
+                },
             },
             default=str,
             sort_keys=True,

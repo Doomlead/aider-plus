@@ -46,6 +46,12 @@ class CompanyWorkflowConfig:
 
 
 @dataclass(frozen=True)
+class SecurityWorkflowConfig:
+    security_scan_interval_minutes: int = 60
+    security_scan_backoff_minutes: int = 240
+
+
+@dataclass(frozen=True)
 class WorkflowHooks:
     after_create: str | None = None
     before_run: str | None = None
@@ -71,6 +77,7 @@ class CompanyWorkflow:
     workspace: WorkspaceWorkflowConfig = field(default_factory=WorkspaceWorkflowConfig)
     agent: AgentWorkflowConfig = field(default_factory=AgentWorkflowConfig)
     company: CompanyWorkflowConfig = field(default_factory=CompanyWorkflowConfig)
+    security: SecurityWorkflowConfig = field(default_factory=SecurityWorkflowConfig)
     hooks: WorkflowHooks = field(default_factory=WorkflowHooks)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -92,6 +99,7 @@ class CompanyWorkflow:
         agent_data = dict(config.get("agent") or {})
         company_data = dict(config.get("company") or {})
         hooks_data = dict(config.get("hooks") or {})
+        security_data = dict(config.get("security") or {})
 
         max_concurrent = _positive_int(
             agent_data.get("max_concurrent_agents", 1), "agent.max_concurrent_agents"
@@ -157,6 +165,16 @@ class CompanyWorkflow:
                     str(company_data.get("template"))
                     if company_data.get("template") is not None
                     else None
+                ),
+            ),
+            security=SecurityWorkflowConfig(
+                security_scan_interval_minutes=_positive_int(
+                    security_data.get("security_scan_interval_minutes", 60),
+                    "security.security_scan_interval_minutes",
+                ),
+                security_scan_backoff_minutes=_positive_int(
+                    security_data.get("security_scan_backoff_minutes", 240),
+                    "security.security_scan_backoff_minutes",
                 ),
             ),
             hooks=WorkflowHooks(

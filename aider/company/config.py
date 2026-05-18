@@ -163,6 +163,14 @@ def default_company_config() -> CompanyConfig:
                 enable_caching=False,
                 devops_build_fallback_commands=["python -m build"],
             ),
+            "security_app": DepartmentConfig(
+                name="security_app",
+                enable_caching=False,
+            ),
+            "security_platform": DepartmentConfig(
+                name="security_platform",
+                enable_caching=False,
+            ),
         },
         default_enable_caching=True,
         record_caching_stats=True,
@@ -182,6 +190,8 @@ _COMPANY_AGENT_NAMES = (
     "qa",
     "delivery",
     "devops",
+    "security_app",
+    "security_platform",
 )
 
 

@@ -31,6 +31,8 @@ from aider.company.departments.devops import DevOpsDepartment
 from aider.company.departments.engineering import EngineeringDepartment
 from aider.company.departments.product import ProductDepartment
 from aider.company.departments.qa import QADepartment
+from aider.company.departments.security_app import AppSecDepartment
+from aider.company.departments.security_platform import PlatformSecDepartment
 from aider.company.departments.ux import UXDepartment
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.workflow import WorkflowError
@@ -63,6 +65,8 @@ AGENT_DISPLAY_NAMES = {
     "qa": "QA",
     "delivery": "Delivery",
     "devops": "DevOps",
+    "security_app": "AppSec",
+    "security_platform": "PlatformSec",
 }
 
 
@@ -88,6 +92,8 @@ AGENT_ICONS = {
     "QA": "✅",
     "Delivery": "🗓️",
     "DevOps": "🚀",
+    "AppSec": "🛡️",
+    "PlatformSec": "🔐",
 }
 
 
@@ -290,6 +296,16 @@ class DesktopCompanySession:
             project_memory=project_memory,
             agent_loop=agent_loops["devops"],
         )
+        self.security_app = AppSecDepartment(
+            project_memory=project_memory,
+            agent_loop=agent_loops["security_app"],
+            conversation_memory=conversation_memory,
+        )
+        self.security_platform = PlatformSecDepartment(
+            project_memory=project_memory,
+            agent_loop=agent_loops["security_platform"],
+            conversation_memory=conversation_memory,
+        )
         self.orchestrator = CompanyOrchestrator(
             project_memory=project_memory,
             company_config=company_config,
@@ -305,6 +321,8 @@ class DesktopCompanySession:
             self.qa,
             self.delivery,
             self.devops,
+            self.security_app,
+            self.security_platform,
         ):
             self.orchestrator.register(department)
         self.coo = NanobotCOO(
@@ -318,6 +336,8 @@ class DesktopCompanySession:
             self.qa,
             self.delivery,
             self.devops,
+            self.security_app,
+            self.security_platform,
         ):
             self.submit_background(
                 department.run_loop(), f"{department.name} run loop", service=True
@@ -747,6 +767,27 @@ class DesktopCompanySession:
             "daemon_pending_proof_of_work": daemon.get("pending_proof_of_work", 0),
             "daemon_recent_proof_of_work": daemon.get("recent_proof_of_work", []),
             "daemon_recent_runs": daemon.get("runs", [])[-5:],
+            "security_status": (
+                (self.orchestrator.memory.data.get("security", {}) or {}).get(
+                    "status", "not_scanned"
+                )
+                if isinstance(self.orchestrator.memory.data, dict)
+                else "not_scanned"
+            ),
+            "security_severity": (
+                (self.orchestrator.memory.data.get("security", {}) or {}).get(
+                    "severity", "info"
+                )
+                if isinstance(self.orchestrator.memory.data, dict)
+                else "info"
+            ),
+            "security_findings": (
+                (self.orchestrator.memory.data.get("security", {}) or {}).get(
+                    "finding_count", 0
+                )
+                if isinstance(self.orchestrator.memory.data, dict)
+                else 0
+            ),
             "last_build": last_build,
             "last_build_status": last_build.get("status", "not run"),
             "last_build_artifact": last_build.get("artifact") or "n/a",
@@ -1543,7 +1584,7 @@ class GUI:
         metrics = company.dashboard_metrics(turns_this_session=self.count_user_turns())
         overview = company.system_overview()
         st.subheader("System Overview")
-        o1, o2, o3, o4, o5 = st.columns(5)
+        o1, o2, o3, o4, o5, o6 = st.columns(6)
         o1.metric("COO status", overview["coo_status"])
         o2.metric("Last COO action", overview["coo_last_action"])
         o3.metric(
@@ -1551,12 +1592,22 @@ class GUI:
             humanize_company_label(overview["delivery_status"]),
             f"{overview['delivery_completion']}% complete",
         )
-        o4.metric("Pending escalations", overview["pending_escalations"])
-        o5.metric("Daemon status", overview["daemon_status"])
+        o4.metric(
+            "Security",
+            str(overview.get("security_status", "not_scanned")).upper(),
+            f"{overview.get('security_findings', 0)} findings",
+        )
+        o5.metric("Pending escalations", overview["pending_escalations"])
+        o6.metric("Daemon status", overview["daemon_status"])
         with st.container(border=True):
             st.write(f"**Caching enabled:** {overview['caching']}")
             st.write(
                 f"**Active warehouse products:** {overview['active_warehouse_products']}"
+            )
+            st.write(
+                "**Security status:** "
+                f"{str(overview.get('security_status', 'not_scanned')).upper()} "
+                f"({overview.get('security_severity', 'info')}, {overview.get('security_findings', 0)} findings)"
             )
             st.write(f"**MCP status:** {overview['mcp_status']}")
             blockers = overview.get("delivery_critical_blockers") or []

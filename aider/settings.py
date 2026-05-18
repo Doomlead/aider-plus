@@ -15,6 +15,8 @@ COMPANY_AGENT_NAMES = (
     "qa",
     "delivery",
     "devops",
+    "security_app",
+    "security_platform",
 )
 PRIMARY_PROVIDER_API_KEYS = (
     "OPENAI_API_KEY",

@@ -7,7 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 class MemoryRepository(ABC):
@@ -43,6 +43,10 @@ class ProjectMemoryMigrator:
         if version < 3:
             migrated = self._migrate_to_v3(migrated)
             version = 3
+
+        if version < 4:
+            migrated = self._migrate_to_v4(migrated)
+            version = 4
 
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         self._ensure_defaults(migrated)
@@ -121,6 +125,16 @@ class ProjectMemoryMigrator:
 
         return data
 
+    def _migrate_to_v4(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Add the local-first memory namespace without touching legacy keys."""
+        memory = data.get("memory")
+        if not isinstance(memory, dict):
+            memory = {}
+            data["memory"] = memory
+        memory.setdefault("records", [])
+        memory.setdefault("threads", [])
+        return data
+
     def _ensure_defaults(self, data: Dict[str, Any]) -> None:
         for key, value in self.defaults.items():
             if key not in data:
@@ -134,6 +148,14 @@ class ProjectMemoryMigrator:
                 playbook[key] = deepcopy(value)
         if not isinstance(data.get("audit_log"), list):
             data["audit_log"] = []
+        memory = data.get("memory")
+        if not isinstance(memory, dict):
+            memory = {}
+            data["memory"] = memory
+        if not isinstance(memory.get("records"), list):
+            memory["records"] = []
+        if not isinstance(memory.get("threads"), list):
+            memory["threads"] = []
         observability = data.get("observability")
         if not isinstance(observability, dict):
             observability = {}

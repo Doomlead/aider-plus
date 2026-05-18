@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.coo import NanobotCOO
+from aider.company.context import ContextBuilder
 from aider.company.project import Project
 from aider.company.self_improvement import SelfImprovementService
 from aider.company.skills import CompanySkillManager, SkillLearningConfig, SkillProposal
@@ -9,6 +10,7 @@ from aider.company.recall import RecallEngine
 from aider.company.schemas import CompanyTask
 from aider.memory import MemoryRecord, MemoryStore, ProjectMemory
 from aider.memory.evidence import collect_evidence_for_project
+from aider.memory import communication as communication_memory
 
 
 def _memory_record(
@@ -18,7 +20,7 @@ def _memory_record(
         kind="deliverable_produced",
         content=content,
         scope="department:engineering",
-        visibility="team",
+        visibility="project",
         tags=["communication", "deliverable_produced"],
         metadata={
             "department": "engineering",
@@ -244,7 +246,6 @@ def test_reinforcement_and_decay_reduce_salience_without_deleting(tmp_path):
     assert refreshed is not None
     assert int((refreshed.metadata or {}).get("decay_count") or 0) >= 1
 
-from aider.company.context import ContextBuilder
 from aider.memory.evidence import cluster_channel_patterns
 
 
@@ -253,7 +254,7 @@ def _channel_record(task_id: str, content: str, *, scope: str = "channel:enginee
         kind="deliverable_produced",
         content=content,
         scope=scope,
-        visibility="team",
+        visibility="project",
         metadata={
             "department": "engineering",
             "status": "success",
@@ -399,3 +400,70 @@ def test_coo_review_proposal_flow(tmp_path):
     assert result["status"] == "approved"
     attention = coo.list_skills_needing_attention()
     assert "skills_needing_patch" in attention
+
+
+def test_end_to_end_memory_evidence_to_approved_skill_and_recall(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    store = MemoryStore(memory)
+
+    instruction = communication_memory.user_instruction(
+        store,
+        "When engineering ships retry telemetry, hand off QA notes and run focused retry tests.",
+        surface="cli",
+        session_id="retry-thread",
+        task_id="e2e-0",
+        origin="ceo",
+        target="engineering",
+    )
+    handoff_record = communication_memory.handoff(
+        store,
+        CompanyTask(
+            task_id="e2e-1",
+            origin="product",
+            target="engineering",
+            artifact_type="code",
+            payload="Implement retry telemetry and prepare QA handoff notes.",
+            context={"thread_id": "retry-thread", "channel_id": "eng-qa"},
+        ),
+        source="product",
+        reason="Engineering owns retry telemetry implementation.",
+    )
+    first = store.append_record(
+        _memory_record("e2e-1", "Run focused retry telemetry tests before QA handoff")
+    )
+    second = store.append_record(
+        _memory_record(
+            "e2e-2",
+            "Repeat focused retry telemetry tests and attach QA handoff notes",
+        )
+    )
+
+    orchestrator = CompanyOrchestrator(memory)
+    project = Project(project_id="p-e2e", name="End to End", phase="post_mortem")
+    proposals = SelfImprovementService(
+        orchestrator.state, SkillLearningConfig(min_successful_repetitions=2)
+    ).learn_from_memory(project)
+
+    assert instruction is not None
+    assert handoff_record is not None
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal.source_memory_records == [first.id, second.id]
+
+    approved = CompanySkillManager(
+        orchestrator.state, SkillLearningConfig(min_successful_repetitions=2)
+    ).approve_proposal(proposal.proposal_id)
+    assert approved.status == "approved"
+
+    task = CompanyTask(
+        task_id="e2e-3",
+        origin="ceo",
+        target="engineering",
+        artifact_type="code",
+        payload=f"Use {proposal.name} for retry telemetry focused tests before QA handoff.",
+        context={"thread_id": "retry-thread", "channel_id": "eng-qa"},
+    )
+    context = ContextBuilder(orchestrator.state).build(task, ["skills.engineering"])
+
+    assert context["recall_packet"]["thread"][0]["id"] == instruction.id
+    assert any(skill["name"] == proposal.name for skill in context["skills"])

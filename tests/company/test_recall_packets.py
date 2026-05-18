@@ -49,7 +49,14 @@ def test_recall_packet_scopes_department_private_and_channel_memory(tmp_path):
         MemoryRecord(
             content="Channel note: mobile checkout retries should emit retry_count.",
             scope="channel:eng",
-            visibility="team",
+            visibility="project",
+        )
+    )
+    pair_channel = store.append_record(
+        MemoryRecord(
+            content="Engineering and QA agreed to preserve checkout retry handoff notes.",
+            scope="channel_pair:engineering:qa",
+            visibility="project",
         )
     )
     product = store.append_record(
@@ -63,7 +70,7 @@ def test_recall_packet_scopes_department_private_and_channel_memory(tmp_path):
     packet = RecallEngine(store).build_recall_packet(_task())
 
     assert isinstance(packet, RecallPacket)
-    assert [item["id"] for item in packet.department_private] == [department.id]
+    assert [item["id"] for item in packet.department_private] == [department.id, pair_channel.id]
     assert [item["id"] for item in packet.channel] == [channel.id]
     assert product.id not in packet.why_included
 
@@ -75,7 +82,7 @@ def test_context_builder_injects_recall_packet_and_filters_visibility(tmp_path):
         MemoryRecord(
             content="Project checkout telemetry decision is visible to departments.",
             scope="project",
-            visibility="team",
+            visibility="project",
         )
     )
     hidden = store.append_record(
@@ -112,7 +119,7 @@ def test_recall_packet_generates_explanations(tmp_path):
         MemoryRecord(
             content="Thread memory says checkout telemetry should include retry_count.",
             scope="thread:thread-1",
-            visibility="team",
+            visibility="project",
         )
     )
 

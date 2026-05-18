@@ -128,11 +128,19 @@ class RecallEngine:
         scopes: set[str] = set()
         for record in self.store.query_records():
             scope = str(record.scope or "")
-            if not scope.startswith("channel:"):
+            if scope.startswith("channel_pair:"):
+                parts = [p for p in scope.split(":")[1:] if p]
+                if dept in parts:
+                    scopes.add(scope)
+            elif scope.startswith("channel:"):
+                # Legacy department-pair channel scopes were encoded as
+                # channel:<department_a>:<department_b>. Keep reading them, but
+                # prefer channel_pair: for new department-to-department memory.
+                parts = [p for p in scope.split(":")[1:] if p]
+                if dept in parts:
+                    scopes.add(scope)
+            else:
                 continue
-            parts = [p for p in scope.split(":")[1:] if p]
-            if dept in parts:
-                scopes.add(scope)
             metadata = record.metadata if isinstance(record.metadata, dict) else {}
             cid = str(metadata.get("channel_id") or metadata.get("channel") or "").lower().strip()
             if cid and dept in cid.split(":"):

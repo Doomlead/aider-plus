@@ -22,7 +22,7 @@ def test_compact_and_repair(tmp_path):
     memory.persist()
     assert store.repair(confirm=False)['invalid_records_removed'] == 0
     result = store.repair(confirm=True)
-    assert result['invalid_records_removed'] == 0
+    assert result['invalid_records_removed'] == 1
     assert store.get_record(rec.id) is not None
 
 

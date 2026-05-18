@@ -28,7 +28,7 @@ def task_received(
         "task_received",
         _preview(getattr(task, "payload", "")),
         scope=_department_scope(department or getattr(task, "target", None)),
-        visibility="team",
+        visibility="project",
         task_id=getattr(task, "task_id", None),
         origin=getattr(task, "origin", None),
         targets=[getattr(task, "target", None)],
@@ -47,7 +47,7 @@ def deliverable_produced(store_or_memory: Any, deliverable: Any) -> MemoryRecord
         "deliverable_produced",
         _preview(getattr(deliverable, "payload", "")),
         scope=_department_scope(getattr(deliverable, "department", None)),
-        visibility="team",
+        visibility="project",
         task_id=getattr(deliverable, "task_id", None),
         origin=getattr(deliverable, "department", None),
         targets=_target_list(
@@ -85,7 +85,7 @@ def handoff(
         "handoff",
         _preview(getattr(task, "payload", "")),
         scope=_department_scope(getattr(task, "target", None)),
-        visibility="team",
+        visibility="project",
         task_id=getattr(task, "task_id", None),
         origin=source or getattr(task, "origin", None),
         targets=[getattr(task, "target", None)],
@@ -122,7 +122,7 @@ def route_decision(
         reason
         or f"Route {origin} to {target or getattr(task, 'target', None) or 'none'}",
         scope="project",
-        visibility="team",
+        visibility="project",
         task_id=task_id,
         origin=origin,
         targets=_target_list(target or getattr(task, "target", None)),
@@ -140,7 +140,7 @@ def user_instruction(
     task_id: str | None = None,
     origin: str | None = None,
     target: str | None = None,
-    visibility: str = "team",
+    visibility: str = "project",
     metadata: Optional[dict[str, Any]] = None,
 ) -> MemoryRecord | None:
     return append_communication_record(
@@ -177,7 +177,7 @@ def approval_decision(
             if task is not None
             else SCOPE_PROJECT
         ),
-        visibility="team",
+        visibility="project",
         task_id=task_id,
         origin=source or (metadata or {}).get("approved_by") or "approval",
         targets=_target_list(getattr(task, "target", None)),
@@ -199,7 +199,7 @@ def failure(
         "failure",
         _preview(error, limit=2000),
         scope=_department_scope(department or getattr(task, "target", None)),
-        visibility="team",
+        visibility="project",
         task_id=getattr(task, "task_id", None),
         origin=department or getattr(task, "target", None),
         targets=[],
@@ -214,7 +214,7 @@ def append_communication_record(
     content: Any,
     *,
     scope: str = SCOPE_PROJECT,
-    visibility: str = "team",
+    visibility: str = "project",
     task_id: str | None = None,
     thread_id: str | None = None,
     origin: str | None = None,

@@ -167,6 +167,8 @@ class KnowledgeManager:
             p for p in proposals if p.get("status") == "pending" and p.get("action") == "retire"
         ]
         coo_memory = self.get_coo_memory_summary()
+        skill_snapshot = self.skill_manager.inspect_skills()
+        retired_archive = skill_snapshot.get("retired_skills_archive", [])
         search_results = self.search_knowledge(query) if query else []
         return {
             "playbooks": playbooks,
@@ -180,6 +182,7 @@ class KnowledgeManager:
             ],
             "skills_needing_patch": needing_patch,
             "skills_needing_retirement": needing_retirement,
+            "retired_skills_archive": retired_archive,
             "coo_memory": coo_memory,
             "search_results": search_results,
             "counts": {
@@ -194,6 +197,7 @@ class KnowledgeManager:
                 "coo_memory_entries": coo_memory.get("entry_count", 0),
                 "skills_needing_patch": len(needing_patch),
                 "skills_needing_retirement": len(needing_retirement),
+                "retired_skills_archive": len(retired_archive),
             },
         }
 

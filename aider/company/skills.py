@@ -197,6 +197,17 @@ class CompanySkillManager:
             available_limit=available_limit, recent_limit=recent_limit
         )
         proposals = self.list_proposals(status="pending")
+        skill_data = self.state.memory.data.get("skills", {})
+        archived = (
+            skill_data.get("archived", {})
+            if isinstance(skill_data, dict)
+            else {}
+        )
+        retired_archive = (
+            [item for item in archived.values() if isinstance(item, dict)]
+            if isinstance(archived, dict)
+            else []
+        )
         return {
             "enabled": self.config.enabled,
             "root": str(self.manager.root),
@@ -205,6 +216,8 @@ class CompanySkillManager:
             "available": summary["available"],
             "recently_used": summary["recently_used"],
             "pending_proposals": [proposal.to_dict() for proposal in proposals[:10]],
+            "retired_skills_count": len(retired_archive),
+            "retired_skills_archive": retired_archive[:10],
         }
 
     def create_proposal(self, proposal: SkillProposal) -> Path:

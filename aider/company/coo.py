@@ -1569,12 +1569,22 @@ class NanobotCOO:
 
     def _skills_status_summary(self) -> dict[str, Any]:
         skills = self.inspect_skills()
+        pending = skills.get("pending_proposals", [])
+        patch_needed = len(
+            [
+                p
+                for p in pending
+                if isinstance(p, dict) and p.get("action") == "patch"
+            ]
+        )
         return {
             "available_count": skills.get("available_count", 0),
             "recently_used_count": skills.get("recently_used_count", 0),
             "recently_used": skills.get("recently_used", [])[:3],
             "available": skills.get("available", [])[:5],
-            "pending_proposals": len(skills.get("pending_proposals", [])),
+            "pending_proposals": len(pending),
+            "skills_needing_patch": patch_needed,
+            "retired_skills_count": skills.get("retired_skills_count", 0),
         }
 
     def _format_skills_for_ceo(self) -> str:
@@ -1585,6 +1595,17 @@ class NanobotCOO:
             f"- Recently used: {skills.get('recently_used_count', 0)}",
             f"- Pending proposals: {len(skills.get('pending_proposals', []))}",
         ]
+        pending = skills.get("pending_proposals", [])
+        patch_needed = len(
+            [
+                p
+                for p in pending
+                if isinstance(p, dict) and p.get("action") == "patch"
+            ]
+        )
+        lines.append(
+            f"- Skill health: {patch_needed} skills need patching, {skills.get('retired_skills_count', 0)} retired."
+        )
         recent = skills.get("recently_used") or []
         available = skills.get("available") or []
         if recent:
@@ -1622,6 +1643,7 @@ class NanobotCOO:
             f"- Playbook items: {counts.get('playbooks', 0)}",
             f"- Approved skills: {counts.get('skills', 0)}",
             f"- Pending skill proposals: {counts.get('pending_proposals', 0)}",
+            f"- Skill health: {counts.get('skills_needing_patch', 0)} need patching, {counts.get('retired_skills_archive', 0)} retired.",
             f"- COO memory entries: {counts.get('coo_memory_entries', 0)}",
         ]
         recent_injected = overview.get("recently_injected") or []
@@ -1645,6 +1667,13 @@ class NanobotCOO:
             for proposal in pending[:5]:
                 lines.append(
                     f"  - {proposal.get('proposal_id')}: {proposal.get('scope')}/{proposal.get('name')} — {proposal.get('title')}"
+                )
+        retired = overview.get("retired_skills_archive") or []
+        if retired:
+            lines.append("- Retired skills archive (collapsed preview):")
+            for item in retired[:3]:
+                lines.append(
+                    f"  - {item.get('scope')}/{item.get('name')} — {item.get('retirement_reason') or 'No reason recorded'}"
                 )
         playbooks = overview.get("playbooks") or []
         if playbooks:

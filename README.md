@@ -594,6 +594,8 @@ Aider Plus keeps learning artifacts local and inspectable:
   can generate retirement proposals, retired skills are archived as inactive
   (not deleted), and recall de-prioritizes patch-needed skills while filtering
   retired ones.
+- Knowledge surfaces include maintenance views for skills needing patch,
+  skills needing retirement, and a retired-skills archive snapshot for auditability.
 
 ---
 

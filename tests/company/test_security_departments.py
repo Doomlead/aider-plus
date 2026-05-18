@@ -159,3 +159,84 @@ def test_orchestrator_marks_security_patch_completion_and_backoff(tmp_path):
     assert security["patch_in_progress"] is False
     assert security["recent_patches_applied"][-1]["finding_id"] == "finding-1"
     assert security["next_scan_at"]
+
+
+def test_platformsec_excludes_agent_self_patch_requests(tmp_path):
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        engineering = EchoEngineeringDepartment(memory)
+        orchestrator.register(engineering)
+
+        scan = Deliverable(
+            task_id="scan-agent-loop",
+            department="security_platform",
+            artifact_type="security_scan_result",
+            payload={
+                "scan_type": "platform_audit",
+                "severity": "critical",
+                "findings": [
+                    {
+                        "id": "agent-loop",
+                        "location": "aider/agent/loop.py",
+                        "description": "agent-related self patch risk",
+                        "recommendation": "patch PlatformSec routing",
+                    },
+                    {
+                        "id": "aider-state",
+                        "location": ".aider/company/run-state.json",
+                        "description": "state-file issue",
+                        "recommendation": "patch .aider state",
+                    },
+                ],
+            },
+            status="needs_review",
+            metadata={"context": {"scan_type": "platform_audit"}},
+        )
+
+        routed = await orchestrator._route_security_scan_result(scan)
+
+        assert routed is True
+        assert engineering.inbox.empty()
+        assert memory.data["security"]["status"] == "red"
+
+    asyncio.run(run())
+
+
+def test_security_posture_trend_is_recorded(tmp_path):
+    async def run():
+        memory = ProjectMemory(str(tmp_path))
+        orchestrator = CompanyOrchestrator(memory)
+        first = Deliverable(
+            task_id="scan-1",
+            department="security_app",
+            artifact_type="security_scan_result",
+            payload={
+                "scan_type": "vuln",
+                "severity": "critical",
+                "findings": [],
+                "risk_score": 9.0,
+            },
+            status="needs_review",
+            metadata={},
+        )
+        second = Deliverable(
+            task_id="scan-2",
+            department="security_app",
+            artifact_type="security_scan_result",
+            payload={
+                "scan_type": "vuln",
+                "severity": "low",
+                "findings": [],
+                "risk_score": 1.0,
+            },
+            status="success",
+            metadata={},
+        )
+
+        await orchestrator._route_security_scan_result(first)
+        await orchestrator._route_security_scan_result(second)
+
+        assert memory.data["security"]["posture_trend"] == "improving"
+
+    asyncio.run(run())

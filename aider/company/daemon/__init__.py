@@ -231,6 +231,7 @@ class CompanyDaemon:
             "hook_timeout_seconds": self.workflow.hooks.timeout_seconds,
             "security_scan_interval_minutes": self.workflow.security.security_scan_interval_minutes,
             "security_scan_backoff_minutes": self.workflow.security.security_scan_backoff_minutes,
+            "security_scan_min_frequency_minutes": self.workflow.security.security_scan_min_frequency_minutes,
             "hooks": self.workflow.hooks.names(),
             "safety": {
                 "max_concurrent_workspaces": self.workflow.agent.max_concurrent_agents,
@@ -240,8 +241,11 @@ class CompanyDaemon:
             "security": self._current_security_status(),
         }
 
-    def run_idle_security_check(self) -> dict[str, Any]:
-        """Run AppSec and PlatformSec checks when the daemon has no issue work."""
+    def run_idle_security_check(self, *, force: bool = False) -> dict[str, Any]:
+        """Run AppSec and PlatformSec checks when idle or manually requested.
+
+        The hard minimum scan frequency is always enforced, even for manual runs.
+        """
         task = SecurityCheckTask()
         result = {"task_id": task.task_id, "status": "skipped", "departments": []}
         if self.orchestrator is None or self.coo is None:
@@ -256,6 +260,10 @@ class CompanyDaemon:
             "security_scan_backoff_minutes",
             self.workflow.security.security_scan_backoff_minutes,
         )
+        current.setdefault(
+            "security_scan_min_frequency_minutes",
+            self.workflow.security.security_scan_min_frequency_minutes,
+        )
         self._record_security_status(current)
         if current.get("patch_in_progress"):
             result.update(
@@ -266,7 +274,16 @@ class CompanyDaemon:
                 }
             )
             return result
-        if not self._security_scan_due(current):
+        if not self._security_scan_fuse_allows(current):
+            result.update(
+                {
+                    "reason": "security scan safety fuse has not elapsed",
+                    "last_scan_at": current.get("last_scan_at"),
+                    "next_scan_at": current.get("next_scan_at"),
+                }
+            )
+            return result
+        if not force and not self._security_scan_due(current):
             result.update(
                 {
                     "reason": "security scan interval has not elapsed",
@@ -339,6 +356,15 @@ class CompanyDaemon:
             result["status"] = "skipped"
         return result
 
+    def _security_min_frequency_minutes(
+        self, current: dict[str, Any] | None = None
+    ) -> int:
+        current = current or {}
+        return int(
+            current.get("security_scan_min_frequency_minutes")
+            or self.workflow.security.security_scan_min_frequency_minutes
+        )
+
     def _security_scan_interval_minutes(
         self, current: dict[str, Any] | None = None
     ) -> int:
@@ -349,8 +375,10 @@ class CompanyDaemon:
             and _minutes_since(recent_patch)
             < self.workflow.security.security_scan_backoff_minutes
         ):
-            return self.workflow.security.security_scan_backoff_minutes
-        return self.workflow.security.security_scan_interval_minutes
+            interval = self.workflow.security.security_scan_backoff_minutes
+        else:
+            interval = self.workflow.security.security_scan_interval_minutes
+        return max(interval, self._security_min_frequency_minutes(current))
 
     def _security_next_scan_at(self, start_at: str | None = None) -> str:
         base = _parse_utc(start_at) or datetime.now(timezone.utc)
@@ -363,7 +391,20 @@ class CompanyDaemon:
             )
         ).isoformat()
 
+    def _security_scan_fuse_allows(self, current: dict[str, Any]) -> bool:
+        last_scan = current.get("last_scan_at")
+        if not last_scan:
+            return True
+        parsed = _parse_utc(str(last_scan))
+        if parsed is None:
+            return True
+        return datetime.now(timezone.utc) >= parsed + timedelta(
+            minutes=self._security_min_frequency_minutes(current)
+        )
+
     def _security_scan_due(self, current: dict[str, Any]) -> bool:
+        if not self._security_scan_fuse_allows(current):
+            return False
         next_scan = current.get("next_scan_at")
         if not next_scan:
             last_scan = current.get("last_scan_at")

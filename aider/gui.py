@@ -656,6 +656,18 @@ class DesktopCompanySession:
         status["configured"] = True
         return status
 
+    def run_security_scan_now(self) -> dict[str, Any]:
+        workflow_path = Path(self.repo_path) / "AIDER_WORKFLOW.md"
+        if not workflow_path.exists():
+            return {
+                "status": "skipped",
+                "reason": "AIDER_WORKFLOW.md is not configured",
+            }
+        daemon = load_daemon(workflow_path)
+        daemon.orchestrator = self.orchestrator
+        daemon.coo = self.coo
+        return daemon.run_idle_security_check(force=True)
+
     def system_overview(self) -> dict:
         pending = [
             approval
@@ -829,6 +841,13 @@ class DesktopCompanySession:
                 )
                 if isinstance(self.orchestrator.memory.data, dict)
                 else []
+            ),
+            "security_posture_trend": (
+                (self.orchestrator.memory.data.get("security", {}) or {}).get(
+                    "posture_trend", "stable"
+                )
+                if isinstance(self.orchestrator.memory.data, dict)
+                else "stable"
             ),
             "last_build": last_build,
             "last_build_status": last_build.get("status", "not run"),
@@ -1652,27 +1671,39 @@ class GUI:
                 f"({overview.get('security_severity', 'info')}, {overview.get('security_findings', 0)} findings)"
             )
         with st.container(border=True):
-            st.subheader("Security Status")
+            st.subheader("Security Status Card")
             st.write(
-                f"**Overall posture:** {overview.get('security_posture', '⚪ Not scanned')}"
+                f"**Posture color:** {overview.get('security_posture', '⚪ Not scanned')}"
+            )
+            st.write(
+                f"**Security Posture Trend:** {overview.get('security_posture_trend', 'stable')}"
             )
             st.write(f"**Last scan:** {overview.get('security_last_scan_at', 'never')}")
             st.write(
-                f"**Next scheduled scan:** {overview.get('security_next_scan_at', 'unscheduled')}"
+                f"**Next scan:** {overview.get('security_next_scan_at', 'unscheduled')}"
             )
             st.write(
-                "**Open critical/high findings:** "
+                "**Critical/high findings:** "
                 f"{overview.get('security_open_critical', 0)}/{overview.get('security_open_high', 0)}"
             )
+            if st.button("Run Scan Now", key="security_run_scan_now"):
+                scan_result = company.run_security_scan_now()
+                if scan_result.get("status") == "success":
+                    st.success("Security scan started.")
+                else:
+                    st.warning(
+                        scan_result.get("reason")
+                        or scan_result.get("status", "scan skipped")
+                    )
             patches = overview.get("security_recent_patches") or []
             if patches:
-                st.write("**Recent patches applied:**")
+                st.write("**Recent patches:**")
                 for patch in patches[-5:]:
                     st.write(
                         f"- {patch.get('finding_id') or patch.get('task_id')}: {patch.get('status')}"
                     )
             else:
-                st.write("**Recent patches applied:** none recorded")
+                st.write("**Recent patches:** none recorded")
             st.write(f"**MCP status:** {overview['mcp_status']}")
             blockers = overview.get("delivery_critical_blockers") or []
             st.write(

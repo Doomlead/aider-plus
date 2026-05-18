@@ -659,8 +659,10 @@ uses YAML front matter plus a prompt body. The daemon can:
   limits for dashboards and COO inspection;
 - run idle-time AppSec and PlatformSec checks only when due, using
   `security.security_scan_interval_minutes`, skipping while a security patch is
-  already in progress, and backing off with
-  `security.security_scan_backoff_minutes` after a patch lands;
+  already in progress, backing off with
+  `security.security_scan_backoff_minutes` after a patch lands, and enforcing the
+  `security.security_scan_min_frequency_minutes` safety fuse so scans cannot run
+  more often than the configured minimum (15 minutes by default);
 - persist security posture (`🟢 Green`, `🟡 At Risk`, `🔴 Critical`), last scan,
   next scheduled scan, open critical/high counts, recent security patches, and
   posture trend history for COO answers and GUI Security Status cards;
@@ -689,6 +691,7 @@ company:
 security:
   security_scan_interval_minutes: 60
   security_scan_backoff_minutes: 240
+  security_scan_min_frequency_minutes: 15
 hooks:
   before_run: python -m pytest -q tests/company
   timeout_seconds: 120
@@ -700,6 +703,18 @@ Title: {{issue.title}}
 Description: {{issue.description}}
 URL: {{issue.url}}
 ```
+
+
+### Security Model
+
+Company Mode separates product-facing AppSec checks from PlatformSec checks for
+the automation platform itself. Idle and manual scans are rate-limited by the
+normal scan interval/backoff plus a hard minimum-frequency safety fuse (15
+minutes by default), and scans are skipped while a security patch is already in
+progress. Critical findings are routed to Engineering as patch requests with the
+scan context attached, while PlatformSec explicitly excludes `.aider/` state and
+agent-related files from self-patching so security automation does not create
+recursive patch loops.
 
 Run it:
 
@@ -714,9 +729,10 @@ aider company daemon --workflow .aider/company/workflow.md --status
 If a repo has `AIDER_WORKFLOW.md` at its root, the browser and native desktop
 System Overview panels also show daemon status, last run, active workflows,
 pending proof-of-work, recent daemon runs, and recent proof artifact paths/summaries.
-The browser and native desktop GUIs include a dedicated Security Status card with
-overall posture, last/next scan timestamps, open critical/high finding counts,
-and recent patches applied. The COO uses `list_daemon_workflows()` plus project
+The browser and native desktop GUIs include an identical dedicated Security
+Status card with posture color, one-line posture trend, last/next scan
+timestamps, open critical/high finding counts, a Run Scan Now action, and recent
+patches applied. The COO uses `list_daemon_workflows()` plus project
 security memory to answer questions like “What is our current security status?”,
 “Run a full security scan”, and “Show open vulnerabilities” from chat/status
 surfaces.

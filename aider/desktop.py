@@ -546,6 +546,18 @@ class DesktopCompanySession:
         status["configured"] = True
         return status
 
+    def run_security_scan_now(self) -> dict[str, Any]:
+        workflow_path = Path(self.repo_path) / "AIDER_WORKFLOW.md"
+        if not workflow_path.exists():
+            return {
+                "status": "skipped",
+                "reason": "AIDER_WORKFLOW.md is not configured",
+            }
+        daemon = load_daemon(workflow_path)
+        daemon.orchestrator = self.orchestrator
+        daemon.coo = self.coo
+        return daemon.run_idle_security_check(force=True)
+
     def system_overview(self) -> dict[str, Any]:
         pending = [
             approval
@@ -719,6 +731,13 @@ class DesktopCompanySession:
                 )
                 if isinstance(self.orchestrator.memory.data, dict)
                 else []
+            ),
+            "security_posture_trend": (
+                (self.orchestrator.memory.data.get("security", {}) or {}).get(
+                    "posture_trend", "stable"
+                )
+                if isinstance(self.orchestrator.memory.data, dict)
+                else "stable"
             ),
             "last_build": last_build,
             "last_build_status": last_build.get("status", "not run"),
@@ -1441,6 +1460,9 @@ class AiderPlusDesktop:
         ttk.Button(
             toolbar, text="Refresh Dashboard", command=self.refresh_dashboard
         ).pack(side="right")
+        ttk.Button(
+            toolbar, text="Run Scan Now", command=self.run_security_scan_now
+        ).pack(side="right", padx=(0, 8))
         self.rollback_button = ttk.Button(
             toolbar,
             text="Rollback",
@@ -2015,6 +2037,14 @@ class AiderPlusDesktop:
         self.refresh_knowledge()
         messagebox.showinfo(APP_TITLE, f"Approved skill proposal {proposal_id}.")
 
+    def run_security_scan_now(self):
+        if not self.company:
+            return
+        result = self.company.run_security_scan_now()
+        message = result.get("reason") or result.get("status", "scan requested")
+        self._set_busy(False, f"Security scan: {message}")
+        self.refresh_dashboard()
+
     def refresh_dashboard(self):
         if not self.company:
             self._write_text(self.dashboard_text, "Company backend is not ready yet.")
@@ -2092,11 +2122,13 @@ class AiderPlusDesktop:
                     f"Delivery completion: {overview.get('delivery_completion', 0)}%",
                     f"Delivery next milestone: {overview.get('delivery_next_milestone', 'TBD')}",
                     "Security Status Card:",
-                    f"  Overall posture: {overview.get('security_posture', '⚪ Not scanned')}",
+                    f"  Posture color: {overview.get('security_posture', '⚪ Not scanned')}",
+                    f"  Security Posture Trend: {overview.get('security_posture_trend', 'stable')}",
                     f"  Last scan: {overview.get('security_last_scan_at', 'never')}",
-                    f"  Next scheduled scan: {overview.get('security_next_scan_at', 'unscheduled')}",
-                    f"  Open critical/high findings: {overview.get('security_open_critical', 0)}/{overview.get('security_open_high', 0)}",
-                    "  Recent patches applied: "
+                    f"  Next scan: {overview.get('security_next_scan_at', 'unscheduled')}",
+                    f"  Critical/high findings: {overview.get('security_open_critical', 0)}/{overview.get('security_open_high', 0)}",
+                    "  Run Scan Now: available from the dashboard toolbar",
+                    "  Recent patches: "
                     + (
                         ", ".join(
                             str(patch.get("finding_id") or patch.get("task_id"))

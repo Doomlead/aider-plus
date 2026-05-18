@@ -49,6 +49,7 @@ class CompanyWorkflowConfig:
 class SecurityWorkflowConfig:
     security_scan_interval_minutes: int = 60
     security_scan_backoff_minutes: int = 240
+    security_scan_min_frequency_minutes: int = 15
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,10 @@ class CompanyWorkflow:
                 security_scan_backoff_minutes=_positive_int(
                     security_data.get("security_scan_backoff_minutes", 240),
                     "security.security_scan_backoff_minutes",
+                ),
+                security_scan_min_frequency_minutes=_positive_int(
+                    security_data.get("security_scan_min_frequency_minutes", 15),
+                    "security.security_scan_min_frequency_minutes",
                 ),
             ),
             hooks=WorkflowHooks(

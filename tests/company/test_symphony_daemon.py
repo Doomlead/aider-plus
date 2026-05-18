@@ -223,7 +223,9 @@ def test_builtin_daemon_runner_end_to_end_tracker_and_proof(tmp_path):
             metadata = {"context": task.context}
             payload = f"{self.name} completed {task.task_id}"
             if self.name == "engineering":
-                workspace.joinpath("feature.txt").write_text("implemented", encoding="utf-8")
+                workspace.joinpath("feature.txt").write_text(
+                    "implemented", encoding="utf-8"
+                )
                 metadata["review_feedback"] = "Reviewer approved implementation."
             if self.name == "qa":
                 metadata["command"] = "pytest tests/company/test_symphony_daemon.py"
@@ -243,7 +245,9 @@ def test_builtin_daemon_runner_end_to_end_tracker_and_proof(tmp_path):
                 status="success",
                 metadata=metadata,
                 review_feedback=(
-                    "Reviewer approved implementation." if self.name == "engineering" else None
+                    "Reviewer approved implementation."
+                    if self.name == "engineering"
+                    else None
                 ),
             )
 
@@ -272,7 +276,9 @@ def test_builtin_daemon_runner_end_to_end_tracker_and_proof(tmp_path):
         orchestrator.register(CycleDepartment(memory, name))
     coo = NanobotCOO(orchestrator=orchestrator)
     runner = CompanyDaemonRunner(orchestrator, coo, timeout_seconds=5)
-    daemon = CompanyDaemon(workflow=workflow, orchestrator=orchestrator, coo=coo, runner=runner)
+    daemon = CompanyDaemon(
+        workflow=workflow, orchestrator=orchestrator, coo=coo, runner=runner
+    )
 
     proof = asyncio.run(daemon.run_issue("AP-4"))
 
@@ -290,7 +296,11 @@ def test_builtin_daemon_runner_end_to_end_tracker_and_proof(tmp_path):
     assert "# Proof of Work: AP-4" in markdown
     assert "## DevOps Build/Deploy" in markdown
     reloaded = ProofOfWork.from_dict(
-        json.loads(workspace.joinpath(".aider", "company", "proof-of-work.json").read_text(encoding="utf-8"))
+        json.loads(
+            workspace.joinpath(".aider", "company", "proof-of-work.json").read_text(
+                encoding="utf-8"
+            )
+        )
     )
     assert reloaded.markdown_path.endswith("proof-of-work.md")
     data = json.loads(tracker_path.read_text(encoding="utf-8"))
@@ -321,7 +331,9 @@ def test_builtin_runner_partial_success_continues_and_emits_progress(tmp_path):
         async def process(self, task: CompanyTask) -> Deliverable:
             workspace = Path(task.context["workspace"])
             if self.name == "engineering":
-                workspace.joinpath("partial.txt").write_text("partial", encoding="utf-8")
+                workspace.joinpath("partial.txt").write_text(
+                    "partial", encoding="utf-8"
+                )
             metadata = {"context": task.context}
             if self.name == "qa":
                 metadata["command"] = "pytest failing-test"
@@ -454,7 +466,9 @@ def test_daemon_github_adapter_mocked_round_trip():
                     "labels": [{"name": label} for label in body.get("labels", [])],
                 },
             )
-        if request.method == "POST" and request.url.path.endswith("/issues/42/comments"):
+        if request.method == "POST" and request.url.path.endswith(
+            "/issues/42/comments"
+        ):
             return httpx.Response(201, json={"id": 1001})
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
@@ -485,3 +499,50 @@ def test_daemon_github_adapter_mocked_round_trip():
         and json.loads(request.content.decode()).get("state") == "closed"
         for request in requests
     )
+
+
+def test_security_scan_safety_fuse_blocks_too_frequent_manual_runs(tmp_path):
+    from datetime import datetime, timezone
+
+    from aider.company.coo import NanobotCOO
+    from aider.company.department import Department
+    from aider.company.orchestrator import CompanyOrchestrator
+    from aider.company.schemas import CompanyTask, Deliverable
+    from aider.memory import ProjectMemory
+
+    class SecurityDepartment(Department):
+        name = "security_app"
+
+        async def process(self, task: CompanyTask) -> Deliverable:
+            return Deliverable(
+                task_id=task.task_id,
+                department=self.name,
+                artifact_type="security_scan_result",
+                payload={"scan_type": "vuln", "severity": "info", "findings": []},
+                status="success",
+                metadata={},
+            )
+
+    workflow_path = write_workflow(
+        tmp_path, tmp_path / "issues.json", tmp_path / "runs"
+    )
+    workflow = CompanyWorkflow.load(workflow_path)
+    memory = ProjectMemory(str(tmp_path / "memory"))
+    memory.data["security"] = {
+        "last_scan_at": datetime.now(timezone.utc).isoformat(),
+        "security_scan_interval_minutes": 1,
+        "security_scan_backoff_minutes": 1,
+        "security_scan_min_frequency_minutes": 15,
+    }
+    orchestrator = CompanyOrchestrator(memory)
+    orchestrator.register(SecurityDepartment(memory))
+    daemon = CompanyDaemon(
+        workflow=workflow,
+        orchestrator=orchestrator,
+        coo=NanobotCOO(orchestrator=orchestrator),
+    )
+
+    result = daemon.run_idle_security_check(force=True)
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "security scan safety fuse has not elapsed"

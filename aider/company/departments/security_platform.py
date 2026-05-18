@@ -89,6 +89,13 @@ class PlatformSecDepartment(Department):
                         "patch PlatformSec directly",
                         "start recursive security scans",
                         "run non-allowlisted tools",
+                        "scan or recommend patches for .aider/ state files",
+                        "scan or recommend patches for agent-related files",
+                    ],
+                    "excluded_paths": [
+                        ".aider/",
+                        "aider/agent/",
+                        "aider/company/departments/security_platform.py",
                     ],
                     "patch_route": "Architect or Engineering owns remediation tasks.",
                 },

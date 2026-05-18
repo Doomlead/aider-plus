@@ -307,6 +307,7 @@ class CompanyOrchestrator:
                 "risk_score": result.get("risk_score", 0.0),
             }
         )
+        posture_trend = _security_posture_trend_label(trend)
         latest = {
             **(previous if isinstance(previous, dict) else {}),
             "status": status,
@@ -326,6 +327,7 @@ class CompanyOrchestrator:
             "last_scan_at": now,
             "next_scan_at": _next_security_scan_at(previous, now),
             "security_posture_trend": trend[-20:],
+            "posture_trend": posture_trend,
         }
         self.memory.data["security"] = latest
         with contextlib.suppress(Exception):
@@ -348,6 +350,11 @@ class CompanyOrchestrator:
         for index, finding in enumerate(findings, start=1):
             if not isinstance(finding, dict):
                 finding = {"description": str(finding)}
+            if (
+                d.department == "security_platform"
+                and _is_platformsec_excluded_finding(finding)
+            ):
+                continue
             finding_id = str(
                 finding.get("id")
                 or finding.get("finding_id")
@@ -1857,6 +1864,7 @@ def _next_security_scan_at(
     previous: dict | None, start_at: str, *, after_patch: bool = False
 ) -> str:
     interval = 240 if after_patch else 60
+    min_interval = 15
     if isinstance(previous, dict):
         interval = int(
             previous.get(
@@ -1867,8 +1875,12 @@ def _next_security_scan_at(
             or previous.get("scan_interval_minutes")
             or interval
         )
+        min_interval = int(
+            previous.get("security_scan_min_frequency_minutes") or min_interval
+        )
     return (
-        datetime.fromisoformat(start_at) + timedelta(minutes=max(1, interval))
+        datetime.fromisoformat(start_at)
+        + timedelta(minutes=max(1, interval, min_interval))
     ).isoformat()
 
 
@@ -1876,6 +1888,45 @@ def _posture_label(status: str) -> str:
     return {"green": "🟢 Green", "yellow": "🟡 At Risk", "red": "🔴 Critical"}.get(
         status, "⚪ Not scanned"
     )
+
+
+def _security_posture_trend_label(trend: list[dict]) -> str:
+    if len(trend) < 2:
+        return "stable"
+    ranks = {"green": 0, "yellow": 1, "red": 2}
+    previous = trend[-2] if isinstance(trend[-2], dict) else {}
+    current = trend[-1] if isinstance(trend[-1], dict) else {}
+    previous_rank = ranks.get(str(previous.get("status", "green")), 0)
+    current_rank = ranks.get(str(current.get("status", "green")), 0)
+    if current_rank < previous_rank:
+        return "improving"
+    if current_rank > previous_rank:
+        return "degrading"
+    previous_risk = float(previous.get("risk_score", 0.0) or 0.0)
+    current_risk = float(current.get("risk_score", 0.0) or 0.0)
+    if current_risk + 0.01 < previous_risk:
+        return "improving"
+    if current_risk > previous_risk + 0.01:
+        return "degrading"
+    return "stable"
+
+
+def _is_platformsec_excluded_finding(finding: dict) -> bool:
+    haystack = " ".join(
+        str(finding.get(key, ""))
+        for key in ("location", "file", "path", "description", "recommendation")
+    ).lower()
+    excluded_markers = (
+        ".aider/",
+        ".aider\\",
+        "aider/agent/",
+        "aider\\agent\\",
+        "agent_loop",
+        "agent-related",
+        "security_platform",
+        "platformsec",
+    )
+    return any(marker in haystack for marker in excluded_markers)
 
 
 def _count_findings(

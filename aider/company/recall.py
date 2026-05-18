@@ -34,6 +34,11 @@ class RecallEngine:
     def __init__(self, store: MemoryStore, *, limit_per_scope: int = _MAX_RECALL_ITEMS):
         self.store = store
         self.limit_per_scope = limit_per_scope
+        self.skill_state = (
+            store.project_memory.data.get("skills", {})
+            if hasattr(store, "project_memory")
+            else {}
+        )
 
     def build_recall_packet(self, task: CompanyTask) -> RecallPacket:
         """Return visible, ranked memory grouped by recall scope for *task*."""
@@ -205,6 +210,10 @@ class RecallEngine:
             signal = int(metadata.get("reinforcement_signal") or 0)
             score += min(0.6, reinforcement * 0.05)
             score += max(-0.4, min(0.4, signal * 0.04))
+            adjustment = self._skill_adjustment(record)
+            if adjustment <= -9.0:
+                continue
+            score += adjustment
             if score >= _MIN_RECALL_SCORE or keyword_terms or not query_text:
                 scored.append(
                     (
@@ -275,6 +284,27 @@ class RecallEngine:
             f"Included from {scope_reason} scope because it {match_reason}."
             f"{reinforcement_summary}"
         )
+
+    def _skill_adjustment(self, record: MemoryRecord) -> float:
+        skills = self.skill_state if isinstance(self.skill_state, dict) else {}
+        archived = skills.get("archived", {}) if isinstance(skills, dict) else {}
+        if not isinstance(archived, dict):
+            archived = {}
+        metadata = record.metadata if isinstance(record.metadata, dict) else {}
+        skill_id = str(metadata.get("skill_id") or "").strip()
+        if skill_id and isinstance(archived.get(skill_id), dict):
+            return -10.0
+        proposals = self.store.project_memory.data.get("skill_proposals", [])
+        if skill_id and isinstance(proposals, list):
+            for p in proposals:
+                if (
+                    isinstance(p, dict)
+                    and p.get("status") == "pending"
+                    and p.get("action") == "patch"
+                    and p.get("target_skill_id") == skill_id
+                ):
+                    return -0.25
+        return 0.0
 
     @staticmethod
     def _first_value(context: dict, payload: Any, *keys: str) -> str | None:

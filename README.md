@@ -15,6 +15,17 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
 
 ---
 
+
+### Memory Fabric
+
+Memory Fabric now exposes a `memory_health_score` (0-100) to summarize utilization, staleness, and recall hit rate for operational monitoring.
+
+Useful commands:
+- `aider company memory status`
+- `aider company memory repair --yes`
+
+In dashboards, this is shown as a badge like `Memory Health: 92% 🟢`.
+
 ## Architecture Overview
 
 New contributors should start with the [First Code Tour](docs/architecture/first-code-tour.md). It walks from `aider/main.py` through the Coder, `COO assistant`, `CompanyOrchestrator`, departments, shared memory/skills/EventBus services, daemon workspaces, templates, warehouse-backed product repos, and the DevOps release path.

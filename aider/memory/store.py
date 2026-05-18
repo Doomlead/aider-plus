@@ -29,6 +29,7 @@ class MemoryStore:
         self.project_memory.persist()
         self.add_to_index(memory_record)
         self._increment_metric("memory_records_total_events")
+        self._auto_compaction_check()
         return memory_record
 
     def query_records(
@@ -218,6 +219,13 @@ class MemoryStore:
         metrics.setdefault("skill_success_rate", 0.0)
         metrics.setdefault("decay_runs", 0)
         metrics.setdefault("skill_proposals_created", 0)
+        total = int(summary.get("memory_records_total", 0))
+        max_total = int(metrics.get("max_total_limit", 50000))
+        utilization = min(1.0, (total / max_total) if max_total > 0 else 1.0)
+        stale_ratio = (int(summary.get("stale_memory_count", 0)) / total) if total else 0.0
+        recall_hit_rate = float(metrics.get("recall_hit_rate", 0.0) or 0.0)
+        score = 100.0 * (0.5 * (1.0 - utilization) + 0.3 * (1.0 - stale_ratio) + 0.2 * recall_hit_rate)
+        metrics["memory_health_score"] = max(0.0, min(100.0, round(score, 1)))
         return metrics
 
     def _drop_records(self, ids: list[str]) -> int:
@@ -236,6 +244,15 @@ class MemoryStore:
         observability = self.project_memory.data.setdefault("observability", {})
         metrics = observability.setdefault("memory_metrics", {})
         metrics[key] = int(metrics.get(key) or 0) + int(amount)
+
+    def _auto_compaction_check(self) -> None:
+        metrics = self.get_metrics()
+        total = int(metrics.get("memory_records_total", 0))
+        max_total = int(metrics.get("max_total_limit", 50000))
+        if max_total <= 0:
+            return
+        if total >= int(max_total * 0.9):
+            self._increment_metric("auto_compaction_suggested")
 
     def _memory_namespace(self) -> Dict[str, Any]:
         self.project_memory._ensure_schema()

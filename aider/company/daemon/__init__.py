@@ -206,6 +206,9 @@ class CompanyDaemon:
         recent_proofs = self._recent_proofs(limit=5)
         configured = self.workflow.path.exists()
         running = bool(active_runs)
+        memory_health = MemoryStore(self.orchestrator.state.memory).get_metrics() if self.orchestrator is not None else {}
+        memory_score = float(memory_health.get("memory_health_score", 0.0) or 0.0)
+        memory_badge = "🟢" if memory_score >= 80 else ("🟡" if memory_score >= 60 else "🔴")
         return {
             "workflow": str(self.workflow.path),
             "workflow_exists": configured,
@@ -240,7 +243,8 @@ class CompanyDaemon:
             },
             "runs": runs,
             "security": self._current_security_status(),
-            "memory_health": MemoryStore(self.orchestrator.state.memory).get_metrics() if self.orchestrator is not None else {},
+            "memory_health": memory_health,
+            "memory_health_status": f"Memory Health: {memory_score:.1f}% {memory_badge}",
         }
 
     def run_idle_security_check(self, *, force: bool = False) -> dict[str, Any]:

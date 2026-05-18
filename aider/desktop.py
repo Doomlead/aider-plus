@@ -48,6 +48,7 @@ from aider.company.surface_messages import format_runtime_event_message
 from aider.company.schemas import CompanyTask
 from aider.main import main as cli_main
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
+from aider.memory.store import MemoryStore
 from aider.gui_settings_manager import (
     SETTINGS_SECTIONS,
     SettingsAgentForm,
@@ -516,6 +517,15 @@ class DesktopCompanySession:
         return KnowledgeManager(
             self.orchestrator.state, self.orchestrator.company_config.skill_learning
         ).approve_skill_proposal(proposal_id)
+
+    def memory_status(self) -> dict[str, Any]:
+        return MemoryStore(self.coder.project_memory).get_metrics()
+
+    def compact_memory(self) -> int:
+        return MemoryStore(self.coder.project_memory).compact(dry_run=False)
+
+    def repair_memory(self) -> dict[str, int]:
+        return MemoryStore(self.coder.project_memory).repair(confirm=True)
 
     def daemon_status(self) -> dict[str, Any]:
         workflow_path = Path(self.repo_path) / "AIDER_WORKFLOW.md"
@@ -1591,6 +1601,12 @@ class AiderPlusDesktop:
         ttk.Button(
             toolbar, text="Refresh Knowledge", command=self.refresh_knowledge
         ).pack(side="right")
+        ttk.Button(
+            toolbar, text="Compact Now", command=self.compact_memory_now
+        ).pack(side="right", padx=(0, 6))
+        ttk.Button(
+            toolbar, text="Repair", command=self.repair_memory_now
+        ).pack(side="right", padx=(0, 6))
 
         panes = ttk.PanedWindow(self.knowledge_frame, orient=tk.HORIZONTAL)
         panes.pack(fill="both", expand=True)
@@ -1985,6 +2001,9 @@ class AiderPlusDesktop:
                 ),
             )
         counts = overview.get("counts", {})
+        memory_health = overview.get("memory_health") or {}
+        score = float(memory_health.get("memory_health_score", 0.0) or 0.0)
+        badge = "🟢" if score >= 80 else ("🟡" if score >= 60 else "🔴")
         recently_injected = overview.get("recently_injected") or []
         injected_lines = ["Recently Injected:"]
         if recently_injected:
@@ -2003,8 +2022,25 @@ class AiderPlusDesktop:
             f"Skills: {counts.get('skills', 0)}\n"
             f"Pending proposals: {counts.get('pending_proposals', 0)}\n"
             f"COO memory entries: {counts.get('coo_memory_entries', 0)}\n\n"
+            f"Memory Health: {score:.1f}% {badge}\n"
+            f"Memory records: {int(memory_health.get('memory_records_total', 0) or 0)}\n"
+            f"Stale records: {int(memory_health.get('stale_memory_count', 0) or 0)}\n\n"
             + "\n".join(injected_lines),
         )
+
+    def compact_memory_now(self):
+        if not self.company:
+            return
+        removed = self.company.compact_memory()
+        self.refresh_knowledge()
+        messagebox.showinfo(APP_TITLE, f"Compaction complete. Removed {removed} records.")
+
+    def repair_memory_now(self):
+        if not self.company:
+            return
+        result = self.company.repair_memory()
+        self.refresh_knowledge()
+        messagebox.showinfo(APP_TITLE, f"Repair complete: {result}")
 
     def _on_knowledge_selected(self, _event=None):
         selected = (

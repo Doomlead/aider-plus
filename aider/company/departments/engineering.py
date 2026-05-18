@@ -191,6 +191,7 @@ class EngineeringDepartment(Department):
         design_text = self._get_design_context(task)
         reviewer_feedback = ""
         reviewer_feedback_data = None
+        recall_text = self._format_recall_packet(task)
 
         if self._deliverable_needs_revision(previous_deliverable):
             previous_revision_count = previous_deliverable.metadata.get("revision_count", 0)
@@ -218,6 +219,9 @@ class EngineeringDepartment(Department):
 
 Design Specification:
 {design_text}
+
+Relevant Recalled Memories (thread/channel/project/user/Engineering private):
+{recall_text}
 
 {reviewer_feedback}
 
@@ -648,6 +652,8 @@ Address ALL reviewer feedback from the previous round if present.
             "design_spec_summary": self._get_design_spec_summary(),
             "playbook_guidance": self._get_playbook_guidance(),
             "skill_guidance": self._get_skill_guidance(),
+            "recall_packet": context.get("recall_packet") or payload.get("recall_packet"),
+            "recall_guidance": self._format_recall_packet(context.get("recall_packet") or payload.get("recall_packet")),
             "design_spec_structured": design_spec_structured,
         }
 
@@ -707,7 +713,10 @@ Coding Standards & Playbook:
 Procedural Skills Available (consult when relevant to changed files, review checklist, or test strategy):
 {context.get('skill_guidance', 'None')}
 
-Review the following code changes carefully and be critical. Explicitly apply any relevant procedural skill summaries above.
+Relevant Recalled Memories (use applicable thread, channel, project, user, and Engineering private memories):
+{context.get('recall_guidance', 'No relevant recalled memories.')}
+
+Review the following code changes carefully and be critical. Explicitly apply any relevant procedural skill summaries and recalled memories above.
 
 Changed Files:
 {context.get('changed_files', [])}
@@ -1160,7 +1169,7 @@ Be specific and actionable."""
             "(Claude 3.7 Sonnet, GPT-5.5, or equivalent) when configured. "
             "Compare the implementation diff and changed files against the PRD, "
             "design spec, current playbook items, available procedural skills, "
-            "and coding standards. Consult a procedural skill when its summary "
+            "recalled memory packet, and coding standards. Consult a procedural skill when its summary "
             "matches the review topic. Return "
             "structured feedback with positives, required fixes, priorities, and "
             "an approval decision."

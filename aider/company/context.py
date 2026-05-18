@@ -6,10 +6,12 @@ from typing import Any, Iterable, Optional
 
 from aider.company.skills import CompanySkillManager, SkillLearningConfig
 from aider.company.project import Project
+from aider.company.recall import RecallEngine
 from aider.company.schemas import CompanyTask
 from aider.company.state import CompanyStateManager
 from aider.memory.pattern_extractor import pattern_text
 from aider.memory.retrieval import MemoryRetriever
+from aider.memory.store import MemoryStore
 
 # Maximum number of playbook items to inject per category after retrieval.
 _MAX_PLAYBOOK_ITEMS = 5
@@ -50,6 +52,9 @@ class ContextBuilder:
         context = dict(task.context or {})
         requirements = list(requirements or [])
 
+        # --- Scoped memory recall packet (additive; playbooks/skills unchanged) ---
+        context.setdefault("recall_packet", self._build_recall_packet(task))
+
         # --- Fixed project fields (no retrieval needed, always cheap) ---
         if project is not None:
             if "project.name" in requirements:
@@ -88,6 +93,14 @@ class ContextBuilder:
             manager.record_skill_usage(skills, role=task.target)
 
         return context
+
+    def _build_recall_packet(self, task: CompanyTask) -> dict:
+        """Build the scoped memory recall packet injected into department context."""
+        return (
+            RecallEngine(MemoryStore(self.state.memory))
+            .build_recall_packet(task)
+            .to_dict()
+        )
 
     def retrieve(
         self,

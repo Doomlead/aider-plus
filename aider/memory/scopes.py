@@ -10,6 +10,8 @@ SCOPE_THREAD = "thread"
 SCOPE_ROLE = "role"
 SCOPE_SKILL = "skill"
 SCOPE_DEPARTMENT = "department"
+SCOPE_CHANNEL = "channel"
+SCOPE_USER = "user"
 
 VALID_SCOPE_PREFIXES = frozenset(
     {
@@ -20,6 +22,8 @@ VALID_SCOPE_PREFIXES = frozenset(
         SCOPE_ROLE,
         SCOPE_SKILL,
         SCOPE_DEPARTMENT,
+        SCOPE_CHANNEL,
+        SCOPE_USER,
     }
 )
 
@@ -55,7 +59,14 @@ def parse_scope(scope: str | MemoryScope) -> MemoryScope:
         )
     if sep and not name:
         raise ValueError("memory scope qualifier must be non-empty")
-    if not sep and prefix in {SCOPE_THREAD, SCOPE_ROLE, SCOPE_SKILL, SCOPE_DEPARTMENT}:
+    if not sep and prefix in {
+        SCOPE_THREAD,
+        SCOPE_ROLE,
+        SCOPE_SKILL,
+        SCOPE_DEPARTMENT,
+        SCOPE_CHANNEL,
+        SCOPE_USER,
+    }:
         raise ValueError(f"memory scope {prefix!r} requires a qualifier")
     return MemoryScope(prefix=prefix, name=name or None)
 

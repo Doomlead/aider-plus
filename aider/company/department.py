@@ -59,6 +59,43 @@ class Department(ABC):
             Callable[[CompanyTask], Awaitable[Optional[Deliverable]]]
         ] = None
 
+    def _get_recall_packet(self, task: CompanyTask) -> dict:
+        """Return the recall packet from task context, if one was injected."""
+        context = (
+            task.context if isinstance(getattr(task, "context", None), dict) else {}
+        )
+        packet = context.get("recall_packet")
+        return packet if isinstance(packet, dict) else {}
+
+    def _format_recall_packet(self, task_or_packet) -> str:
+        """Format recalled memories for department prompts without changing policy."""
+        if isinstance(task_or_packet, CompanyTask):
+            packet = self._get_recall_packet(task_or_packet)
+        else:
+            packet = task_or_packet if isinstance(task_or_packet, dict) else {}
+        if not packet:
+            return "No recall packet available."
+        lines: list[str] = []
+        for section in (
+            "thread",
+            "department_private",
+            "channel",
+            "project",
+            "user",
+            "skills",
+        ):
+            items = packet.get(section)
+            if not isinstance(items, list) or not items:
+                continue
+            lines.append(f"{section.replace('_', ' ').title()}:")
+            for index, item in enumerate(items[:5], 1):
+                if not isinstance(item, dict):
+                    continue
+                content = str(item.get("content") or item.get("summary") or item)[:300]
+                why = str(item.get("why_included") or "Visible scoped memory.")
+                lines.append(f"{index}. {content} — Why included: {why}")
+        return "\n".join(lines) if lines else "No relevant recalled memories."
+
     def can_use_tool(self, tool_name: str) -> bool:
         allowed = not self.allowed_tools or tool_name in self.allowed_tools
         if not allowed:

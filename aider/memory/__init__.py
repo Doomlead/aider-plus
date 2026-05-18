@@ -12,6 +12,7 @@ from .dream import consolidate_conversation
 from .evidence import SkillEvidenceCluster, collect_evidence_for_project
 from .project import ProjectMemory
 from .records import MemoryQuery, MemoryRecord
+from .index import LocalTFIDFIndex, MemoryBackendAdapter, MemoryEmbeddingProvider, MemoryIndex, SQLiteFTSIndex
 from .store import MemoryStore
 from .repository import JsonMemoryRepository, MemoryRepository, SQLiteMemoryRepository
 from .retrieval import MemoryRetriever
@@ -32,6 +33,11 @@ __all__ = [
     "MemoryRepository",
     "MemoryRetriever",
     "MemoryStore",
+    "MemoryIndex",
+    "MemoryBackendAdapter",
+    "MemoryEmbeddingProvider",
+    "LocalTFIDFIndex",
+    "SQLiteFTSIndex",
     "Message",
     "ProjectMemory",
     "SQLiteMemoryRepository",

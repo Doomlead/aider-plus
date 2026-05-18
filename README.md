@@ -134,7 +134,7 @@ aider company templates
 - **Zero-to-MVP templates:** templates for Next.js SaaS apps, FastAPI APIs, Electron desktop apps, Streamlit/data dashboards, Python CLI tools, SaaS dashboards, Discord bots, browser extensions, and internal admin tools.
 - **Browser and desktop GUIs:** shared Company dashboards, direct chat, per-agent tabs, settings, approvals, audit views, memory views, Delivery summaries, daemon status/proof panels, and guide pages.
 - **Headless and chat-adapter operation:** `--headless`/`--bot-mode` supports scripted tasks, queues, CI, services, Discord, and future chat adapters.
-- **Durable local memory and procedural skills:** local memory, playbook extraction, role-scoped `SKILL.md` retrieval, skill usage tracking, structured memory evidence clustering, richer source-backed skill proposals, and approval-gated skill promotion.
+- **Durable local memory and procedural skills:** local memory, playbook extraction, role-scoped `SKILL.md` retrieval, skill usage tracking, structured memory evidence clustering, richer source-backed skill proposals, and approval-gated skill promotion, plus pluggable local memory indexes (`local_tfidf` default, optional `sqlite_fts`) with optional embedding hooks.
 - **MCP integration:** department loops can use Model Context Protocol tools through approval-aware adapters and manager configuration.
 - **Company daemon:** an issue workflow daemon can pull eligible issues, prepare per-issue workspaces, run Company prompts, write proof-of-work artifacts, update tracker state, attach PRs, and require human review.
 

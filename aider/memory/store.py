@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional
 
+from .index import LocalTFIDFIndex, MemoryIndex
 from .project import ProjectMemory
 from .records import MemoryQuery, MemoryRecord, ensure_record
 from .scopes import scope_matches
@@ -11,9 +12,11 @@ from .visibility import filter_visible, validate_visibility
 class MemoryStore:
     """Thin service wrapper over ``ProjectMemory`` for local-first records."""
 
-    def __init__(self, project_memory: ProjectMemory):
+    def __init__(self, project_memory: ProjectMemory, index: MemoryIndex | None = None):
         self.project_memory = project_memory
         self.project_memory._ensure_schema()
+        self.index = index or LocalTFIDFIndex()
+        self.rebuild_index()
 
     def append_record(self, record: MemoryRecord | Dict[str, Any]) -> MemoryRecord:
         memory_record = ensure_record(record)
@@ -23,6 +26,7 @@ class MemoryStore:
         records.append(memory_record.to_dict())
         self.project_memory.update({"memory": memory})
         self.project_memory.persist()
+        self.add_to_index(memory_record)
         return memory_record
 
     def query_records(
@@ -34,10 +38,17 @@ class MemoryStore:
         records = [MemoryRecord.from_dict(item) for item in self._record_dicts()]
         records = self._filter_query(records, memory_query)
         records = filter_visible(records, memory_query)
+        records = self.index.rank(records, memory_query)
         if memory_query.limit is not None:
             return records[: max(0, int(memory_query.limit))]
         return records
 
+
+    def rebuild_index(self) -> None:
+        self.index.rebuild([MemoryRecord.from_dict(item) for item in self._record_dicts()])
+
+    def add_to_index(self, record: MemoryRecord) -> None:
+        self.index.add(record)
     def get_record(self, record_id: str) -> Optional[MemoryRecord]:
         for item in self._record_dicts():
             if item.get("id") == record_id or item.get("record_id") == record_id:
@@ -140,12 +151,4 @@ class MemoryStore:
         if query.tags:
             required = set(query.tags)
             filtered = [record for record in filtered if required.issubset(record.tags)]
-        if query.text:
-            needle = query.text.lower()
-            filtered = [
-                record
-                for record in filtered
-                if needle in str(record.content).lower()
-                or needle in str(record.metadata).lower()
-            ]
         return filtered

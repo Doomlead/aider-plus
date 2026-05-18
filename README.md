@@ -7,6 +7,8 @@ warehouse-backed product creation, browser and desktop control surfaces, local
 memory, skills, MCP tooling, Discord/headless adapters, and an issue-driven
 Company daemon.
 
+**Memory Fabric Architecture:** Phase 0 of the Neocortex-inspired memory fabric is documented in [docs/architecture/memory-fabric.md](docs/architecture/memory-fabric.md). The spec defines scoped memory, visibility rules, evidence-backed records, skill promotion, recall policy, migration strategy, and the future file plan without changing runtime behavior.
+
 Aider Plus is intentionally **not** a synthetic project runtime. Product work
 still happens inside normal Git repositories. The extra layers coordinate people,
 agents, memory, approvals, queues, and GUIs around that repo-native loop.

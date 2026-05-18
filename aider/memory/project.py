@@ -18,6 +18,10 @@ class ProjectMemory:
             "deployment_gotchas": [],
         },
         "skill_proposals": [],
+        "memory": {
+            "records": [],
+            "threads": [],
+        },
         "observability": {
             "turns_per_phase": {},
             "token_usage_per_department": {},

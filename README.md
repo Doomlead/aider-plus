@@ -567,8 +567,14 @@ Aider Plus keeps learning artifacts local and inspectable:
   Departments now receive an additive `recall_packet` with scoped, ranked,
   explainable memories from the current thread, department-private records,
   channel, project, user, and skill evidence. Each recalled item carries a
-  short “Why included” explanation while existing playbook and procedural skill
-  injection remains unchanged.
+  short “Why included” explanation, including a compact reinforcement summary
+  when present, while existing playbook and procedural skill injection remains
+  unchanged.
+- Reinforcement tracking links skill outcomes and memory-record outcomes: success
+  increments reinforcement, failures add negative signal, and low-reinforcement
+  high-failure skills can be flagged for human review/retirement proposals.
+- Stale-memory decay is periodic and configurable; it lowers salience via
+  reinforcement signal decay with safety thresholds and does not delete evidence.
 - Audit pattern extraction can turn repeated outcomes into playbook guidance.
 - The communication ledger writes structured memory records for major boundaries
   such as user instructions, department task receipt, deliverables, handoffs,

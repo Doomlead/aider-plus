@@ -13,6 +13,7 @@ from aider.company.skills import (
 )
 from aider.company.state import CompanyStateManager
 from aider.memory.evidence import SkillEvidenceCluster, collect_evidence_for_project
+from aider.memory.reinforcement import record_memory_outcome, record_skill_outcome
 from aider.memory.store import MemoryStore
 
 
@@ -63,6 +64,60 @@ class SelfImprovementService:
         if persist:
             return self._store_new_proposals(proposals)
         return proposals
+
+    def apply_reinforcement_and_decay(self, *, threshold_days: int = 30) -> dict[str, Any]:
+        store = MemoryStore(self.state.memory)
+        decayed = store.decay_stale_records(threshold_days=threshold_days)
+        skills = self.state.memory.data.get("skills", {})
+        reinforcement = (
+            skills.get("reinforcement", {}) if isinstance(skills, dict) else {}
+        )
+        review_candidates = [
+            item
+            for item in reinforcement.values()
+            if isinstance(item, dict)
+            and (
+                bool(item.get("review_recommended"))
+                or (
+                    int(item.get("failure_count") or 0) >= 3
+                    and int(item.get("reinforcement_count") or 0) <= 1
+                )
+            )
+        ]
+        return {
+            "decayed_records": decayed,
+            "review_candidates": review_candidates[:20],
+        }
+
+    def record_outcome(
+        self,
+        *,
+        skill_name: str,
+        scope: str,
+        task_id: str,
+        outcome: str,
+        supporting_memory_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        store = MemoryStore(self.state.memory)
+        skill_item = record_skill_outcome(
+            store,
+            skill_name=skill_name,
+            scope=scope,
+            task_id=task_id,
+            outcome=outcome,
+            supporting_memory_ids=supporting_memory_ids,
+        )
+        memory_updates = []
+        for record_id in supporting_memory_ids or []:
+            result = record_memory_outcome(
+                store,
+                record_id=record_id,
+                outcome=outcome,
+                related_skill_ids=[f"{scope}:{skill_name}"],
+            )
+            if result:
+                memory_updates.append(result.get("id") or result.get("record_id"))
+        return {"skill": skill_item, "updated_record_ids": memory_updates}
 
     def _audit_proposals(
         self, project: Project, final_deliverable: Deliverable

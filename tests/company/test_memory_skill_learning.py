@@ -4,6 +4,8 @@ from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.project import Project
 from aider.company.self_improvement import SelfImprovementService
 from aider.company.skills import CompanySkillManager, SkillLearningConfig, SkillProposal
+from aider.company.recall import RecallEngine
+from aider.company.schemas import CompanyTask
 from aider.memory import MemoryRecord, MemoryStore, ProjectMemory
 from aider.memory.evidence import collect_evidence_for_project
 
@@ -186,3 +188,57 @@ def test_memory_learning_does_not_auto_create_unless_configured(tmp_path):
         / proposal2.name
         / "SKILL.md"
     ).exists()
+
+
+def test_reinforcement_changes_ranking_and_explanations(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    store = MemoryStore(memory)
+    strong = store.append_record(
+        _memory_record("t1", "retry test loop for api timeout handling")
+    )
+    weak = store.append_record(_memory_record("t2", "generic note"))
+    store.reinforce_record(strong.id, delta=3)
+    store.reinforce_record(weak.id, delta=-1)
+    task = CompanyTask(
+        task_id="t-qa",
+        origin="coo",
+        target="engineering",
+        artifact_type="code",
+        payload={"description": "api timeout retry testing"},
+    )
+    ranked = RecallEngine(store).build_recall_packet(task).department_private
+    assert ranked
+    assert ranked[0]["id"] == strong.id
+    assert "Reinforcement:" in ranked[0]["why_included"]
+
+
+def test_reinforcement_and_decay_reduce_salience_without_deleting(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    store = MemoryStore(memory)
+    record = store.append_record(_memory_record("t1"))
+    service = SelfImprovementService(CompanyOrchestrator(memory).state)
+    service.record_outcome(
+        skill_name="retry-workflow",
+        scope="engineering",
+        task_id="t1",
+        outcome="failure",
+        supporting_memory_ids=[record.id],
+    )
+    service.record_outcome(
+        skill_name="retry-workflow",
+        scope="engineering",
+        task_id="t2",
+        outcome="success",
+        supporting_memory_ids=[record.id],
+    )
+
+    # force staleness
+    rec = memory.data["memory"]["records"][0]
+    rec["created_at"] = "2000-01-01T00:00:00+00:00"
+    memory.persist()
+    result = service.apply_reinforcement_and_decay(threshold_days=1)
+    refreshed = store.get_record(record.id)
+
+    assert result["decayed_records"] >= 1
+    assert refreshed is not None
+    assert int((refreshed.metadata or {}).get("decay_count") or 0) >= 1

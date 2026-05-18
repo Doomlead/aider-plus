@@ -44,6 +44,64 @@ class MemoryStore:
                 return MemoryRecord.from_dict(item)
         return None
 
+    def reinforce_record(self, record_id: str, delta: int = 1) -> Optional[dict[str, Any]]:
+        for item in self._record_dicts():
+            item_id = item.get("id") or item.get("record_id")
+            if item_id != record_id:
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            metadata["reinforcement_count"] = int(metadata.get("reinforcement_count") or 0) + max(0, int(delta))
+            metadata["reinforcement_signal"] = int(metadata.get("reinforcement_signal") or 0) + int(delta)
+            item["metadata"] = metadata
+            self.project_memory.update({"memory": self._memory_namespace()})
+            self.project_memory.persist()
+            return dict(item)
+        return None
+
+    def update_record_metadata(self, record_id: str, metadata: Dict[str, Any]) -> Optional[dict[str, Any]]:
+        for item in self._record_dicts():
+            item_id = item.get("id") or item.get("record_id")
+            if item_id != record_id:
+                continue
+            item["metadata"] = dict(metadata or {})
+            self.project_memory.update({"memory": self._memory_namespace()})
+            self.project_memory.persist()
+            return dict(item)
+        return None
+
+    def decay_stale_records(
+        self, threshold_days: int = 30, max_records: int = 500
+    ) -> int:
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=max(1, int(threshold_days)))
+        changed = 0
+        records = list(self._record_dicts())[: max(1, int(max_records))]
+        for item in records:
+            timestamp = item.get("updated_at") or item.get("created_at")
+            if not timestamp:
+                continue
+            try:
+                dt = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if dt >= cutoff:
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            signal = int(metadata.get("reinforcement_signal") or 0)
+            if signal <= -5:
+                continue
+            metadata["reinforcement_signal"] = signal - 1
+            metadata["decay_count"] = int(metadata.get("decay_count") or 0) + 1
+            metadata["last_decay_at"] = now.isoformat()
+            item["metadata"] = metadata
+            changed += 1
+        if changed:
+            self.project_memory.update({"memory": self._memory_namespace()})
+            self.project_memory.persist()
+        return changed
+
     def _memory_namespace(self) -> Dict[str, Any]:
         self.project_memory._ensure_schema()
         memory = self.project_memory.data.setdefault("memory", {})

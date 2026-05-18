@@ -655,8 +655,17 @@ uses YAML front matter plus a prompt body. The daemon can:
 - produce `.aider/company/run-state.json`, `.aider/company/proof-of-work.json`, and a human-readable `.aider/company/proof-of-work.md` with an executive TL;DR, detailed stage sections, retry metadata, partial-stage details, and concise diff summaries;
 - expose `CompanyDaemon.get_status()` with running/idle state, last run, active
   workflows, pending proof-of-work, recent proof artifacts, retry stats, latest
-  proof link, hook timeout, and max-workspace safety limits for dashboards and
-  COO inspection;
+  proof link, hook timeout, security scan schedule, and max-workspace safety
+  limits for dashboards and COO inspection;
+- run idle-time AppSec and PlatformSec checks only when due, using
+  `security.security_scan_interval_minutes`, skipping while a security patch is
+  already in progress, and backing off with
+  `security.security_scan_backoff_minutes` after a patch lands;
+- persist security posture (`🟢 Green`, `🟡 At Risk`, `🔴 Critical`), last scan,
+  next scheduled scan, open critical/high counts, recent security patches, and
+  posture trend history for COO answers and GUI Security Status cards;
+- export structured scan results as Markdown via `SecurityScanResult.to_markdown()`
+  for security reports;
 - comment, attach PR URLs with ProofOfWork Markdown links and summaries, and transition tracker state for GitHub or Linear-backed workflows.
 
 Example workflow:
@@ -677,6 +686,9 @@ agent:
 company:
   route: product_to_release
   require_release_approval: true
+security:
+  security_scan_interval_minutes: 60
+  security_scan_backoff_minutes: 240
 hooks:
   before_run: python -m pytest -q tests/company
   timeout_seconds: 120
@@ -701,8 +713,13 @@ aider company daemon --workflow .aider/company/workflow.md --status
 
 If a repo has `AIDER_WORKFLOW.md` at its root, the browser and native desktop
 System Overview panels also show daemon status, last run, active workflows,
-pending proof-of-work, recent daemon runs, and recent proof artifact paths/summaries. The COO uses
-`list_daemon_workflows()` to answer the same questions from chat/status surfaces.
+pending proof-of-work, recent daemon runs, and recent proof artifact paths/summaries.
+The browser and native desktop GUIs include a dedicated Security Status card with
+overall posture, last/next scan timestamps, open critical/high finding counts,
+and recent patches applied. The COO uses `list_daemon_workflows()` plus project
+security memory to answer questions like “What is our current security status?”,
+“Run a full security scan”, and “Show open vulnerabilities” from chat/status
+surfaces.
 
 ---
 

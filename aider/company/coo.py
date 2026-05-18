@@ -1038,6 +1038,8 @@ class NanobotCOO:
                 "current vulnerabilities",
                 "current vulnerability",
                 "what are our vulnerabilities",
+                "show open vulnerabilities",
+                "open vulnerabilities",
                 "security status",
                 "latest security",
             )
@@ -1709,9 +1711,11 @@ class NanobotCOO:
             return "- Security: not scanned"
         return (
             "- Security: "
-            f"{str(security.get('status', 'unknown')).upper()} "
+            f"{security.get('posture') or str(security.get('status', 'unknown')).upper()} "
             f"({security.get('severity', 'info')} {security.get('scan_type') or 'scan'}, "
-            f"{security.get('finding_count', 0)} finding(s))"
+            f"{security.get('finding_count', 0)} finding(s); "
+            f"last scan {security.get('last_scan_at') or 'never'}, "
+            f"next {security.get('next_scan_at') or 'unscheduled'})"
         )
 
     def _format_security_status_for_ceo(self, session: COOSession) -> str:
@@ -1722,6 +1726,22 @@ class NanobotCOO:
         ]
         result = security.get("result") if isinstance(security, dict) else None
         findings = result.get("findings", []) if isinstance(result, dict) else []
+        lines.append(f"- Last scan: {security.get('last_scan_at') or 'never'}")
+        lines.append(
+            f"- Next scheduled scan: {security.get('next_scan_at') or 'unscheduled'}"
+        )
+        lines.append(
+            f"- Open critical/high: {security.get('open_critical_count', 0)}/{security.get('open_high_count', 0)}"
+        )
+        recent_patches = (
+            security.get("recent_patches_applied") if isinstance(security, dict) else []
+        )
+        if recent_patches:
+            lines.append("- Recent patches applied:")
+            for patch in recent_patches[-3:]:
+                lines.append(
+                    f"  - {patch.get('finding_id') or patch.get('task_id')}: {patch.get('status')}"
+                )
         if findings:
             lines.append("- Current vulnerabilities:")
             for finding in findings[:5]:
@@ -1846,6 +1866,7 @@ class NanobotCOO:
             "last_human_escalation": session_snapshot.get("last_human_escalation"),
             "skills_summary": self._skills_status_summary(),
             "daemon": self.list_daemon_workflows(),
+            "security_card": self._security_status_payload(),
             "attention": {
                 "has_recent_errors": bool(session_snapshot.get("recent_errors")),
                 "has_pending_human_escalations": bool(

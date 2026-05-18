@@ -9,7 +9,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -229,6 +229,8 @@ class CompanyDaemon:
                 0, self.workflow.agent.max_concurrent_agents - len(active_runs)
             ),
             "hook_timeout_seconds": self.workflow.hooks.timeout_seconds,
+            "security_scan_interval_minutes": self.workflow.security.security_scan_interval_minutes,
+            "security_scan_backoff_minutes": self.workflow.security.security_scan_backoff_minutes,
             "hooks": self.workflow.hooks.names(),
             "safety": {
                 "max_concurrent_workspaces": self.workflow.agent.max_concurrent_agents,
@@ -244,16 +246,50 @@ class CompanyDaemon:
         result = {"task_id": task.task_id, "status": "skipped", "departments": []}
         if self.orchestrator is None or self.coo is None:
             self._get_default_runner()
+
+        current = self._current_security_status()
+        current.setdefault(
+            "security_scan_interval_minutes",
+            self.workflow.security.security_scan_interval_minutes,
+        )
+        current.setdefault(
+            "security_scan_backoff_minutes",
+            self.workflow.security.security_scan_backoff_minutes,
+        )
+        self._record_security_status(current)
+        if current.get("patch_in_progress"):
+            result.update(
+                {
+                    "reason": "security patch already in progress",
+                    "last_scan_at": current.get("last_scan_at"),
+                    "next_scan_at": current.get("next_scan_at"),
+                }
+            )
+            return result
+        if not self._security_scan_due(current):
+            result.update(
+                {
+                    "reason": "security scan interval has not elapsed",
+                    "last_scan_at": current.get("last_scan_at"),
+                    "next_scan_at": current.get("next_scan_at"),
+                }
+            )
+            return result
+
         departments = (
             getattr(self.orchestrator, "departments", {}) if self.orchestrator else {}
         )
         if not departments:
+            now = _utc_now()
             self._record_security_status(
                 {
+                    **current,
                     "status": "not_scanned",
                     "severity": "info",
                     "scan_type": "idle_security_check",
                     "finding_count": 0,
+                    "last_scan_at": now,
+                    "next_scan_at": self._security_next_scan_at(now),
                     "summary": "Idle security check skipped because no Security departments are registered.",
                 }
             )
@@ -302,6 +338,45 @@ class CompanyDaemon:
         if not result["departments"]:
             result["status"] = "skipped"
         return result
+
+    def _security_scan_interval_minutes(
+        self, current: dict[str, Any] | None = None
+    ) -> int:
+        current = current or {}
+        recent_patch = current.get("last_patch_completed_at")
+        if (
+            recent_patch
+            and _minutes_since(recent_patch)
+            < self.workflow.security.security_scan_backoff_minutes
+        ):
+            return self.workflow.security.security_scan_backoff_minutes
+        return self.workflow.security.security_scan_interval_minutes
+
+    def _security_next_scan_at(self, start_at: str | None = None) -> str:
+        base = _parse_utc(start_at) or datetime.now(timezone.utc)
+        return (
+            base
+            + timedelta(
+                minutes=self._security_scan_interval_minutes(
+                    self._current_security_status()
+                )
+            )
+        ).isoformat()
+
+    def _security_scan_due(self, current: dict[str, Any]) -> bool:
+        next_scan = current.get("next_scan_at")
+        if not next_scan:
+            last_scan = current.get("last_scan_at")
+            if not last_scan:
+                return True
+            parsed = _parse_utc(last_scan)
+            if parsed is None:
+                return True
+            return datetime.now(timezone.utc) >= parsed + timedelta(
+                minutes=self._security_scan_interval_minutes(current)
+            )
+        parsed_next = _parse_utc(str(next_scan))
+        return parsed_next is None or datetime.now(timezone.utc) >= parsed_next
 
     def _record_security_status(self, security: dict[str, Any]) -> None:
         memory = (
@@ -775,6 +850,25 @@ def _format_tracker_comment(proof: ProofOfWork) -> str:
         f"Failed stages: {', '.join(proof.failed_stages) or 'none'}\n"
         f"Human review required: {proof.human_review_required}"
     )
+
+
+def _parse_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _minutes_since(value: str | None) -> float:
+    parsed = _parse_utc(value)
+    if parsed is None:
+        return float("inf")
+    return max(0.0, (datetime.now(timezone.utc) - parsed).total_seconds() / 60.0)
 
 
 def _utc_now() -> str:

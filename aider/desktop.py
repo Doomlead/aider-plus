@@ -678,6 +678,48 @@ class DesktopCompanySession:
                 if isinstance(self.orchestrator.memory.data, dict)
                 else 0
             ),
+            "security_posture": (
+                (self.orchestrator.memory.data.get("security", {}) or {}).get(
+                    "posture", "⚪ Not scanned"
+                )
+                if isinstance(self.orchestrator.memory.data, dict)
+                else "⚪ Not scanned"
+            ),
+            "security_last_scan_at": (
+                (self.orchestrator.memory.data.get("security", {}) or {}).get(
+                    "last_scan_at", "never"
+                )
+                if isinstance(self.orchestrator.memory.data, dict)
+                else "never"
+            ),
+            "security_next_scan_at": (
+                (self.orchestrator.memory.data.get("security", {}) or {}).get(
+                    "next_scan_at", "unscheduled"
+                )
+                if isinstance(self.orchestrator.memory.data, dict)
+                else "unscheduled"
+            ),
+            "security_open_critical": (
+                (self.orchestrator.memory.data.get("security", {}) or {}).get(
+                    "open_critical_count", 0
+                )
+                if isinstance(self.orchestrator.memory.data, dict)
+                else 0
+            ),
+            "security_open_high": (
+                (self.orchestrator.memory.data.get("security", {}) or {}).get(
+                    "open_high_count", 0
+                )
+                if isinstance(self.orchestrator.memory.data, dict)
+                else 0
+            ),
+            "security_recent_patches": (
+                (self.orchestrator.memory.data.get("security", {}) or {}).get(
+                    "recent_patches_applied", []
+                )
+                if isinstance(self.orchestrator.memory.data, dict)
+                else []
+            ),
             "last_build": last_build,
             "last_build_status": last_build.get("status", "not run"),
             "last_build_artifact": last_build.get("artifact") or "n/a",
@@ -2049,7 +2091,22 @@ class AiderPlusDesktop:
                     f"Delivery status: {company_label(overview['delivery_status'])}",
                     f"Delivery completion: {overview.get('delivery_completion', 0)}%",
                     f"Delivery next milestone: {overview.get('delivery_next_milestone', 'TBD')}",
-                    f"Security status: {str(overview.get('security_status', 'not_scanned')).upper()} ({overview.get('security_severity', 'info')}, {overview.get('security_findings', 0)} findings)",
+                    "Security Status Card:",
+                    f"  Overall posture: {overview.get('security_posture', '⚪ Not scanned')}",
+                    f"  Last scan: {overview.get('security_last_scan_at', 'never')}",
+                    f"  Next scheduled scan: {overview.get('security_next_scan_at', 'unscheduled')}",
+                    f"  Open critical/high findings: {overview.get('security_open_critical', 0)}/{overview.get('security_open_high', 0)}",
+                    "  Recent patches applied: "
+                    + (
+                        ", ".join(
+                            str(patch.get("finding_id") or patch.get("task_id"))
+                            for patch in (
+                                overview.get("security_recent_patches") or []
+                            )[-5:]
+                        )
+                        if overview.get("security_recent_patches")
+                        else "none recorded"
+                    ),
                     "Delivery critical blockers: "
                     + (
                         ", ".join(overview.get("delivery_critical_blockers") or [])

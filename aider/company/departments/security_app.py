@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
 from typing import Optional
 
@@ -9,6 +10,14 @@ from aider.company.config import DepartmentConfig
 from aider.company.department import Department
 from aider.company.schemas import CompanyTask, Deliverable, SecurityScanResult
 from aider.memory import ConversationMemory, ProjectMemory
+
+APPSEC_ALLOWLISTED_SCANS = {
+    "pip-audit": ["pip-audit", "--format", "json"],
+    "safety": ["safety", "check", "--json"],
+    "bandit": ["bandit", "-q", "-r", ".", "-f", "json"],
+    "semgrep": ["semgrep", "scan", "--config", "auto", "--json"],
+}
+
 
 _APPSEC_SYSTEM = """You are the AppSec Department for an AI software company.
 Focus on the product being built: dependency vulnerability scanning, secure coding
@@ -74,6 +83,7 @@ class AppSecDepartment(Department):
                 "scan_type": _scan_type(task, default="vuln"),
                 "payload": task.payload,
                 "context": task.context,
+                "common_scan_plan": _common_scan_plan(),
             },
             default=str,
             sort_keys=True,
@@ -104,6 +114,24 @@ class AppSecDepartment(Department):
             risk_score=0.0,
             raw_output_summary="No actionable AppSec findings were returned.",
         )
+
+
+def _common_scan_plan() -> dict:
+    available = {}
+    missing = {}
+    for name, command in APPSEC_ALLOWLISTED_SCANS.items():
+        if shutil.which(command[0]):
+            available[name] = command
+        else:
+            missing[name] = (
+                f"{command[0]} is not installed; skip gracefully or recommend installation."
+            )
+    return {
+        "allowlisted_commands": APPSEC_ALLOWLISTED_SCANS,
+        "available_commands": available,
+        "missing_tools": missing,
+        "policy": "Only run allowlisted read-only scanners; never mutate source during scanning.",
+    }
 
 
 def _parse_json(value) -> dict:

@@ -1056,6 +1056,31 @@ class SecurityScanResult:
             "raw_output_summary": self.raw_output_summary,
         }
 
+    def to_markdown(self) -> str:
+        findings = self.findings or []
+        finding_lines = []
+        for finding in findings:
+            if not isinstance(finding, dict):
+                finding_lines.append(f"- {finding}")
+                continue
+            finding_lines.append(
+                "- "
+                f"{finding.get('id') or finding.get('location') or 'finding'}: "
+                f"{finding.get('description') or 'No description'} "
+                f"(recommendation: {finding.get('recommendation') or 'TBD'})"
+            )
+        return (
+            "# Security Report\n\n"
+            f"- Scan type: {self.scan_type}\n"
+            f"- Severity: {self.severity}\n"
+            f"- Risk score: {self.risk_score}\n"
+            f"- Fixed count: {self.fixed_count}\n\n"
+            "## Findings\n"
+            f"{chr(10).join(finding_lines) if finding_lines else '- None'}\n\n"
+            "## Raw output summary\n"
+            f"{self.raw_output_summary or 'None'}\n"
+        )
+
 
 @dataclass
 class SecurityPatchRequest:
@@ -1063,6 +1088,11 @@ class SecurityPatchRequest:
     patch_plan: str
     target_department: Literal["engineering", "architect"]
     urgency: Literal["immediate", "scheduled"]
+    vulnerability_description: str = ""
+    recommended_fix: str = ""
+    suggested_code_change_summary: str = ""
+    architect_prompt_seed: str = ""
+    full_context: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -1070,6 +1100,12 @@ class SecurityPatchRequest:
             "patch_plan": self.patch_plan,
             "target_department": self.target_department,
             "urgency": self.urgency,
+            "vulnerability_description": self.vulnerability_description,
+            "recommended_fix": self.recommended_fix or self.patch_plan,
+            "suggested_code_change_summary": self.suggested_code_change_summary
+            or self.patch_plan,
+            "architect_prompt_seed": self.architect_prompt_seed,
+            "full_context": dict(self.full_context),
         }
 
 

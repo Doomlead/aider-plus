@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Dict, List, Optional, Union
 
 from aider.memory import ProjectMemory
@@ -259,6 +260,7 @@ class CompanyOrchestrator:
             },
         )
         self._record_token_usage(d)
+        self._record_security_patch_completion(d)
         await self._emit(d)
 
         if await self._route_security_scan_result(d):
@@ -285,14 +287,45 @@ class CompanyOrchestrator:
             if severity == "critical"
             else "yellow" if severity in {"high", "medium"} else "green"
         )
+        previous = (
+            self.memory.data.get("security", {})
+            if isinstance(self.memory.data, dict)
+            else {}
+        )
+        findings = result.get("findings") or []
+        now = _utc_now()
+        trend = (
+            list(previous.get("security_posture_trend") or [])
+            if isinstance(previous, dict)
+            else []
+        )
+        trend.append(
+            {
+                "at": now,
+                "status": status,
+                "severity": severity,
+                "risk_score": result.get("risk_score", 0.0),
+            }
+        )
         latest = {
+            **(previous if isinstance(previous, dict) else {}),
             "status": status,
+            "posture": _posture_label(status),
             "severity": severity,
             "department": d.department,
             "task_id": d.task_id,
             "scan_type": result.get("scan_type"),
-            "finding_count": len(result.get("findings") or []),
+            "finding_count": len(findings),
+            "open_critical_count": _count_findings(
+                findings, {"critical"}, fallback_severity=severity
+            ),
+            "open_high_count": _count_findings(
+                findings, {"high"}, fallback_severity=severity
+            ),
             "result": result,
+            "last_scan_at": now,
+            "next_scan_at": _next_security_scan_at(previous, now),
+            "security_posture_trend": trend[-20:],
         }
         self.memory.data["security"] = latest
         with contextlib.suppress(Exception):
@@ -320,16 +353,30 @@ class CompanyOrchestrator:
                 or finding.get("finding_id")
                 or f"{d.task_id}:finding-{index}"
             )
+            recommended_fix = str(
+                finding.get("recommendation")
+                or "Investigate the critical security finding, design a patch, implement it, and verify with regression tests."
+            )
+            prompt_seed = _security_patch_prompt_seed(result, finding, recommended_fix)
             patch_request = SecurityPatchRequest(
                 finding_id=finding_id,
-                patch_plan=str(
-                    finding.get("recommendation")
-                    or "Investigate the critical security finding, design a patch, implement it, and verify with regression tests."
-                ),
-                target_department="architect",
+                patch_plan=recommended_fix,
+                target_department="engineering",
                 urgency="immediate",
+                vulnerability_description=str(
+                    finding.get("description")
+                    or result.get("raw_output_summary")
+                    or "Critical security finding"
+                ),
+                recommended_fix=recommended_fix,
+                suggested_code_change_summary=str(
+                    finding.get("suggested_code_change_summary") or recommended_fix
+                ),
+                architect_prompt_seed=prompt_seed,
+                full_context={"security_scan_result": result, "finding": finding},
             )
-            target = "architect" if "architect" in self.departments else "engineering"
+            target = "engineering"
+            patch_request.target_department = "engineering"
             if target not in self.departments:
                 continue
             context = dict(d.metadata.get("context", {}))
@@ -338,8 +385,16 @@ class CompanyOrchestrator:
                     "security_scan_result": result,
                     "security_patch_request": patch_request.to_dict(),
                     "security_source_department": d.department,
+                    "recommended_fix": recommended_fix,
+                    "architect_prompt_seed": prompt_seed,
                 }
             )
+            self.memory.data.setdefault("security", latest)["patch_in_progress"] = True
+            self.memory.data["security"].setdefault("open_patch_requests", []).append(
+                patch_request.to_dict()
+            )
+            with contextlib.suppress(Exception):
+                self.memory.persist()
             await self.submit(
                 CompanyTask(
                     task_id=f"{d.task_id}:security-patch:{index}",
@@ -350,13 +405,55 @@ class CompanyOrchestrator:
                         "security_scan_result": result,
                         "finding": finding,
                         "patch_request": patch_request.to_dict(),
-                        "instruction": "Critical security finding: produce an immediate patch plan and route implementation to Engineering.",
+                        "instruction": prompt_seed,
                     },
                     blocking=False,
                     context=context,
                 )
             )
         return True
+
+    def _record_security_patch_completion(self, d: Deliverable) -> None:
+        context = d.metadata.get("context") if isinstance(d.metadata, dict) else None
+        if not isinstance(context, dict) or not context.get("security_patch_request"):
+            return
+        if d.artifact_type == "security_patch_request":
+            return
+        security = (
+            self.memory.data.get("security", {})
+            if isinstance(self.memory.data, dict)
+            else {}
+        )
+        if not isinstance(security, dict):
+            return
+        patch = context.get("security_patch_request") or {}
+        entry = {
+            "task_id": d.task_id,
+            "department": d.department,
+            "status": d.status,
+            "finding_id": patch.get("finding_id") if isinstance(patch, dict) else None,
+            "completed_at": _utc_now(),
+        }
+        recent = list(security.get("recent_patches_applied") or [])
+        recent.append(entry)
+        security["recent_patches_applied"] = recent[-10:]
+        if isinstance(patch, dict) and patch.get("finding_id"):
+            security["open_patch_requests"] = [
+                request
+                for request in security.get("open_patch_requests", [])
+                if not (
+                    isinstance(request, dict)
+                    and request.get("finding_id") == patch.get("finding_id")
+                )
+            ]
+        security["last_patch_completed_at"] = entry["completed_at"]
+        security["patch_in_progress"] = False
+        security["next_scan_at"] = _next_security_scan_at(
+            security, entry["completed_at"], after_patch=True
+        )
+        self.memory.data["security"] = security
+        with contextlib.suppress(Exception):
+            self.memory.persist()
 
     async def _route_project_state(self, d: Deliverable) -> bool:
         project = self.active_project
@@ -1750,3 +1847,60 @@ class CompanyOrchestrator:
             *[dept.run_loop() for dept in self.departments.values()],
             return_exceptions=True,
         )
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _next_security_scan_at(
+    previous: dict | None, start_at: str, *, after_patch: bool = False
+) -> str:
+    interval = 240 if after_patch else 60
+    if isinstance(previous, dict):
+        interval = int(
+            previous.get(
+                "security_scan_backoff_minutes"
+                if after_patch
+                else "security_scan_interval_minutes"
+            )
+            or previous.get("scan_interval_minutes")
+            or interval
+        )
+    return (
+        datetime.fromisoformat(start_at) + timedelta(minutes=max(1, interval))
+    ).isoformat()
+
+
+def _posture_label(status: str) -> str:
+    return {"green": "🟢 Green", "yellow": "🟡 At Risk", "red": "🔴 Critical"}.get(
+        status, "⚪ Not scanned"
+    )
+
+
+def _count_findings(
+    findings: list, severities: set[str], *, fallback_severity: str
+) -> int:
+    count = 0
+    for finding in findings:
+        severity = str(
+            finding.get("severity", fallback_severity)
+            if isinstance(finding, dict)
+            else fallback_severity
+        ).lower()
+        if severity in severities:
+            count += 1
+    return count
+
+
+def _security_patch_prompt_seed(
+    result: dict, finding: dict, recommended_fix: str
+) -> str:
+    return (
+        "Critical security finding: create and implement a high-confidence patch. "
+        f"Vulnerability: {finding.get('description') or result.get('raw_output_summary') or 'critical finding'}. "
+        f"Location: {finding.get('location') or 'unknown'}. "
+        f"Recommended fix: {recommended_fix}. "
+        "Preserve existing behavior, add regression coverage where possible, and report verification steps. "
+        "If routed through Architect, produce a concrete Engineering-ready implementation plan with full scan context."
+    )

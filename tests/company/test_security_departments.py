@@ -55,6 +55,7 @@ def test_security_schema_round_trips():
 
     assert result.to_dict()["severity"] == "critical"
     assert result.to_dict()["findings"][0]["location"] == "mcp"
+    assert "# Security Report" in result.to_markdown()
     assert patch.to_dict()["urgency"] == "immediate"
 
 
@@ -112,3 +113,49 @@ def test_coo_routes_run_security_scan_to_appsec(tmp_path):
 
     assert decision.action == "delegate_company_task"
     assert decision.company_target == "security_app"
+
+
+def test_security_patch_request_carries_full_patch_context():
+    patch = SecurityPatchRequest(
+        finding_id="sec-2",
+        patch_plan="Validate tool policy before execution.",
+        target_department="engineering",
+        urgency="immediate",
+        vulnerability_description="Unsafe tool execution path.",
+        recommended_fix="Add policy validation before dispatch.",
+        suggested_code_change_summary="Guard daemon tool dispatch with the approval policy.",
+        architect_prompt_seed="Create an Engineering-ready patch plan with regression tests.",
+        full_context={"finding": {"location": "daemon"}},
+    )
+
+    data = patch.to_dict()
+
+    assert data["vulnerability_description"] == "Unsafe tool execution path."
+    assert data["recommended_fix"] == "Add policy validation before dispatch."
+    assert data["full_context"]["finding"]["location"] == "daemon"
+
+
+def test_orchestrator_marks_security_patch_completion_and_backoff(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    orchestrator = CompanyOrchestrator(memory)
+    memory.data["security"] = {
+        "status": "red",
+        "patch_in_progress": True,
+        "security_scan_backoff_minutes": 120,
+    }
+
+    deliverable = Deliverable(
+        task_id="patch-1",
+        department="engineering",
+        artifact_type="code",
+        payload={"summary": "patched"},
+        status="success",
+        metadata={"context": {"security_patch_request": {"finding_id": "finding-1"}}},
+    )
+
+    orchestrator._record_security_patch_completion(deliverable)
+
+    security = memory.data["security"]
+    assert security["patch_in_progress"] is False
+    assert security["recent_patches_applied"][-1]["finding_id"] == "finding-1"
+    assert security["next_scan_at"]

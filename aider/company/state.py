@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 
 from aider.company.audit import append_audit_event
 from aider.company.project import Project
-from aider.memory import MemoryRecord, MemoryStore, ProjectMemory
+from aider.memory import MemoryQuery, MemoryRecord, MemoryStore, ProjectMemory
 
 
 class CompanyStateManager:
@@ -63,12 +63,31 @@ class CompanyStateManager:
         return [item for item in approvals if isinstance(item, dict)]
 
     def get_playbook(self) -> dict:
+        store = MemoryStore(self._memory)
+        project_scope = f"project:{self.get_project_id()}"
+        canonical = store.query_records(MemoryQuery(kind="playbook", scope=project_scope))
+        if canonical:
+            grouped: dict[str, list[tuple[int, Any]]] = {}
+            for record in canonical:
+                content = record.content if isinstance(record.content, dict) else {}
+                category = content.get("category")
+                if not isinstance(category, str):
+                    continue
+                index_value = content.get("index", 0)
+                try:
+                    index = int(index_value)
+                except (TypeError, ValueError):
+                    index = 0
+                grouped.setdefault(category, []).append((index, content.get("entry")))
+            return {
+                category: [entry for _, entry in sorted(entries, key=lambda item: item[0])]
+                for category, entries in grouped.items()
+            }
         playbook = self._memory.data.get("playbook", {})
         return playbook if isinstance(playbook, dict) else {}
 
     def save_playbook(self, playbook: dict) -> None:
         previous_playbook = self.get_playbook()
-        self._memory.update({"playbook": playbook})
         self._append_playbook_memory_records(previous_playbook, playbook)
         self._memory.persist()
 
@@ -373,6 +392,28 @@ class CompanyStateManager:
         return round(prompt_cost + completion_cost, 6)
 
     def get_audit_log(self) -> List[dict]:
+        store = MemoryStore(self._memory)
+        project_scope = f"project:{self.get_project_id()}"
+        records = store.query_records(
+            MemoryQuery(kind="audit_summary", scope=project_scope)
+        )
+        if records:
+            audit_rows = []
+            for record in records:
+                content = record.content if isinstance(record.content, dict) else {}
+                metadata = content.get("metadata", {})
+                audit_rows.append(
+                    {
+                        "event_id": content.get("event_id"),
+                        "timestamp": content.get("timestamp"),
+                        "project_id": record.project_id,
+                        "department": record.department,
+                        "event_type": content.get("event_type"),
+                        "payload_summary": content.get("payload_summary"),
+                        "metadata": metadata if isinstance(metadata, dict) else {},
+                    }
+                )
+            return audit_rows
         records = self._memory.data.get("audit_log", [])
         if not isinstance(records, list):
             return []

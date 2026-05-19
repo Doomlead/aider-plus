@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import dataclass, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -41,10 +41,10 @@ def append_audit_event(
     payload: Any,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> CompanyEventRecord:
-    """Append a company event record to project_memory['audit_log'].
+    """Append a company event record to canonical memory records.
 
-    This function is the sole write path for audit data; callers should not mutate
-    the audit log directly.
+    Legacy ``project_memory['audit_log']`` is intentionally not updated during
+    normal operation. Use export/snapshot paths for compatibility if needed.
     """
     record = CompanyEventRecord.create(
         project_id=project_id,
@@ -53,11 +53,6 @@ def append_audit_event(
         payload=payload,
         metadata=metadata,
     )
-    audit_log = project_memory.data.get("audit_log", [])
-    if not isinstance(audit_log, list):
-        audit_log = []
-    audit_log.append(asdict(record))
-    project_memory.update({"audit_log": audit_log})
     MemoryStore(project_memory).append_record(
         MemoryRecord(
             kind="audit_summary",

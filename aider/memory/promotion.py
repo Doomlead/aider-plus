@@ -54,6 +54,8 @@ def compact_near_duplicates(
         summary_metadata = {
             "compacted_from": original_ids,
             "related_records": original_ids,
+            "derived_from": original_ids,
+            "co_occurs_with": original_ids,
             "supersedes": original_ids,
             "compacted_at": utc_now_iso(),
             "compaction_batch_size": len(ordered),
@@ -86,6 +88,8 @@ def compact_near_duplicates(
             metadata["archived_at"] = utc_now_iso()
             metadata["archived_by_compaction"] = summary_record.id
             metadata["related_records"] = sorted({*(metadata.get("related_records") or []), summary_record.id})
+            metadata["derived_from"] = sorted({*(metadata.get("derived_from") or []), summary_record.id})
+            metadata["co_occurs_with"] = sorted({*(metadata.get("co_occurs_with") or []), *original_ids})
             item["metadata"] = metadata
         changed += len(ordered)
 

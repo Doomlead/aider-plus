@@ -814,7 +814,7 @@ Important files:
 - `aider/company/skills.py` — role-scoped skill retrieval, usage tracking, and proposal approval.
 - `aider/company/self_improvement.py` — skill proposal generation from successful patterns.
 - `aider/company/surface_messages.py` — shared lifecycle/status/approval/audit message formatting.
-- `aider/memory/` — conversation memory, project memory, retrieval, consolidation, and pattern extraction.
+- `aider/memory/` — conversation memory, project memory, retrieval, consolidation, pattern extraction, and lightweight relation-graph ranking signals (`co_occurs_with`, `handoff_from`/`handoff_to`, `derived_from`).
 - `aider/mcp/` — MCP configuration, manager, adapters, and server helpers.
 - `aider/gui.py` — Streamlit browser GUI.
 - `aider/desktop.py` — Tkinter desktop GUI.

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional
 
 from .index import LocalTFIDFIndex, MemoryIndex
 from .metrics import summarize_memory_metrics
 from .project import ProjectMemory
-from .records import MemoryQuery, MemoryRecord, ensure_record
+from .records import MemoryQuery, MemoryRecord, ensure_record, utc_now_iso
 from .scopes import scope_matches
 from .visibility import filter_visible, validate_visibility
 
@@ -21,7 +23,7 @@ class MemoryStore:
 
     def append_record(self, record: MemoryRecord | Dict[str, Any]) -> MemoryRecord:
         memory_record = ensure_record(record)
-        memory_record.visibility = validate_visibility(memory_record.visibility)
+        memory_record.validate(allow_legacy_visibility=False)
         memory = self._memory_namespace()
         records = memory.setdefault("records", [])
         records.append(memory_record.to_dict())
@@ -46,33 +48,45 @@ class MemoryStore:
             return records[: max(0, int(memory_query.limit))]
         return records
 
-
     def rebuild_index(self) -> None:
-        self.index.rebuild([MemoryRecord.from_dict(item) for item in self._record_dicts()])
+        self.index.rebuild(
+            [MemoryRecord.from_dict(item) for item in self._record_dicts()]
+        )
 
     def add_to_index(self, record: MemoryRecord) -> None:
         self.index.add(record)
+
     def get_record(self, record_id: str) -> Optional[MemoryRecord]:
         for item in self._record_dicts():
             if item.get("id") == record_id or item.get("record_id") == record_id:
                 return MemoryRecord.from_dict(item)
         return None
 
-    def reinforce_record(self, record_id: str, delta: int = 1) -> Optional[dict[str, Any]]:
+    def reinforce_record(
+        self, record_id: str, delta: int = 1
+    ) -> Optional[dict[str, Any]]:
         for item in self._record_dicts():
             item_id = item.get("id") or item.get("record_id")
             if item_id != record_id:
                 continue
-            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-            metadata["reinforcement_count"] = int(metadata.get("reinforcement_count") or 0) + max(0, int(delta))
-            metadata["reinforcement_signal"] = int(metadata.get("reinforcement_signal") or 0) + int(delta)
+            metadata = (
+                item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            )
+            metadata["reinforcement_count"] = int(
+                metadata.get("reinforcement_count") or 0
+            ) + max(0, int(delta))
+            metadata["reinforcement_signal"] = int(
+                metadata.get("reinforcement_signal") or 0
+            ) + int(delta)
             item["metadata"] = metadata
             self.project_memory.update({"memory": self._memory_namespace()})
             self.project_memory.persist()
             return dict(item)
         return None
 
-    def update_record_metadata(self, record_id: str, metadata: Dict[str, Any]) -> Optional[dict[str, Any]]:
+    def update_record_metadata(
+        self, record_id: str, metadata: Dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
         for item in self._record_dicts():
             item_id = item.get("id") or item.get("record_id")
             if item_id != record_id:
@@ -102,7 +116,9 @@ class MemoryStore:
                 continue
             if dt >= cutoff:
                 continue
-            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            metadata = (
+                item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            )
             signal = int(metadata.get("reinforcement_signal") or 0)
             if signal <= -5:
                 continue
@@ -143,7 +159,9 @@ class MemoryStore:
             self.rebuild_index()
         return pruned
 
-    def enforce_limits(self, max_records_per_scope: int = 5000, max_total: int = 50000) -> int:
+    def enforce_limits(
+        self, max_records_per_scope: int = 5000, max_total: int = 50000
+    ) -> int:
         removed = 0
         records = list(self._record_dicts())
         if len(records) > max_total:
@@ -160,7 +178,9 @@ class MemoryStore:
                 scoped = scoped[-max_records_per_scope:]
             trimmed.extend(scoped)
         if removed:
-            trimmed.sort(key=lambda r: str(r.get("updated_at") or r.get("created_at") or ""))
+            trimmed.sort(
+                key=lambda r: str(r.get("updated_at") or r.get("created_at") or "")
+            )
             memory = self._memory_namespace()
             memory["records"] = trimmed
             self.project_memory.update({"memory": memory})
@@ -168,7 +188,9 @@ class MemoryStore:
             self.rebuild_index()
         return removed
 
-    def compact(self, threshold_days: int = 120, min_signal: int = -2, *, dry_run: bool = True) -> int:
+    def compact(
+        self, threshold_days: int = 120, min_signal: int = -2, *, dry_run: bool = True
+    ) -> int:
         from datetime import datetime, timedelta, timezone
 
         now = datetime.now(timezone.utc)
@@ -182,7 +204,9 @@ class MemoryStore:
                 dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
             except ValueError:
                 continue
-            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            metadata = (
+                item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            )
             signal = int(metadata.get("reinforcement_signal") or 0)
             if dt < cutoff and signal <= min_signal:
                 doomed.append(str(item.get("id") or item.get("record_id") or ""))
@@ -191,7 +215,11 @@ class MemoryStore:
         return self._drop_records(doomed)
 
     def repair(self, *, confirm: bool = False) -> dict[str, int]:
-        repaired = {"invalid_records_removed": 0}
+        repaired = {
+            "invalid_records_removed": 0,
+            "records_fixed": 0,
+            "corrupt_records_backed_up": 0,
+        }
         if not confirm:
             return repaired
 
@@ -201,16 +229,48 @@ class MemoryStore:
             raw_records = []
 
         valid: list[dict[str, Any]] = []
+        corrupt: list[Any] = []
+        changed = False
         for item in raw_records:
             if not isinstance(item, dict):
                 repaired["invalid_records_removed"] += 1
+                corrupt.append(item)
+                changed = True
                 continue
+
+            original = dict(item)
+            candidate = dict(item)
+            fixed = False
+            if not (candidate.get("id") or candidate.get("record_id")):
+                candidate["id"] = candidate["record_id"] = MemoryRecord(content=None).id
+                fixed = True
+            if not candidate.get("scope"):
+                candidate["scope"] = "project"
+                fixed = True
+            if not candidate.get("visibility"):
+                candidate["visibility"] = "project"
+                fixed = True
+            if not candidate.get("created_at"):
+                candidate["created_at"] = utc_now_iso()
+                fixed = True
+
             try:
-                record = ensure_record(item)
-                valid.append(record.to_dict())
+                record = ensure_record(candidate)
+                record.validate(allow_legacy_visibility=True)
+                serialized = record.to_dict()
+                valid.append(serialized)
+                if fixed or serialized != original:
+                    repaired["records_fixed"] += 1
+                    changed = True
             except Exception:
                 repaired["invalid_records_removed"] += 1
-        if repaired["invalid_records_removed"]:
+                corrupt.append(item)
+                changed = True
+
+        if corrupt:
+            self._write_corrupt_backup(corrupt)
+            repaired["corrupt_records_backed_up"] = len(corrupt)
+        if changed:
             memory["records"] = valid
             self.project_memory.update({"memory": memory})
             self.project_memory.persist()
@@ -220,7 +280,9 @@ class MemoryStore:
     def get_metrics(self) -> dict[str, Any]:
         memory = self._memory_namespace()
         summary = summarize_memory_metrics(memory)
-        observed = self.project_memory.data.get("observability", {}).get("memory_metrics", {})
+        observed = self.project_memory.data.get("observability", {}).get(
+            "memory_metrics", {}
+        )
         metrics = dict(observed) if isinstance(observed, dict) else {}
         metrics.update(summary)
         metrics.setdefault("recall_hit_rate", 0.0)
@@ -230,15 +292,28 @@ class MemoryStore:
         total = int(summary.get("memory_records_total", 0))
         max_total = int(metrics.get("max_total_limit", 50000))
         utilization = min(1.0, (total / max_total) if max_total > 0 else 1.0)
-        stale_ratio = (int(summary.get("stale_memory_count", 0)) / total) if total else 0.0
+        stale_ratio = (
+            (int(summary.get("stale_memory_count", 0)) / total) if total else 0.0
+        )
         recall_hit_rate = float(metrics.get("recall_hit_rate", 0.0) or 0.0)
-        score = 100.0 * (0.5 * (1.0 - utilization) + 0.3 * (1.0 - stale_ratio) + 0.2 * recall_hit_rate)
+        score = 100.0 * (
+            0.5 * (1.0 - utilization)
+            + 0.3 * (1.0 - stale_ratio)
+            + 0.2 * recall_hit_rate
+        )
         metrics["memory_health_score"] = max(0.0, min(100.0, round(score, 1)))
+        metrics["skill_evidence_coverage_pct"] = summary.get(
+            "skill_evidence_coverage_pct", 0.0
+        )
         return metrics
 
     def _drop_records(self, ids: list[str]) -> int:
         doomed = set(ids)
-        kept = [item for item in self._record_dicts() if str(item.get("id") or item.get("record_id") or "") not in doomed]
+        kept = [
+            item
+            for item in self._record_dicts()
+            if str(item.get("id") or item.get("record_id") or "") not in doomed
+        ]
         removed = len(list(self._record_dicts())) - len(kept)
         if removed:
             memory = self._memory_namespace()
@@ -247,6 +322,29 @@ class MemoryStore:
             self.project_memory.persist()
             self.rebuild_index()
         return removed
+
+    def _write_corrupt_backup(self, records: list[Any]) -> None:
+        backup_path = (
+            self.project_memory._memory_path.parent / "memory_corrupt_backup.json"
+        )
+        existing: list[Any] = []
+        if backup_path.exists():
+            try:
+                loaded = json.loads(backup_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    existing = loaded
+            except json.JSONDecodeError:
+                existing = []
+        existing.append(
+            {
+                "repaired_at": datetime.now(timezone.utc).isoformat(),
+                "records": records,
+            }
+        )
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text(
+            json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
     def _increment_metric(self, key: str, amount: int = 1) -> None:
         observability = self.project_memory.data.setdefault("observability", {})

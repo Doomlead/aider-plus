@@ -120,7 +120,6 @@ class RecallEngine:
         }
         return packet
 
-
     def _department_channel_scopes(self, department: str) -> list[str]:
         dept = str(department or "").lower().strip()
         if not dept:
@@ -133,16 +132,25 @@ class RecallEngine:
                 if dept in parts:
                     scopes.add(scope)
             elif scope.startswith("channel:"):
-                # Legacy department-pair channel scopes were encoded as
-                # channel:<department_a>:<department_b>. Keep reading them, but
-                # prefer channel_pair: for new department-to-department memory.
+                # Canonical department-pair channel scopes are encoded as
+                # channel:<department_a>:<department_b>. Keep channel_pair above
+                # only as a deprecated legacy reader path.
                 parts = [p for p in scope.split(":")[1:] if p]
                 if dept in parts:
                     scopes.add(scope)
             else:
                 continue
             metadata = record.metadata if isinstance(record.metadata, dict) else {}
-            cid = str(metadata.get("channel_id") or metadata.get("channel") or "").lower().strip()
+            cid = (
+                str(
+                    record.channel_id
+                    or metadata.get("channel_id")
+                    or metadata.get("channel")
+                    or ""
+                )
+                .lower()
+                .strip()
+            )
             if cid and dept in cid.split(":"):
                 scopes.add(f"channel:{cid}")
         return sorted(scopes)

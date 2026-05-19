@@ -353,7 +353,7 @@ Required ranking factors:
 
 ### 7.4 Channel scope naming
 
-Use `channel:<surface_id>` for records owned by one external or runtime channel, for example `channel:discord-prod`. Use `channel_pair:<department_a>:<department_b>` when the memory is specifically about a repeated department-to-department communication pattern. During the current rollout, recall also recognizes legacy department-pair channel scopes such as `channel:engineering:qa` so existing evidence remains retrievable while new code moves to the explicit `channel_pair:` form.
+Use `channel:<surface_id>` for records owned by one external or runtime channel, for example `channel:discord-prod`. Use the same canonical form for repeated department-to-department communication patterns, for example `channel:engineering:qa`. `channel_pair:<department_a>:<department_b>` is deprecated and remains a read-only legacy alias during the current rollout so existing evidence remains retrievable; remove that reader path in a future schema migration after old records have been rewritten.
 
 ### 7.5 Explanation generation
 
@@ -650,3 +650,11 @@ Performance notes:
 - `LocalTFIDFIndex` is best for smaller/local record sets and fully deterministic runs. It has near-zero setup cost but ranking recomputes per-query vectors in-memory.
 - `SQLiteFTSIndex` is a better fit as record counts grow (for example, many thousands of records) or when repeated queries dominate runtime. It pays an indexing/storage cost up front and then uses FTS ranking.
 - If SQLite FTS initialization or query execution fails, runtime degrades to `LocalTFIDFIndex` automatically so recall remains available.
+
+## Current Limitations & Future Work
+
+- Full vector embedding support is still behind the repository/index boundary; the current local-first path relies on deterministic filtering plus lightweight text ranking.
+- Decay currently adjusts salience/reinforcement signals only; it does not yet perform semantic compaction or automatic summarization of older memory clusters.
+- Cross-project promotion is intentionally conservative and still requires stronger evidence scoring before broad department or shared recall.
+- Legacy read paths remain for older visibility aliases and `channel_pair:` scopes, but new writes should use canonical visibility values and `channel:<A>:<B>` channel scopes.
+- Privacy hardening is scoped to visibility checks and metadata redaction hooks; deeper PII detection and tenant-level policy enforcement remain future work.

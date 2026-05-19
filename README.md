@@ -29,6 +29,24 @@ Useful commands:
 
 In dashboards, this is shown as a badge like `Memory Health: 92% 🟢`.
 
+
+### Memory quality regression safety net
+
+Deterministic benchmark-style tests now guard migration-equivalence and retrieval quality in:
+
+- `tests/memory/test_records.py` (ambiguity precision + legacy query parity)
+- `tests/memory/test_recall_policy.py` (reinforcement effects, decay/compaction safety, explanation completeness)
+- `tests/memory/test_promotion.py` (summary promotion/archival behavior)
+- `tests/company/test_context_memory_fabric.py` (token-budget cap behavior and deterministic retention order)
+
+Run only the memory benchmark suite:
+
+```bash
+pytest tests/memory tests/company/test_context_memory_fabric.py
+```
+
+
+
 ## Architecture Overview
 
 New contributors should start with the [First Code Tour](docs/architecture/first-code-tour.md). It walks from `aider/main.py` through the Coder, `COO assistant`, `CompanyOrchestrator`, departments, shared memory/skills/EventBus services, daemon workspaces, templates, warehouse-backed product repos, and the DevOps release path.

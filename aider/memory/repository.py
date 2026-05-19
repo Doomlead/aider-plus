@@ -328,15 +328,6 @@ class ProjectMemoryMigrator:
         for key, value in self.defaults.items():
             if key not in data:
                 data[key] = deepcopy(value)
-        playbook = data.get("playbook")
-        if not isinstance(playbook, dict):
-            playbook = {}
-            data["playbook"] = playbook
-        for key, value in self.defaults["playbook"].items():
-            if not isinstance(playbook.get(key), list):
-                playbook[key] = deepcopy(value)
-        if not isinstance(data.get("audit_log"), list):
-            data["audit_log"] = []
         memory = data.get("memory")
         if not isinstance(memory, dict):
             memory = {}

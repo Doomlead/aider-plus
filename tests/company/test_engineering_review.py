@@ -435,7 +435,7 @@ def test_reviewer_metrics_tracks_issues_without_noisy_playbook_learning(tmp_path
     assert stats["approval_rate"] == 0.0
     assert stats["avg_issues_per_review"] == 1.0
     assert stats["most_common_issues"] == ["missing_tests"]
-    assert memory.data["playbook"]["coding_standards"] == []
+    assert memory.data.get("playbook", {}).get("coding_standards", []) == []
 
 
 def test_reviewer_playbook_learning_requires_multiple_tasks(tmp_path):

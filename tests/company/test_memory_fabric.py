@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from aider.company.state import CompanyStateManager
 from aider.memory import MemoryQuery, MemoryRecord, MemoryStore, ProjectMemory
 
 
@@ -140,6 +141,38 @@ def test_memory_record_serializes_skill_evidence_block(tmp_path):
     reloaded.load()
     loaded_record = MemoryStore(reloaded).get_record(record.id)
     assert loaded_record.skill_evidence == evidence
+
+
+def test_state_dual_writes_audit_events_to_memory_records(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    state = CompanyStateManager(memory)
+    state.append_audit_event(
+        department="engineering",
+        event_type="deliverable_produced",
+        payload={"summary": "implemented feature"},
+        metadata={"task_id": "task-123", "status": "success"},
+    )
+
+    records = MemoryStore(memory).query_records(
+        MemoryQuery(kind="audit_summary", scope=f"project:{state.get_project_id()}")
+    )
+    assert len(records) == 1
+    assert records[0].channel_id == "audit_log"
+    assert records[0].thread_id == "task-123"
+    assert records[0].content["event_type"] == "deliverable_produced"
+
+
+def test_state_dual_writes_playbook_entries_to_memory_records(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    state = CompanyStateManager(memory)
+    state.save_playbook({"coding_standards": ["Always run focused pytest checks."]})
+
+    records = MemoryStore(memory).query_records(
+        MemoryQuery(kind="playbook", scope=f"project:{state.get_project_id()}")
+    )
+    assert len(records) == 1
+    assert records[0].channel_id == "playbook"
+    assert records[0].content["category"] == "coding_standards"
 
 
 import asyncio

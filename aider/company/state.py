@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 
 from aider.company.audit import append_audit_event
 from aider.company.project import Project
-from aider.memory import ProjectMemory
+from aider.memory import MemoryRecord, MemoryStore, ProjectMemory
 
 
 class CompanyStateManager:
@@ -67,8 +67,39 @@ class CompanyStateManager:
         return playbook if isinstance(playbook, dict) else {}
 
     def save_playbook(self, playbook: dict) -> None:
+        previous_playbook = self.get_playbook()
         self._memory.update({"playbook": playbook})
+        self._append_playbook_memory_records(previous_playbook, playbook)
         self._memory.persist()
+
+    def _append_playbook_memory_records(
+        self, previous_playbook: dict, new_playbook: dict
+    ) -> None:
+        store = MemoryStore(self._memory)
+        for category, new_entries in new_playbook.items():
+            if not isinstance(new_entries, list):
+                continue
+            old_entries = previous_playbook.get(category, [])
+            old_len = len(old_entries) if isinstance(old_entries, list) else 0
+            if old_len >= len(new_entries):
+                continue
+            for index, entry in enumerate(new_entries[old_len:], start=old_len):
+                kind = "playbook" if category == "coding_standards" else "pattern"
+                store.append_record(
+                    MemoryRecord(
+                        kind=kind,
+                        scope=f"project:{self.get_project_id()}",
+                        visibility="project",
+                        project_id=self.get_project_id(),
+                        department="orchestrator",
+                        channel_id="playbook",
+                        content={
+                            "category": category,
+                            "entry": entry,
+                            "index": index,
+                        },
+                    )
+                )
 
     def get_observability(self) -> dict:
         observability = self._memory.data.get("observability", {})

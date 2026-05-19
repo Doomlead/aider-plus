@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
+from aider.memory import MemoryRecord, MemoryStore
+
 
 @dataclass(frozen=True)
 class CompanyEventRecord:
@@ -56,6 +58,24 @@ def append_audit_event(
         audit_log = []
     audit_log.append(asdict(record))
     project_memory.update({"audit_log": audit_log})
+    MemoryStore(project_memory).append_record(
+        MemoryRecord(
+            kind="audit_summary",
+            scope=f"project:{project_id}",
+            visibility="project",
+            project_id=str(project_id),
+            department=str(department or "orchestrator"),
+            channel_id="audit_log",
+            thread_id=(metadata or {}).get("task_id") if isinstance(metadata, dict) else None,
+            content={
+                "event_id": record.event_id,
+                "event_type": record.event_type,
+                "payload_summary": record.payload_summary,
+                "metadata": record.metadata,
+                "timestamp": record.timestamp,
+            },
+        )
+    )
     project_memory.persist()
     return record
 

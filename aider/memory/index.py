@@ -3,8 +3,10 @@ from __future__ import annotations
 import sqlite3
 from abc import ABC, abstractmethod
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from .policy import RankingPolicy
 from .records import MemoryQuery, MemoryRecord
 from .retrieval import MemoryRetriever
 
@@ -42,8 +44,9 @@ class MemoryIndex(ABC):
 
 
 class LocalTFIDFIndex(MemoryIndex, MemoryBackendAdapter):
-    def __init__(self, *, text_builder=None):
+    def __init__(self, *, text_builder=None, policy: RankingPolicy | None = None):
         self._text_builder = text_builder or self._default_text
+        self._policy = policy or RankingPolicy()
 
     def name(self) -> str:
         return "local_tfidf"
@@ -60,9 +63,20 @@ class LocalTFIDFIndex(MemoryIndex, MemoryBackendAdapter):
         texts = [self._text_builder(record) for record in records]
         scored = MemoryRetriever(texts).score(query.text)
         score_map: dict[str, float] = {text: score for text, score in scored}
+
+        def total_score(record: MemoryRecord) -> float:
+            relevance = score_map.get(self._text_builder(record), 0.0)
+            reinforcement = float(record.reinforcement_score or 0.0)
+            recency = self._recency_boost(record.last_used_at)
+            return (
+                relevance
+                + self._policy.reinforcement_weight * reinforcement
+                + self._policy.recency_weight * recency
+            )
+
         return sorted(
             records,
-            key=lambda record: score_map.get(self._text_builder(record), 0.0),
+            key=total_score,
             reverse=True,
         )
 
@@ -76,6 +90,19 @@ class LocalTFIDFIndex(MemoryIndex, MemoryBackendAdapter):
             for part in (record.kind, record.content, record.tags, record.metadata)
             if part
         )[:2000]
+
+    @staticmethod
+    def _recency_boost(last_used_at: str | None) -> float:
+        if not last_used_at:
+            return 0.0
+        try:
+            used = datetime.fromisoformat(str(last_used_at).replace("Z", "+00:00"))
+        except ValueError:
+            return 0.0
+        age_days = max(
+            0.0, (datetime.now(timezone.utc) - used).total_seconds() / 86400.0
+        )
+        return 1.0 / (1.0 + age_days / 30.0)
 
 
 class SQLiteFTSIndex(MemoryIndex, MemoryBackendAdapter):

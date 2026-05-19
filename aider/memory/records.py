@@ -40,6 +40,12 @@ class MemoryRecord:
     tags: list[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     skill_evidence: Optional[Dict[str, Any]] = None
+    usage_count: int = 0
+    successful_uses: int = 0
+    failed_uses: int = 0
+    last_used_at: Optional[str] = None
+    acceptance_rate: Optional[float] = None
+    reinforcement_score: Optional[float] = None
 
     def __post_init__(self) -> None:
         self.scope = validate_scope(self.scope)
@@ -51,6 +57,18 @@ class MemoryRecord:
             self.metadata.get("skill_evidence"), dict
         ):
             self.skill_evidence = dict(self.metadata.pop("skill_evidence"))
+        self.usage_count = int(self.usage_count or self.metadata.pop("usage_count", 0))
+        self.successful_uses = int(
+            self.successful_uses or self.metadata.pop("successful_uses", 0)
+        )
+        self.failed_uses = int(self.failed_uses or self.metadata.pop("failed_uses", 0))
+        self.last_used_at = self.last_used_at or self.metadata.pop("last_used_at", None)
+        if self.acceptance_rate is None:
+            rate = self.metadata.pop("acceptance_rate", None)
+            self.acceptance_rate = float(rate) if rate is not None else None
+        if self.reinforcement_score is None:
+            score = self.metadata.pop("reinforcement_score", None)
+            self.reinforcement_score = float(score) if score is not None else None
 
     def validate(self, *, allow_legacy_visibility: bool = True) -> None:
         """Validate required canonical fields before a record is persisted."""
@@ -69,6 +87,8 @@ class MemoryRecord:
             self.skill_evidence, dict
         ):
             raise ValueError("memory record skill_evidence must be a dictionary")
+        if self.usage_count < 0 or self.successful_uses < 0 or self.failed_uses < 0:
+            raise ValueError("memory record usage counters must be non-negative")
 
     @property
     def id(self) -> str:
@@ -97,6 +117,15 @@ class MemoryRecord:
                 payload[key] = value
         if self.skill_evidence is not None:
             payload["skill_evidence"] = dict(self.skill_evidence)
+        payload["usage_count"] = int(self.usage_count)
+        payload["successful_uses"] = int(self.successful_uses)
+        payload["failed_uses"] = int(self.failed_uses)
+        if self.last_used_at is not None:
+            payload["last_used_at"] = self.last_used_at
+        if self.acceptance_rate is not None:
+            payload["acceptance_rate"] = float(self.acceptance_rate)
+        if self.reinforcement_score is not None:
+            payload["reinforcement_score"] = float(self.reinforcement_score)
         return payload
 
     @classmethod
@@ -142,6 +171,33 @@ class MemoryRecord:
             tags=list(data.get("tags") or custom_metadata.pop("tags", []) or []),
             metadata=custom_metadata,
             skill_evidence=skill_evidence,
+            usage_count=int(
+                data["usage_count"]
+                if "usage_count" in data
+                else custom_metadata.pop("usage_count", 0)
+            ),
+            successful_uses=int(
+                data["successful_uses"]
+                if "successful_uses" in data
+                else custom_metadata.pop("successful_uses", 0)
+            ),
+            failed_uses=int(
+                data["failed_uses"]
+                if "failed_uses" in data
+                else custom_metadata.pop("failed_uses", 0)
+            ),
+            last_used_at=data.get("last_used_at")
+            or custom_metadata.pop("last_used_at", None),
+            acceptance_rate=(
+                data["acceptance_rate"]
+                if "acceptance_rate" in data
+                else custom_metadata.pop("acceptance_rate", None)
+            ),
+            reinforcement_score=(
+                data["reinforcement_score"]
+                if "reinforcement_score" in data
+                else custom_metadata.pop("reinforcement_score", None)
+            ),
         )
 
 

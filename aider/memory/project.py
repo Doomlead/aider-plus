@@ -17,6 +17,11 @@ class ProjectMemory:
             "threads": [],
             "migration_log": [],
             "corrupt_backup": [],
+            "policy": {
+                "reinforcement_weight": 0.3,
+                "recency_weight": 0.2,
+                "min_usage_for_acceptance": 1,
+            },
         },
         "observability": {
             "turns_per_phase": {},
@@ -66,3 +71,8 @@ class ProjectMemory:
 
     def _ensure_schema(self) -> None:
         self._data = self.repository.migrate(self._data)
+
+    def memory_policy(self) -> Dict[str, Any]:
+        memory = self._data.setdefault("memory", {})
+        policy = memory.setdefault("policy", {})
+        return dict(policy)

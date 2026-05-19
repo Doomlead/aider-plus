@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
 
@@ -11,7 +10,6 @@ from aider.memory.store import MemoryStore
 
 _MAX_RECALL_ITEMS = 5
 _MIN_RECALL_SCORE = 0.05
-_LEGACY_READER_FALLBACK_ENV = "AIDER_MEMORY_CANONICAL_READER_FALLBACK"
 
 
 @dataclass
@@ -55,7 +53,6 @@ class RecallEngine:
         channel_id = self._first_value(context, task.payload, "channel_id", "channel")
         user_id = self._first_value(context, task.payload, "user_id", "user", "author")
 
-        used_legacy_fallback = False
         packet = RecallPacket()
         packet.thread = (
             self._recall_scope(
@@ -67,10 +64,7 @@ class RecallEngine:
             if thread_id
             else []
         )
-        related_channel_scopes, used_legacy_channel_fallback = self._department_channel_scopes(
-            str(task.target)
-        )
-        used_legacy_fallback = used_legacy_fallback or used_legacy_channel_fallback
+        related_channel_scopes = self._department_channel_scopes(str(task.target))
         packet.department_private = self._recall_many_scopes(
             scopes=(department_scope, role_scope, *related_channel_scopes),
             requester_scope=department_scope,
@@ -124,24 +118,17 @@ class RecallEngine:
             for item in items
             if item.get("id") or item.get("record_id")
         }
-        self._record_recall_read_path(canonical_only=not used_legacy_fallback)
+        self._record_recall_read_path(canonical_only=True)
         return packet
 
-    def _department_channel_scopes(self, department: str) -> tuple[list[str], bool]:
+    def _department_channel_scopes(self, department: str) -> list[str]:
         dept = str(department or "").lower().strip()
         if not dept:
-            return [], False
+            return []
         scopes: set[str] = set()
-        used_legacy_fallback = False
         for record in self.store.query_records():
             scope = str(record.scope or "")
-            if scope.startswith("channel_pair:"):
-                if self._legacy_fallback_enabled():
-                    parts = [p for p in scope.split(":")[1:] if p]
-                    if dept in parts:
-                        scopes.add(scope)
-                        used_legacy_fallback = True
-            elif scope.startswith("channel:"):
+            if scope.startswith("channel:"):
                 # Canonical department-pair channel scopes are encoded as
                 # channel:<department_a>:<department_b>. Keep channel_pair above
                 # only as a deprecated legacy reader path.
@@ -163,7 +150,7 @@ class RecallEngine:
             )
             if cid and dept in cid.split(":"):
                 scopes.add(f"channel:{cid}")
-        return sorted(scopes), used_legacy_fallback
+        return sorted(scopes)
 
     def _recall_many_scopes(
         self,
@@ -214,14 +201,6 @@ class RecallEngine:
             if record.scope == scope or record.scope.startswith(f"{scope}:")
         ]
 
-    @staticmethod
-    def _legacy_fallback_enabled() -> bool:
-        return str(os.getenv(_LEGACY_READER_FALLBACK_ENV, "")).lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
 
     def _record_recall_read_path(self, *, canonical_only: bool) -> None:
         observability = self.store.project_memory.data.setdefault("observability", {})

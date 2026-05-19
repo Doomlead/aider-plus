@@ -36,10 +36,7 @@ def _task() -> CompanyTask:
     )
 
 
-def test_recall_packet_scopes_department_private_and_channel_memory(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setenv("AIDER_MEMORY_CANONICAL_READER_FALLBACK", "1")
+def test_recall_packet_scopes_department_private_and_channel_memory(tmp_path):
     store = MemoryStore(ProjectMemory(str(tmp_path)))
     department = store.append_record(
         MemoryRecord(
@@ -58,7 +55,7 @@ def test_recall_packet_scopes_department_private_and_channel_memory(
     pair_channel = store.append_record(
         MemoryRecord(
             content="Engineering and QA agreed to preserve checkout retry handoff notes.",
-            scope="channel_pair:engineering:qa",
+            scope="channel:engineering:qa",
             visibility="project",
         )
     )

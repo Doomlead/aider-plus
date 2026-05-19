@@ -36,7 +36,10 @@ def _task() -> CompanyTask:
     )
 
 
-def test_recall_packet_scopes_department_private_and_channel_memory(tmp_path):
+def test_recall_packet_scopes_department_private_and_channel_memory(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("AIDER_MEMORY_CANONICAL_READER_FALLBACK", "1")
     store = MemoryStore(ProjectMemory(str(tmp_path)))
     department = store.append_record(
         MemoryRecord(

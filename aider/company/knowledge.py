@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -117,11 +118,47 @@ class KnowledgeManager:
         return {}
 
     def get_memory_record(self, record_id: str) -> dict[str, Any] | None:
-        records = ((self.memory.data.get("memory") or {}).get("records") or [])
-        for record in records:
-            if isinstance(record, dict) and record.get("id") == record_id:
-                return dict(record)
+        store = MemoryStore(self.memory)
+        record = store.get_record(record_id)
+        if record is not None:
+            self._record_reader_metric(canonical_only=True)
+            return record.to_dict()
+        if self._legacy_fallback_enabled():
+            records = ((self.memory.data.get("memory") or {}).get("records") or [])
+            for legacy_record in records:
+                if isinstance(legacy_record, dict) and legacy_record.get("id") == record_id:
+                    self._record_reader_metric(canonical_only=False)
+                    return dict(legacy_record)
+        self._record_reader_metric(canonical_only=True)
         return None
+
+    @staticmethod
+    def _legacy_fallback_enabled() -> bool:
+        return str(os.getenv("AIDER_MEMORY_CANONICAL_READER_FALLBACK", "")).lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    def _record_reader_metric(self, *, canonical_only: bool) -> None:
+        observability = self.memory.data.setdefault("observability", {})
+        if not isinstance(observability, dict):
+            return
+        memory_metrics = observability.setdefault("memory_metrics", {})
+        if not isinstance(memory_metrics, dict):
+            return
+        total = int(memory_metrics.get("reader_requests_total") or 0) + 1
+        canonical = int(memory_metrics.get("reader_requests_canonical_only") or 0)
+        if canonical_only:
+            canonical += 1
+        memory_metrics["reader_requests_total"] = total
+        memory_metrics["reader_requests_canonical_only"] = canonical
+        memory_metrics["reader_requests_canonical_only_pct"] = round(
+            (canonical / total) * 100.0, 2
+        )
+        self.memory.update({"observability": observability})
+        self.memory.persist()
 
     def explain_retrieval(self, query: str, context_items) -> list[str]:
         """Explain why memories or skills were selected for a query."""

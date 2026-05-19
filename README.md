@@ -19,6 +19,7 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
 ### Memory Fabric
 
 Memory Fabric now exposes a `memory_health_score` (0-100) to summarize utilization, staleness, and recall hit rate for operational monitoring.
+It also supports stale-memory decay knobs, non-destructive compaction into cluster summaries, and redaction-aware summary promotion to prevent sensitive detail widening.
 
 Useful commands:
 - `aider company memory status`

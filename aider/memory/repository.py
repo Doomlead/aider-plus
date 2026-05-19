@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +56,9 @@ class ProjectMemoryMigrator:
         if version < 6:
             migrated = self._migrate_to_v6(migrated)
             version = 6
+        if version < 7:
+            migrated = self._migrate_to_v7(migrated)
+            version = 7
 
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         self._ensure_defaults(migrated)
@@ -214,6 +217,23 @@ class ProjectMemoryMigrator:
         )
         return data
 
+
+    def _migrate_to_v7(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Add compaction marker namespace and metrics-safe defaults."""
+
+        memory = self._ensure_memory_namespace(data)
+        if not isinstance(memory.get("compaction_markers"), list):
+            memory["compaction_markers"] = []
+        memory.setdefault("migration_log", []).append(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "from_version": 6,
+                "to_version": 7,
+                "records_processed": len(memory.get("records", [])),
+                "compaction_markers_initialized": True,
+            }
+        )
+        return data
     def _normalize_memory_records_for_v5(self, data: Dict[str, Any]) -> int:
         """Rewrite legacy aliases, validate records, and quarantine corrupt rows."""
 
@@ -311,6 +331,8 @@ class ProjectMemoryMigrator:
             memory["migration_log"] = []
         if not isinstance(memory.get("corrupt_backup"), list):
             memory["corrupt_backup"] = []
+        if not isinstance(memory.get("compaction_markers"), list):
+            memory["compaction_markers"] = []
         return memory
 
     def _append_corrupt_backup(

@@ -20,6 +20,8 @@ agents, memory, approvals, queues, and GUIs around that repo-native loop.
 
 Memory Fabric now exposes a `memory_health_score` (0-100) to summarize utilization, staleness, and recall hit rate for operational monitoring.
 It also supports stale-memory decay knobs, non-destructive compaction into cluster summaries, and redaction-aware summary promotion to prevent sensitive detail widening.
+Context building now runs a proactive recall prepass (intent + reinforcement + proximity + recency) and injects a hard-capped top-candidate summary list before normal retrieval.
+Injected playbook/skill memories are formatted explanation-first (match terms, scope reason, confidence, freshness, evidence count) and emitted with telemetry for downstream observability.
 
 Useful commands:
 - `aider company memory status`

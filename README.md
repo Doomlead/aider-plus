@@ -918,48 +918,91 @@ focuses on functional, test, integration, and non-README documentation changes.
 - `c697cae` — Improved desktop Company workflow UI.
 - `f8b99c5` — Added an engineering reviewer phase loop.
 - `054d1a8` — Enhanced engineering reviewer intelligence.
-- `3685579` — Improved programmer revision feedback handling.
-- `40289e7` — Injected reviewer feedback into programmer revisions.
-- `1c6da07` — Added CLI approval handling and QA feedback rerouting.
-- `6078c3d` — Added CLI approval and tool-permission tests.
-- `f45c349` — Added memory retrieval and observability metrics.
-- `a95cc75` — Added retrieval-aware playbook pattern extraction.
-- `c6ac28c` — Added Company prompt caching controls.
-- `1403bd0` — Added additional Company prompt caching controls/config paths.
-- `f1219c2` — Added structured Product clarification workflow.
-- `e451dc2` — Handled clarification approval responses.
-- `c0d1e8a` — Added structured UX design specs.
-- `6f9a4e8` — Integrated PRD and design specs into engineering prompts.
-- `b2a2fcc` — Hardened engineering review context handoff.
-- `5172ae9` — Hardened reviewer handoff and metrics collection.
-- `e51ce8f` — Improved engineering review context handoff.
-- `4eeb86c` — Polished engineering reviewer safeguards.
+- `4eeb86c` — Added reviewer safeguards around engineering revision loops.
 - `94fc2b1` — Refined engineering reviewer phase controls.
-- `bdc5922` — Added a UX design schema gate.
-- `3cdd37a` — Propagated UX schema-gate context through handoffs.
-- `9640f2f` — Wired UX schema-gate retry flow.
-- `cbbe387` — Added tests for UX schema-gate retry handling.
-- `97b1cf7` — Hardened UX structured output handling.
-- `dd574f2` — Refactored the desktop app to native Tkinter.
-- `36b8061` — Added browser UI settings and an agent prompt box.
+- `b2a2fcc` — Hardened review-context handoff between engineering and reviewer loops.
+- `5172ae9` — Strengthened reviewer handoff metrics and recovery.
+- `e51ce8f` — Improved engineering review context packaging.
+- `6f9a4e8` — Integrated PRD and UX design specs into engineering prompts.
+- `c0d1e8a` — Added structured UX design spec generation.
+- `bdc5922` — Added UX design schema gating.
+- `3cdd37a` — Propagated UX schema gate context in downstream handoffs.
+- `9640f2f` — Wired UX schema gate retry flow.
+- `cbbe387` — Added UX schema gate retry tests.
+- `97b1cf7` — Hardened UX structured-output handling.
+- `dd574f2` — Refactored desktop mode into a native Tkinter app.
+- `36b8061` — Added browser settings UI and agent prompt controls.
+- `6289ff6` — Added COO agent orchestration layer.
+- `f320fbc` — Refactored COO route coordination.
 - `c627a7a` — Added COO status observability surfaces.
 - `f3dc31e` — Improved Product PRD revision handling.
-- `bc1faf2` — Added Company agent prompt caching configuration.
-- `62b8428` — Added COO retry and error-routing resilience.
-- `74b9559` — Hardened COO route-decision aliases.
-- `af1d1b3` — Hardened COO retry escalation handling.
-- `ff59e96` — Added browser and desktop settings editors.
+- `bc1faf2` — Added per-agent prompt-caching configuration.
+- `62b8428` — Added COO retry/error routing resilience.
+- `74b9559` — Hardened COO route-decision alias handling.
+- `af1d1b3` — Added COO escalation behavior for repeated routing failures.
+- `ff59e96` — Added browser + desktop settings editors.
 - `0832ccc` — Added per-agent chat tabs and settings.
-- `fbc97b3` — Documented desktop GUI tabs and fields.
 - `7e3d44b` — Polished desktop guide placement and agent labels.
-- `9595966` — Added the optional MCP integration layer.
-- `be2873e` — Added an initial zero-to-MVP Company create flow.
-- `9983101` — Extended the zero-to-MVP Company create flow.
-- `c600ffe` — Added the product warehouse manager.
-- `1e7d280` — Polished GUI settings and observability.
-- `7f10796` — Aligned COO architecture and kept Discord as a thin adapter.
+- `9595966` — Added optional MCP integration layer.
+- `be2873e` — Added the initial zero-to-MVP `company create` flow.
+- `9983101` — Iterated the zero-to-MVP `company create` flow with CLI polish.
+- `c600ffe` — Added warehouse manager primitives.
 - `c5d43a1` — Added product warehouse scaffolding.
-- `cf0c5ba` — Polished settings UI and added Discord token configuration.
-- `1f0b86c` — Improved Company skill retrieval and dashboard visibility.
+- `1e7d280` — Improved GUI settings and workflow observability.
+- `7f10796` — Aligned COO architecture and introduced a thin Discord adapter base.
+- `1f0b86c` — Improved skill retrieval and skill visibility surfaces.
+- `ec4eb23` — Added the Company daemon workflow runtime.
+- `16a571d` — Exposed skills and daemon status in dashboards.
+- `26c1620` — Added Delivery department orchestration.
+- `8888dbc` — Strengthened Delivery planning and handoff schemas.
+- `05d5ded` — Polished Delivery orchestration backbone.
+- `614ea9c` — Documented DevOps release execution behavior.
+- `09e733d` — Improved DevOps execution observability.
+- `5de50ed` — Added multi-provider DevOps deployment execution.
+- `e6eb0d5` — Polished DevOps deployment observability and surfaced deployment artifacts.
+- `6d9f031` — Added focused seam tests across Company pipeline boundaries.
+- `d07143e` — Clarified retrieval-injection behavior in Company docs.
+- `c1ce101` — Strengthened company project template scaffolds.
+- `25b6240` — Added guided Company onboarding flow.
+- `bfb7cf7` — Polished onboarding setup ergonomics.
+- `7870f23` — Added the first contributor architecture code tour.
+- `7f545fd` — Unified canonical company template names and aliases.
+- `8088380` — Added release/deployment seam coverage tests.
+- `44f047c` — Strengthened daemon tracker handling.
+- `df1bfef` — Improved EventBus rendering and replay semantics.
+- `6aa2462` — Generalized thin chat integration adapters.
+- `e0242c9` — Expanded approval-aware MCP tool surfaces.
+- `8b74a94` — Added security departments and automated scan workflow.
+- `9d72ec6` — Polished security scan orchestration.
+- `402e01e` — Added end-to-end Company pipeline smoke testing.
+- `f0812c8` — Updated e2e pipeline smoke assertions.
+- `a8567f3` — Hardened security scan scheduling and status cards.
+- `773ceae` — Added the foundational memory fabric store.
+- `d0e3131` — Wired communication-ledger memory records.
+- `626317a` — Added scoped recall packets for department context.
+- `b5c41d7` — Added evidence-backed memory skill learning.
+- `275b80c` — Added reinforcement/decay learning loops for memory + skills.
+- `aa641cc` — Added channel communication-pattern skill learning.
+- `754d50f` — Added skill patch/retire lifecycle and archival behavior.
+- `9b4ccfb` — Polished skill lifecycle visibility with retirement health summaries.
+- `50d86ed` — Added knowledge inspection and proposal-approval surfaces.
+- `6421ebb` — Added pluggable local memory index backends.
+- `46c8e21` — Polished memory index health checks and SQLite fallback behavior.
+- `26a100c` — Added memory hardening, metrics, and migration-v5 health surfaces.
+- `9df2963` — Added memory health score plus GUI memory-health actions.
+- `0c0b7fc` — Completed memory-fabric hardening cleanup.
+- `db036f4` — Hardened memory fabric schema/repair paths.
+- `dcf3c1b` — Polished phase-1 memory fabric safety and health.
+- `d46c8dc` — Added dual-write support for legacy audit/playbook writers.
+- `b0a9e26` — Added idempotent legacy-memory backfill command.
+- `96a86b2` — Made memory readers canonical-first with flagged legacy fallback.
+- `9937ccf` — Disabled operational legacy audit/playbook writes.
+- `4e0fd46` — Removed legacy memory aliases and finalized v6 rewrite migration.
+- `1164f4f` — Canonicalized memory store and retired legacy audit/playbook backfill.
+- `1df1d1c` — Added reinforcement ranking metadata and outcome APIs.
+- `aa555be` — Added stale-memory decay and redaction-aware compaction primitives.
+- `0b0df09` — Added proactive recall prepass and explanation-first memory injection.
+- `f967aae` — Added relation-graph metadata and ranking boosts for memory retrieval.
+- `121ea97` — Added deterministic memory-quality regression benchmarks.
+- `0b2278b` — Fixed stale expectations in company memory/retrieval tests.
 
-- Knowledge UI now surfaces Active Skills, Skills Needing Patch/Retirement, Recent Injections with why-included rationale, and proposal review actions (approve/reject/patch/retire) in both Streamlit and Tkinter interfaces.

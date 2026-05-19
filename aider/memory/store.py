@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional
@@ -311,58 +310,12 @@ class MemoryStore:
         return metrics
 
     def backfill_legacy_records(self) -> dict[str, Any]:
-        memory = self._memory_namespace()
-        records = memory.setdefault("records", [])
-        existing_keys = self._existing_legacy_content_keys()
-        stats = {
+        """Legacy backfill is retired now that canonical records are authoritative."""
+        return {
             "legacy_items_scanned": 0,
             "legacy_records_created": 0,
             "legacy_records_skipped_existing": 0,
         }
-
-        for record in self.project_memory.data.get("audit_log", []):
-            stats["legacy_items_scanned"] += 1
-            canonical = self._canonical_from_audit_record(record)
-            if canonical is None:
-                continue
-            key = canonical.metadata.get("legacy_content_key")
-            if key in existing_keys:
-                stats["legacy_records_skipped_existing"] += 1
-                continue
-            records.append(canonical.to_dict())
-            existing_keys.add(str(key))
-            stats["legacy_records_created"] += 1
-
-        for category, items in self.project_memory.data.get("playbook", {}).items():
-            if not isinstance(items, list):
-                continue
-            for index, entry in enumerate(items):
-                stats["legacy_items_scanned"] += 1
-                canonical = self._canonical_from_playbook_item(category, index, entry)
-                key = canonical.metadata.get("legacy_content_key")
-                if key in existing_keys:
-                    stats["legacy_records_skipped_existing"] += 1
-                    continue
-                records.append(canonical.to_dict())
-                existing_keys.add(str(key))
-                stats["legacy_records_created"] += 1
-
-        migration = self.project_memory.data.setdefault("migration", {})
-        migration["v5_backfill_legacy_items_scanned"] = int(
-            migration.get("v5_backfill_legacy_items_scanned", 0)
-        ) + stats["legacy_items_scanned"]
-        migration["v5_backfill_records_created"] = int(
-            migration.get("v5_backfill_records_created", 0)
-        ) + stats["legacy_records_created"]
-        migration["v5_backfill_records_skipped_existing"] = int(
-            migration.get("v5_backfill_records_skipped_existing", 0)
-        ) + stats["legacy_records_skipped_existing"]
-        migration["v5_backfill_last_run_at"] = utc_now_iso()
-
-        self.project_memory.update({"memory": memory, "migration": migration})
-        self.project_memory.persist()
-        self.rebuild_index()
-        return stats
 
     def _drop_records(self, ids: list[str]) -> int:
         doomed = set(ids)
@@ -441,71 +394,6 @@ class MemoryStore:
         for item in self._memory_namespace().get("records", []):
             if isinstance(item, dict):
                 yield item
-
-    def _existing_legacy_content_keys(self) -> set[str]:
-        keys: set[str] = set()
-        for item in self._record_dicts():
-            metadata = item.get("metadata")
-            if not isinstance(metadata, dict):
-                continue
-            key = metadata.get("legacy_content_key")
-            if key:
-                keys.add(str(key))
-        return keys
-
-    def _canonical_from_audit_record(self, item: Any) -> MemoryRecord | None:
-        if not isinstance(item, dict):
-            return None
-        project_id = str(item.get("project_id") or self.project_memory.repo_path)
-        department = str(item.get("department") or "orchestrator")
-        timestamp = str(item.get("timestamp") or utc_now_iso())
-        legacy_path = f"audit_log:{item.get('event_id') or timestamp}"
-        payload = {
-            "event_id": item.get("event_id"),
-            "event_type": item.get("event_type"),
-            "payload_summary": item.get("payload_summary"),
-            "metadata": item.get("metadata"),
-            "timestamp": item.get("timestamp"),
-        }
-        return MemoryRecord(
-            kind="audit_summary",
-            scope=f"project:{project_id}",
-            visibility="project",
-            project_id=project_id,
-            department=department,
-            channel_id="audit_log",
-            created_at=timestamp,
-            content=payload,
-            metadata={
-                "source": {"legacy_path": legacy_path},
-                "legacy_content_key": self._legacy_content_key("audit_log", legacy_path, payload),
-            },
-        )
-
-    def _canonical_from_playbook_item(
-        self, category: Any, index: int, entry: Any
-    ) -> MemoryRecord:
-        project_id = str(self.project_memory.data.get("project_id") or self.project_memory.repo_path)
-        payload = {"category": str(category), "entry": entry, "index": int(index)}
-        legacy_path = f"playbook:{category}:{index}"
-        return MemoryRecord(
-            kind="playbook" if str(category) == "coding_standards" else "pattern",
-            scope=f"project:{project_id}",
-            visibility="project",
-            project_id=project_id,
-            department="orchestrator",
-            channel_id="playbook",
-            content=payload,
-            metadata={
-                "source": {"legacy_path": legacy_path},
-                "legacy_content_key": self._legacy_content_key("playbook", legacy_path, payload),
-            },
-        )
-
-    def _legacy_content_key(self, bucket: str, legacy_path: str, content: Any) -> str:
-        payload = json.dumps(content, sort_keys=True, ensure_ascii=False, default=str)
-        material = f"{bucket}|{legacy_path}|{payload}"
-        return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
     def _filter_query(
         self, records: list[MemoryRecord], query: MemoryQuery

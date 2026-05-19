@@ -149,7 +149,7 @@ def test_migration_v5_quarantines_invalid_records_after_validation(tmp_path, cap
     assert "Quarantining corrupt v5 memory record" in caplog.text
 
 
-def test_backfill_legacy_records_is_idempotent_and_tracks_migration_stats(tmp_path):
+def test_backfill_legacy_records_is_retired_and_noops(tmp_path):
     memory = ProjectMemory(str(tmp_path))
     memory.update(
         {
@@ -178,21 +178,13 @@ def test_backfill_legacy_records_is_idempotent_and_tracks_migration_stats(tmp_pa
     second = store.backfill_legacy_records()
     records = store.query_records()
 
-    assert first["legacy_items_scanned"] == 3
-    assert first["legacy_records_created"] == 3
-    assert second["legacy_records_created"] == 0
-    assert second["legacy_records_skipped_existing"] == 3
-    assert len(records) == 3
-    assert all(
-        isinstance(record.metadata.get("source"), dict)
-        and record.metadata["source"].get("legacy_path")
-        for record in records
-    )
-    migration = memory.data["migration"]
-    assert migration["v5_backfill_legacy_items_scanned"] == 6
-    assert migration["v5_backfill_records_created"] == 3
-    assert migration["v5_backfill_records_skipped_existing"] == 3
-    assert migration["v5_backfill_last_run_at"]
+    assert first == {
+        "legacy_items_scanned": 0,
+        "legacy_records_created": 0,
+        "legacy_records_skipped_existing": 0,
+    }
+    assert second == first
+    assert records == []
 
 
 def test_migration_v6_ci_gate_rejects_remaining_legacy_aliases(tmp_path):

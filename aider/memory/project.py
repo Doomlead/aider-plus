@@ -11,12 +11,6 @@ class ProjectMemory:
     """Repo-scoped persistent state for agent context enrichment."""
 
     DEFAULTS: Dict[str, Any] = {
-        "audit_log": [],
-        "playbook": {
-            "coding_standards": [],
-            "ux_preferences": [],
-            "deployment_gotchas": [],
-        },
         "skill_proposals": [],
         "memory": {
             "records": [],

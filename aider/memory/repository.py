@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +53,9 @@ class ProjectMemoryMigrator:
         if version < 5:
             migrated = self._migrate_to_v5(migrated)
             version = 5
+        if version < 6:
+            migrated = self._migrate_to_v6(migrated)
+            version = 6
 
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         self._ensure_defaults(migrated)
@@ -173,11 +176,48 @@ class ProjectMemoryMigrator:
         )
         return data
 
+    def _migrate_to_v6(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Final one-way rewrite of legacy visibility and channel_pair scopes."""
+        from .visibility import VISIBILITY_PROJECT
+
+        memory = self._ensure_memory_namespace(data)
+        records = memory.get("records")
+        if not isinstance(records, list):
+            records = []
+            memory["records"] = records
+
+        rewrites = 0
+        legacy_visibility = {"public", "team", "skill"}
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            visibility = item.get("visibility")
+            if visibility in legacy_visibility:
+                item["visibility"] = VISIBILITY_PROJECT
+                rewrites += 1
+            scope = str(item.get("scope") or "")
+            if scope.startswith("channel_pair:"):
+                item["scope"] = f"channel:{scope.split(':', 1)[1]}"
+                rewrites += 1
+
+        migration = data.setdefault("migration", {})
+        if isinstance(migration, dict):
+            migration["v6_legacy_rewrites"] = rewrites
+        memory.setdefault("migration_log", []).append(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "from_version": 5,
+                "to_version": 6,
+                "records_processed": len(records),
+                "legacy_rewrites": rewrites,
+            }
+        )
+        return data
+
     def _normalize_memory_records_for_v5(self, data: Dict[str, Any]) -> int:
         """Rewrite legacy aliases, validate records, and quarantine corrupt rows."""
 
         from .records import MemoryRecord
-        from .visibility import LEGACY_VISIBILITY_ALIASES
 
         memory = self._ensure_memory_namespace(data)
         records = memory.get("records")
@@ -223,17 +263,21 @@ class ProjectMemoryMigrator:
             if "channel" in candidate and "channel_id" not in candidate:
                 candidate["channel_id"] = candidate.pop("channel")
                 rewrites += 1
+            scope = str(candidate.get("scope") or "")
+            if scope.startswith("channel_pair:"):
+                candidate["scope"] = f"channel:{scope.split(':', 1)[1]}"
+                rewrites += 1
             candidate["metadata"] = metadata
             visibility = candidate.get("visibility")
-            if visibility in LEGACY_VISIBILITY_ALIASES:
-                candidate["visibility"] = LEGACY_VISIBILITY_ALIASES[visibility]
+            if visibility in {"public", "team", "skill"}:
+                candidate["visibility"] = "project"
                 rewrites += 1
             elif not visibility:
                 candidate["visibility"] = "project"
                 rewrites += 1
             try:
                 record = MemoryRecord.from_dict(candidate)
-                record.validate(allow_legacy_visibility=True)
+                record.validate(allow_legacy_visibility=False)
             except Exception as exc:
                 corrupt_records.append(item)
                 logger.warning(

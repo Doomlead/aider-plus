@@ -12,12 +12,6 @@ VISIBILITY_PROJECT = "project"
 VISIBILITY_USER_VISIBLE = "user_visible"
 VISIBILITY_SYSTEM = "system"
 
-# Legacy names accepted for backward compatibility with memory written before the
-# canonical visibility vocabulary landed.
-VISIBILITY_PUBLIC_LEGACY = "public"
-VISIBILITY_TEAM_LEGACY = "team"
-VISIBILITY_SKILL_LEGACY = "skill"
-
 VALID_VISIBILITIES = frozenset(
     {
         VISIBILITY_PRIVATE,
@@ -27,37 +21,25 @@ VALID_VISIBILITIES = frozenset(
         VISIBILITY_SYSTEM,
     }
 )
-LEGACY_VISIBILITY_ALIASES = {
-    VISIBILITY_PUBLIC_LEGACY: VISIBILITY_PROJECT,
-    VISIBILITY_TEAM_LEGACY: VISIBILITY_PROJECT,
-    VISIBILITY_SKILL_LEGACY: VISIBILITY_PROJECT,
-}
-ALL_VISIBILITIES = frozenset((*VALID_VISIBILITIES, *LEGACY_VISIBILITY_ALIASES))
+ALL_VISIBILITIES = VALID_VISIBILITIES
 
 
 def normalize_visibility(visibility: str | None) -> str:
-    """Return the canonical visibility value, accepting legacy persisted aliases."""
+    """Return the canonical visibility value."""
 
     value = visibility or VISIBILITY_PROJECT
-    canonical = LEGACY_VISIBILITY_ALIASES.get(value, value)
-    if canonical not in VALID_VISIBILITIES:
+    if value not in VALID_VISIBILITIES:
         raise ValueError(
             f"invalid memory visibility {value!r}; expected one of "
             f"{sorted(VALID_VISIBILITIES)}"
         )
-    return canonical
+    return value
 
 
 def validate_visibility(visibility: str | None, *, allow_legacy: bool = True) -> str:
-    """Return a canonical visibility value or raise for unknown/legacy writes."""
-
-    value = visibility or VISIBILITY_PROJECT
-    if not allow_legacy and value in LEGACY_VISIBILITY_ALIASES:
-        raise ValueError(
-            f"legacy memory visibility {value!r} is not accepted on write; use "
-            f"{LEGACY_VISIBILITY_ALIASES[value]!r}"
-        )
-    return normalize_visibility(value)
+    """Return a canonical visibility value or raise for unknown writes."""
+    del allow_legacy
+    return normalize_visibility(visibility)
 
 
 def is_visible(record: "MemoryRecord", query: "MemoryQuery" | None = None) -> bool:
@@ -100,10 +82,6 @@ def is_visible(record: "MemoryRecord", query: "MemoryQuery" | None = None) -> bo
                 requester.prefix in {"department", "role"}
                 and requester.name in str(rec.name or "").split(":")
             )
-        if rec.prefix == "channel_pair":
-            return requester.prefix in {"department", "role"} and requester.name in str(
-                rec.name or ""
-            ).split(":")
         return rec == requester
 
     # Project visibility: broadly visible inside the project, but records scoped
@@ -127,7 +105,7 @@ def is_visible(record: "MemoryRecord", query: "MemoryQuery" | None = None) -> bo
             "user",
             "skill",
         }
-    if rec.prefix in {"channel", "channel_pair"}:
+    if rec.prefix == "channel":
         return (requester.prefix == rec.prefix and requester == rec) or (
             requester.prefix in {"department", "role"}
             and requester.name in str(rec.name or "").split(":")

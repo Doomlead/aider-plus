@@ -64,21 +64,23 @@ def test_migration_v4_to_v5_safe_backup(tmp_path):
     migrator = ProjectMemoryMigrator(ProjectMemory.DEFAULTS)
     data = {"schema_version": 4, "memory": {"records": [], "threads": []}}
     migrated = migrator.migrate(data)
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 6
     assert "memory_metrics" in migrated["observability"]
-    assert migrated["memory"]["migration_log"][-1]["from_version"] == 4
-    assert migrated["memory"]["migration_log"][-1]["to_version"] == 5
+    assert migrated["memory"]["migration_log"][0]["from_version"] == 4
+    assert migrated["memory"]["migration_log"][0]["to_version"] == 5
+    assert migrated["memory"]["migration_log"][-1]["from_version"] == 5
+    assert migrated["memory"]["migration_log"][-1]["to_version"] == 6
     assert migrated["memory"]["migration_log"][-1]["records_processed"] == 0
 
 
 def test_append_rejects_legacy_visibility_aliases(tmp_path):
     store = MemoryStore(ProjectMemory(str(tmp_path)))
 
-    with pytest.raises(ValueError, match="legacy memory visibility"):
+    with pytest.raises(ValueError, match="invalid memory visibility"):
         store.append_record(MemoryRecord(content="legacy", visibility="public"))
 
 
-def test_migration_v5_normalizes_legacy_visibility_and_core_metadata(tmp_path):
+def test_migration_v6_normalizes_legacy_visibility_and_channel_pair(tmp_path):
     migrator = ProjectMemoryMigrator(ProjectMemory.DEFAULTS)
     data = {
         "schema_version": 4,
@@ -87,7 +89,7 @@ def test_migration_v5_normalizes_legacy_visibility_and_core_metadata(tmp_path):
                 {
                     "id": "r1",
                     "content": "legacy",
-                    "scope": "project",
+                    "scope": "channel_pair:engineering:qa",
                     "visibility": "team",
                     "created_at": "2026-01-01T00:00:00+00:00",
                     "metadata": {"skill_evidence": {"task_id": "t1"}, "custom": True},
@@ -101,12 +103,14 @@ def test_migration_v5_normalizes_legacy_visibility_and_core_metadata(tmp_path):
 
     record = migrated["memory"]["records"][0]
     assert record["visibility"] == "project"
+    assert record["scope"] == "channel:engineering:qa"
     assert record["skill_evidence"] == {"task_id": "t1"}
     assert record["metadata"] == {"custom": True}
     assert migrated["migration"]["v5_visibility_records_normalized"] >= 1
-    assert len(migrated["memory"]["migration_log"]) == 1
+    assert migrated["migration"]["v6_legacy_rewrites"] == 0
+    assert len(migrated["memory"]["migration_log"]) == 2
     remigrated = migrator.migrate(migrated)
-    assert len(remigrated["memory"]["migration_log"]) == 1
+    assert len(remigrated["memory"]["migration_log"]) == 2
 
 
 def test_migration_v5_quarantines_invalid_records_after_validation(tmp_path, caplog):
@@ -189,3 +193,31 @@ def test_backfill_legacy_records_is_idempotent_and_tracks_migration_stats(tmp_pa
     assert migration["v5_backfill_records_created"] == 3
     assert migration["v5_backfill_records_skipped_existing"] == 3
     assert migration["v5_backfill_last_run_at"]
+
+
+def test_migration_v6_ci_gate_rejects_remaining_legacy_aliases(tmp_path):
+    migrator = ProjectMemoryMigrator(ProjectMemory.DEFAULTS)
+    data = {
+        "schema_version": 6,
+        "memory": {
+            "records": [
+                {
+                    "id": "r1",
+                    "content": "canonical",
+                    "scope": "project",
+                    "visibility": "project",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                }
+            ],
+            "threads": [],
+        },
+    }
+
+    migrated = migrator.migrate(data)
+    records = migrated["memory"]["records"]
+    assert not any(
+        record.get("visibility") in {"public", "team", "skill"} for record in records
+    )
+    assert not any(
+        str(record.get("scope") or "").startswith("channel_pair:") for record in records
+    )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -123,23 +122,8 @@ class KnowledgeManager:
         if record is not None:
             self._record_reader_metric(canonical_only=True)
             return record.to_dict()
-        if self._legacy_fallback_enabled():
-            records = ((self.memory.data.get("memory") or {}).get("records") or [])
-            for legacy_record in records:
-                if isinstance(legacy_record, dict) and legacy_record.get("id") == record_id:
-                    self._record_reader_metric(canonical_only=False)
-                    return dict(legacy_record)
         self._record_reader_metric(canonical_only=True)
         return None
-
-    @staticmethod
-    def _legacy_fallback_enabled() -> bool:
-        return str(os.getenv("AIDER_MEMORY_CANONICAL_READER_FALLBACK", "")).lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
 
     def _record_reader_metric(self, *, canonical_only: bool) -> None:
         observability = self.memory.data.setdefault("observability", {})

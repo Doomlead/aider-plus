@@ -118,6 +118,7 @@ def _department(record: MemoryRecord) -> str:
     value = (
         evidence.get("role")
         or evidence.get("department")
+        or record.department
         or metadata.get("department")
         or metadata.get("origin")
         or record.author
@@ -130,7 +131,8 @@ def _department(record: MemoryRecord) -> str:
 def _channel(record: MemoryRecord) -> str:
     metadata = record.metadata or {}
     value = (
-        metadata.get("channel")
+        record.channel_id
+        or metadata.get("channel")
         or metadata.get("surface")
         or metadata.get("artifact_type")
     )
@@ -139,7 +141,7 @@ def _channel(record: MemoryRecord) -> str:
 
 def _thread_id(record: MemoryRecord, project: Project) -> str:
     metadata = record.metadata or {}
-    value = metadata.get("thread_id") or metadata.get("session_id")
+    value = record.thread_id or metadata.get("thread_id") or metadata.get("session_id")
     return str(value or project.project_id or "project").lower().strip() or "project"
 
 
@@ -252,7 +254,9 @@ def _cluster_id(
     return safe[:160]
 
 
-def cluster_channel_patterns(store: MemoryStore, channel_id: str, *, min_records: int = 2) -> list[SkillEvidenceCluster]:
+def cluster_channel_patterns(
+    store: MemoryStore, channel_id: str, *, min_records: int = 2
+) -> list[SkillEvidenceCluster]:
     """Cluster successful records for a department-to-department channel."""
 
     cid = str(channel_id or "").lower().strip()
@@ -261,7 +265,15 @@ def cluster_channel_patterns(store: MemoryStore, channel_id: str, *, min_records
     records = [
         record
         for record in _candidate_records(store.query_records())
-        if str((record.metadata or {}).get("channel_id") or (record.metadata or {}).get("channel") or "").lower().strip() == cid
+        if str(
+            record.channel_id
+            or (record.metadata or {}).get("channel_id")
+            or (record.metadata or {}).get("channel")
+            or ""
+        )
+        .lower()
+        .strip()
+        == cid
     ]
     if len(records) < min_records:
         return []
@@ -273,7 +285,7 @@ def cluster_channel_patterns(store: MemoryStore, channel_id: str, *, min_records
     scope = "shared"
     cluster = SkillEvidenceCluster(
         cluster_id=f"channel-{cid}-0",
-        department=cid.split(":",1)[0],
+        department=cid.split(":", 1)[0],
         channel=cid,
         thread_id="channel",
         outcome="success",

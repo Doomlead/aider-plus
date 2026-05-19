@@ -7,6 +7,8 @@ from typing import Any, List, Optional
 from aider.company.audit import append_audit_event
 from aider.company.project import Project
 from aider.memory import ProjectMemory
+from aider.memory.records import MemoryRecord
+from aider.memory.store import MemoryStore
 
 
 class CompanyStateManager:
@@ -15,6 +17,7 @@ class CompanyStateManager:
     def __init__(self, project_memory: ProjectMemory):
         self._memory = project_memory
         self.active_project: Optional[Project] = None
+        self._memory_store: Optional[MemoryStore] = None
 
     @property
     def memory(self) -> ProjectMemory:
@@ -62,13 +65,42 @@ class CompanyStateManager:
             return []
         return [item for item in approvals if isinstance(item, dict)]
 
+
+    def _store(self) -> MemoryStore:
+        if self._memory_store is None:
+            self._memory_store = MemoryStore(self._memory)
+        return self._memory_store
+
     def get_playbook(self) -> dict:
+        canonical: dict[str, list[dict[str, Any]]] = {}
+        records = self._store().query_records(kind="playbook")
+        for record in records:
+            metadata = record.metadata if isinstance(record.metadata, dict) else {}
+            category = str(metadata.get("playbook_category") or "coding_standards")
+            canonical.setdefault(category, []).append(record.content)
+        if canonical:
+            return canonical
         playbook = self._memory.data.get("playbook", {})
         return playbook if isinstance(playbook, dict) else {}
 
     def save_playbook(self, playbook: dict) -> None:
-        self._memory.update({"playbook": playbook})
-        self._memory.persist()
+        if not isinstance(playbook, dict):
+            return
+        for category, entries in playbook.items():
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                self._store().append_record(
+                    MemoryRecord(
+                        kind="playbook",
+                        content=entry,
+                        scope=f"project:{self.get_project_id()}",
+                        visibility="project",
+                        department="orchestrator",
+                        project_id=self.get_project_id(),
+                        metadata={"playbook_category": str(category)},
+                    )
+                )
 
     def get_observability(self) -> dict:
         observability = self._memory.data.get("observability", {})
@@ -342,10 +374,24 @@ class CompanyStateManager:
         return round(prompt_cost + completion_cost, 6)
 
     def get_audit_log(self) -> List[dict]:
-        records = self._memory.data.get("audit_log", [])
-        if not isinstance(records, list):
+        records = self._store().query_records(kind="audit_summary")
+        if records:
+            return [
+                {
+                    "event_id": record.id,
+                    "timestamp": record.created_at,
+                    "project_id": record.project_id or self.get_project_id(),
+                    "department": record.department or "orchestrator",
+                    "event_type": str((record.metadata or {}).get("event_type") or "event"),
+                    "payload_summary": str(record.content),
+                    "metadata": dict(record.metadata or {}),
+                }
+                for record in records
+            ]
+        raw = self._memory.data.get("audit_log", [])
+        if not isinstance(raw, list):
             return []
-        return [record for record in records if isinstance(record, dict)]
+        return [record for record in raw if isinstance(record, dict)]
 
     def append_audit_event(
         self,

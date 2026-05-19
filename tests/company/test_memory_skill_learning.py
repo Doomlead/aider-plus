@@ -8,7 +8,7 @@ from aider.company.self_improvement import SelfImprovementService
 from aider.company.skills import CompanySkillManager, SkillLearningConfig, SkillProposal
 from aider.company.recall import RecallEngine
 from aider.company.schemas import CompanyTask
-from aider.memory import MemoryRecord, MemoryStore, ProjectMemory
+from aider.memory import MemoryQuery, MemoryRecord, MemoryStore, ProjectMemory
 from aider.memory.evidence import collect_evidence_for_project
 from aider.memory import communication as communication_memory
 
@@ -246,10 +246,13 @@ def test_reinforcement_and_decay_reduce_salience_without_deleting(tmp_path):
     assert refreshed is not None
     assert int((refreshed.metadata or {}).get("decay_count") or 0) >= 1
 
+
 from aider.memory.evidence import cluster_channel_patterns
 
 
-def _channel_record(task_id: str, content: str, *, scope: str = "channel:engineering:qa") -> MemoryRecord:
+def _channel_record(
+    task_id: str, content: str, *, scope: str = "channel:engineering:qa"
+) -> MemoryRecord:
     return MemoryRecord(
         kind="deliverable_produced",
         content=content,
@@ -261,7 +264,11 @@ def _channel_record(task_id: str, content: str, *, scope: str = "channel:enginee
             "task_id": task_id,
             "channel_id": "engineering:qa",
         },
-        skill_evidence={"task_id": task_id, "role": "engineering", "outcome": "success"},
+        skill_evidence={
+            "task_id": task_id,
+            "role": "engineering",
+            "outcome": "success",
+        },
     )
 
 
@@ -287,7 +294,9 @@ def test_channel_pattern_proposal_generation_and_dedup(tmp_path):
     store.append_record(_channel_record("c3", "Verification passed"))
     orchestrator = CompanyOrchestrator(memory)
     project = Project(project_id="p1", name="Demo", phase="post_mortem")
-    service = SelfImprovementService(orchestrator.state, SkillLearningConfig(min_successful_repetitions=2))
+    service = SelfImprovementService(
+        orchestrator.state, SkillLearningConfig(min_successful_repetitions=2)
+    )
 
     first = service.learn_from_post_mortem(project, final_deliverable={})
     second = service.learn_from_post_mortem(project, final_deliverable={})
@@ -301,9 +310,23 @@ def test_channel_pattern_proposal_generation_and_dedup(tmp_path):
 def test_channel_scoped_visibility_engineering_yes_ux_no(tmp_path):
     memory = ProjectMemory(str(tmp_path))
     store = MemoryStore(memory)
-    record = store.append_record(_channel_record("c1", "Failure report -> test -> minimal fix -> verification"))
-    eng_task = CompanyTask(task_id="e1", origin="coo", target="engineering", artifact_type="code", payload={"description": "eng qa loop test", "channel_id": "engineering:qa"})
-    ux_task = CompanyTask(task_id="u1", origin="coo", target="ux", artifact_type="design", payload={"description": "retry"})
+    record = store.append_record(
+        _channel_record("c1", "Failure report -> test -> minimal fix -> verification")
+    )
+    eng_task = CompanyTask(
+        task_id="e1",
+        origin="coo",
+        target="engineering",
+        artifact_type="code",
+        payload={"description": "eng qa loop test", "channel_id": "engineering:qa"},
+    )
+    ux_task = CompanyTask(
+        task_id="u1",
+        origin="coo",
+        target="ux",
+        artifact_type="design",
+        payload={"description": "retry"},
+    )
 
     eng_packet = RecallEngine(store).build_recall_packet(eng_task)
     assert any(item["id"] == record.id for item in eng_packet.channel)
@@ -318,8 +341,12 @@ def test_channel_scoped_visibility_engineering_yes_ux_no(tmp_path):
         content="# Eng QA loop\nDescription: test",
         metadata={"channel_scope": "engineering:qa"},
     )
-    eng_skills = ContextBuilder(CompanyOrchestrator(memory).state)._get_relevant_skills(eng_task, ["skills.*"])
-    ux_skills = ContextBuilder(CompanyOrchestrator(memory).state)._get_relevant_skills(ux_task, ["skills.*"])
+    eng_skills = ContextBuilder(CompanyOrchestrator(memory).state)._get_relevant_skills(
+        eng_task, ["skills.*"]
+    )
+    ux_skills = ContextBuilder(CompanyOrchestrator(memory).state)._get_relevant_skills(
+        ux_task, ["skills.*"]
+    )
     assert any(skill.name == "eng-qa-loop" for skill in eng_skills)
     assert not any(skill.name == "eng-qa-loop" for skill in ux_skills)
 
@@ -328,24 +355,58 @@ def test_patch_and_retirement_proposals_from_reinforcement(tmp_path):
     memory = ProjectMemory(str(tmp_path))
     orchestrator = CompanyOrchestrator(memory)
     service = SelfImprovementService(orchestrator.state)
-    service.record_outcome(skill_name="stale-skill", scope="engineering", task_id="a1", outcome="failure")
-    service.record_outcome(skill_name="stale-skill", scope="engineering", task_id="a2", outcome="failure")
-    service.record_outcome(skill_name="stale-skill", scope="engineering", task_id="a3", outcome="failure")
-    service.record_outcome(skill_name="conflicting-skill", scope="engineering", task_id="b1", outcome="failure")
-    service.record_outcome(skill_name="conflicting-skill", scope="engineering", task_id="b2", outcome="failure")
-    service.record_outcome(skill_name="conflicting-skill", scope="engineering", task_id="b3", outcome="success")
-    service.record_outcome(skill_name="conflicting-skill", scope="engineering", task_id="b4", outcome="success")
+    service.record_outcome(
+        skill_name="stale-skill", scope="engineering", task_id="a1", outcome="failure"
+    )
+    service.record_outcome(
+        skill_name="stale-skill", scope="engineering", task_id="a2", outcome="failure"
+    )
+    service.record_outcome(
+        skill_name="stale-skill", scope="engineering", task_id="a3", outcome="failure"
+    )
+    service.record_outcome(
+        skill_name="conflicting-skill",
+        scope="engineering",
+        task_id="b1",
+        outcome="failure",
+    )
+    service.record_outcome(
+        skill_name="conflicting-skill",
+        scope="engineering",
+        task_id="b2",
+        outcome="failure",
+    )
+    service.record_outcome(
+        skill_name="conflicting-skill",
+        scope="engineering",
+        task_id="b3",
+        outcome="success",
+    )
+    service.record_outcome(
+        skill_name="conflicting-skill",
+        scope="engineering",
+        task_id="b4",
+        outcome="success",
+    )
     project = Project(project_id="p1", name="Demo", phase="post_mortem")
     proposals = service.learn_from_memory(project)
-    assert any(p.action == "retire" and p.target_skill_id == "engineering:stale-skill" for p in proposals)
-    assert any(p.action == "patch" and p.target_skill_id == "engineering:conflicting-skill" for p in proposals)
+    assert any(
+        p.action == "retire" and p.target_skill_id == "engineering:stale-skill"
+        for p in proposals
+    )
+    assert any(
+        p.action == "patch" and p.target_skill_id == "engineering:conflicting-skill"
+        for p in proposals
+    )
 
 
 def test_retirement_approval_archives_not_deletes(tmp_path):
     memory = ProjectMemory(str(tmp_path))
     orchestrator = CompanyOrchestrator(memory)
     manager = CompanySkillManager(orchestrator.state)
-    manager.manager.create_skill(scope="engineering", name="legacy-flow", content="# Legacy\nold")
+    manager.manager.create_skill(
+        scope="engineering", name="legacy-flow", content="# Legacy\nold"
+    )
     proposal = SkillProposal(
         proposal_id="retire-1",
         action="retire",
@@ -362,20 +423,40 @@ def test_retirement_approval_archives_not_deletes(tmp_path):
     assert approved.status == "approved"
     archived = memory.data["skills"]["archived"]["engineering:legacy-flow"]
     assert archived["inactive"] is True
-    assert (tmp_path / ".aider" / "skills" / "engineering" / "legacy-flow" / "SKILL.md").exists()
+    assert (
+        tmp_path / ".aider" / "skills" / "engineering" / "legacy-flow" / "SKILL.md"
+    ).exists()
 
 
 def test_recall_filters_retired_skills(tmp_path):
     memory = ProjectMemory(str(tmp_path))
     store = MemoryStore(memory)
     retired = store.append_record(
-        MemoryRecord(kind="note", content="old", scope="skill:engineering", metadata={"skill_id": "engineering:legacy-flow"})
+        MemoryRecord(
+            kind="note",
+            content="old",
+            scope="skill:engineering",
+            metadata={"skill_id": "engineering:legacy-flow"},
+        )
     )
     active = store.append_record(
-        MemoryRecord(kind="note", content="new", scope="skill:engineering", metadata={"skill_id": "engineering:new-flow"})
+        MemoryRecord(
+            kind="note",
+            content="new",
+            scope="skill:engineering",
+            metadata={"skill_id": "engineering:new-flow"},
+        )
     )
-    memory.data.setdefault("skills", {})["archived"] = {"engineering:legacy-flow": {"inactive": True}}
-    task = CompanyTask(task_id="r1", origin="coo", target="engineering", artifact_type="code", payload={"description": "flow"})
+    memory.data.setdefault("skills", {})["archived"] = {
+        "engineering:legacy-flow": {"inactive": True}
+    }
+    task = CompanyTask(
+        task_id="r1",
+        origin="coo",
+        target="engineering",
+        artifact_type="code",
+        payload={"description": "flow"},
+    )
     skills = RecallEngine(store).build_recall_packet(task).skills
     ids = [item["id"] for item in skills]
     assert active.id in ids
@@ -402,10 +483,9 @@ def test_coo_review_proposal_flow(tmp_path):
     assert "skills_needing_patch" in attention
 
 
-def test_end_to_end_memory_evidence_to_approved_skill_and_recall(tmp_path):
+def _prepare_e2e_memory(tmp_path):
     memory = ProjectMemory(str(tmp_path))
     store = MemoryStore(memory)
-
     instruction = communication_memory.user_instruction(
         store,
         "When engineering ships retry telemetry, hand off QA notes and run focused retry tests.",
@@ -437,18 +517,47 @@ def test_end_to_end_memory_evidence_to_approved_skill_and_recall(tmp_path):
             "Repeat focused retry telemetry tests and attach QA handoff notes",
         )
     )
-
     orchestrator = CompanyOrchestrator(memory)
     project = Project(project_id="p-e2e", name="End to End", phase="post_mortem")
+    return memory, orchestrator, project, instruction, handoff_record, first, second
+
+
+def test_e2e_user_instruction_flows_to_handoff_memory(tmp_path):
+    memory, _, _, instruction, handoff_record, _, _ = _prepare_e2e_memory(tmp_path)
+
+    assert instruction is not None
+    assert handoff_record is not None
+    thread_records = MemoryStore(memory).query_records(
+        MemoryQuery(scope="thread:retry-thread", requester_scope="thread:retry-thread")
+    )
+    assert [record.id for record in thread_records] == [instruction.id]
+    assert handoff_record.thread_id == "retry-thread"
+    assert (
+        handoff_record.metadata["reason"]
+        == "Engineering owns retry telemetry implementation."
+    )
+
+
+def test_e2e_deliverable_evidence_generates_skill_proposal(tmp_path):
+    _, orchestrator, project, _, _, first, second = _prepare_e2e_memory(tmp_path)
+
     proposals = SelfImprovementService(
         orchestrator.state, SkillLearningConfig(min_successful_repetitions=2)
     ).learn_from_memory(project)
 
-    assert instruction is not None
-    assert handoff_record is not None
     assert len(proposals) == 1
     proposal = proposals[0]
     assert proposal.source_memory_records == [first.id, second.id]
+    assert proposal.source_tasks == ["e2e-1", "e2e-2"]
+    assert proposal.status == "pending"
+
+
+def test_e2e_approved_proposal_is_recalled_with_thread_context(tmp_path):
+    _, orchestrator, project, instruction, _, _, _ = _prepare_e2e_memory(tmp_path)
+    proposals = SelfImprovementService(
+        orchestrator.state, SkillLearningConfig(min_successful_repetitions=2)
+    ).learn_from_memory(project)
+    proposal = proposals[0]
 
     approved = CompanySkillManager(
         orchestrator.state, SkillLearningConfig(min_successful_repetitions=2)

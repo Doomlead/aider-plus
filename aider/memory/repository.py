@@ -139,7 +139,7 @@ class ProjectMemoryMigrator:
         return data
 
     def _migrate_to_v5(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Add memory metrics namespace and migration backup metadata."""
+        """Add memory metrics namespace, backups, and canonical memory values."""
         observability = data.get("observability")
         if not isinstance(observability, dict):
             observability = {}
@@ -150,7 +150,49 @@ class ProjectMemoryMigrator:
             migration = {}
             data["migration"] = migration
         migration.setdefault("last_schema_backup", None)
+        self._normalize_memory_records_for_v5(data)
         return data
+
+    def _normalize_memory_records_for_v5(self, data: Dict[str, Any]) -> None:
+        """Rewrite legacy visibility aliases during the one-time v5 migration."""
+
+        from .visibility import LEGACY_VISIBILITY_ALIASES, VALID_VISIBILITIES
+
+        memory = data.get("memory")
+        if not isinstance(memory, dict):
+            return
+        records = memory.get("records")
+        if not isinstance(records, list):
+            return
+        rewrites = 0
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata")
+            if isinstance(metadata, dict):
+                for key in (
+                    "scope",
+                    "visibility",
+                    "kind",
+                    "created_at",
+                    "skill_evidence",
+                ):
+                    if key in metadata and key not in item:
+                        item[key] = metadata.pop(key)
+                        rewrites += 1
+            visibility = item.get("visibility")
+            if visibility in LEGACY_VISIBILITY_ALIASES:
+                item["visibility"] = LEGACY_VISIBILITY_ALIASES[visibility]
+                rewrites += 1
+            elif not visibility:
+                item["visibility"] = "project"
+                rewrites += 1
+            elif visibility not in VALID_VISIBILITIES:
+                continue
+        if rewrites:
+            migration = data.setdefault("migration", {})
+            if isinstance(migration, dict):
+                migration["v5_visibility_records_normalized"] = rewrites
 
     def _ensure_defaults(self, data: Dict[str, Any]) -> None:
         for key, value in self.defaults.items():

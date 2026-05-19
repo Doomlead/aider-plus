@@ -219,12 +219,12 @@ def test_context_builder_ranks_memories_and_explains_recent_injection(tmp_path):
     )
     assert all("Payment reconciliation" not in item for item in guidance)
     assert context["playbook_retrieval_explanations"]
-    assert "Why this was included" in context["playbook_retrieval_explanations"][0]
+    assert "scope_reason=" in context["playbook_retrieval_explanations"][0]
 
     overview = KnowledgeManager(orchestrator.state).get_overview()
     recent = overview["recently_injected"]
     assert recent[0]["type"] == "playbook"
-    assert "Why this was included" in recent[0]["explanation"]
+    assert "scope_reason=" in recent[0]["explanation"]
 
 
 def test_skill_ranking_explanation_generation_and_prompt_injection(tmp_path):
@@ -262,7 +262,7 @@ def test_skill_ranking_explanation_generation_and_prompt_injection(tmp_path):
         "invite rollout smoke checks", context["skills"]
     )
     assert explanations
-    assert all("Why this was included" in explanation for explanation in explanations)
+    assert all("scope_reason=" in explanation for explanation in explanations)
     assert any(
         "invite" in explanation or "rollout" in explanation
         for explanation in explanations

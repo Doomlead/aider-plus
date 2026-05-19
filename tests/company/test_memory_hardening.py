@@ -64,12 +64,12 @@ def test_migration_v4_to_v5_safe_backup(tmp_path):
     migrator = ProjectMemoryMigrator(ProjectMemory.DEFAULTS)
     data = {"schema_version": 4, "memory": {"records": [], "threads": []}}
     migrated = migrator.migrate(data)
-    assert migrated["schema_version"] == 6
+    assert migrated["schema_version"] == 7
     assert "memory_metrics" in migrated["observability"]
     assert migrated["memory"]["migration_log"][0]["from_version"] == 4
     assert migrated["memory"]["migration_log"][0]["to_version"] == 5
-    assert migrated["memory"]["migration_log"][-1]["from_version"] == 5
-    assert migrated["memory"]["migration_log"][-1]["to_version"] == 6
+    assert migrated["memory"]["migration_log"][-1]["from_version"] == 6
+    assert migrated["memory"]["migration_log"][-1]["to_version"] == 7
     assert migrated["memory"]["migration_log"][-1]["records_processed"] == 0
 
 
@@ -108,9 +108,9 @@ def test_migration_v6_normalizes_legacy_visibility_and_channel_pair(tmp_path):
     assert record["metadata"] == {"custom": True}
     assert migrated["migration"]["v5_visibility_records_normalized"] >= 1
     assert migrated["migration"]["v6_legacy_rewrites"] == 0
-    assert len(migrated["memory"]["migration_log"]) == 2
+    assert len(migrated["memory"]["migration_log"]) == 3
     remigrated = migrator.migrate(migrated)
-    assert len(remigrated["memory"]["migration_log"]) == 2
+    assert len(remigrated["memory"]["migration_log"]) == 3
 
 
 def test_migration_v5_quarantines_invalid_records_after_validation(tmp_path, caplog):

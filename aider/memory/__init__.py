@@ -11,6 +11,8 @@ from .conversation import ConversationMemory, Message
 from .dream import consolidate_conversation
 from .evidence import SkillEvidenceCluster, collect_evidence_for_project
 from .project import ProjectMemory
+from .policy import RankingPolicy
+from .fabric import MemoryFabric
 from .records import MemoryQuery, MemoryRecord
 from .index import LocalTFIDFIndex, MemoryBackendAdapter, MemoryEmbeddingProvider, MemoryIndex, SQLiteFTSIndex
 from .store import MemoryStore
@@ -41,6 +43,8 @@ __all__ = [
     "Message",
     "ProjectMemory",
     "SQLiteMemoryRepository",
+    "RankingPolicy",
+    "MemoryFabric",
     "collect_evidence_for_project",
     "consolidate_conversation",
 ]

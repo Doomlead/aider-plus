@@ -84,6 +84,47 @@ class MemoryStore:
             return dict(item)
         return None
 
+    def record_outcome(
+        self, record_id: str, outcome: str, context: Optional[dict[str, Any]] = None
+    ) -> Optional[dict[str, Any]]:
+        normalized = str(outcome).strip().lower()
+        if normalized not in {"success", "failure", "neutral"}:
+            raise ValueError("outcome must be one of: success, failure, neutral")
+        for item in self._record_dicts():
+            item_id = item.get("id") or item.get("record_id")
+            if item_id != record_id:
+                continue
+            record = MemoryRecord.from_dict(item)
+            record.usage_count = int(record.usage_count) + 1
+            if normalized == "success":
+                record.successful_uses = int(record.successful_uses) + 1
+            elif normalized == "failure":
+                record.failed_uses = int(record.failed_uses) + 1
+            record.last_used_at = utc_now_iso()
+            total = max(1, int(record.usage_count))
+            record.acceptance_rate = round(float(record.successful_uses) / total, 4)
+            record.reinforcement_score = round(
+                float(record.successful_uses - record.failed_uses) / total, 4
+            )
+            metadata = dict(record.metadata)
+            trail = metadata.get("outcome_trail", [])
+            if not isinstance(trail, list):
+                trail = []
+            trail.append(
+                {
+                    "outcome": normalized,
+                    "recorded_at": record.last_used_at,
+                    "context": dict(context or {}),
+                }
+            )
+            metadata["outcome_trail"] = trail[-50:]
+            record.metadata = metadata
+            item.update(record.to_dict())
+            self.project_memory.update({"memory": self._memory_namespace()})
+            self.project_memory.persist()
+            return dict(item)
+        return None
+
     def update_record_metadata(
         self, record_id: str, metadata: Dict[str, Any]
     ) -> Optional[dict[str, Any]]:

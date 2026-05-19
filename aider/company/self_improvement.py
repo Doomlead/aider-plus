@@ -12,7 +12,11 @@ from aider.company.skills import (
     slugify_skill_name,
 )
 from aider.company.state import CompanyStateManager
-from aider.memory.evidence import SkillEvidenceCluster, cluster_channel_patterns, collect_evidence_for_project
+from aider.memory.evidence import (
+    SkillEvidenceCluster,
+    cluster_channel_patterns,
+    collect_evidence_for_project,
+)
 from aider.memory.reinforcement import record_memory_outcome, record_skill_outcome
 from aider.memory.store import MemoryStore
 
@@ -42,8 +46,12 @@ class SelfImprovementService:
 
         audit_proposals = self._audit_proposals(project, final_deliverable)
         memory_proposals = self.learn_from_memory(project, persist=False)
-        channel_proposals = self.learn_from_communication_patterns(project, persist=False)
-        return self._store_new_proposals([*audit_proposals, *memory_proposals, *channel_proposals])
+        channel_proposals = self.learn_from_communication_patterns(
+            project, persist=False
+        )
+        return self._store_new_proposals(
+            [*audit_proposals, *memory_proposals, *channel_proposals]
+        )
 
     def learn_from_memory(
         self, project: Project, *, persist: bool = True
@@ -74,7 +82,14 @@ class SelfImprovementService:
             return []
         store = MemoryStore(self.state.memory)
         channel_ids = {
-            str((record.metadata or {}).get("channel_id") or (record.metadata or {}).get("channel") or "").lower().strip()
+            str(
+                record.channel_id
+                or (record.metadata or {}).get("channel_id")
+                or (record.metadata or {}).get("channel")
+                or ""
+            )
+            .lower()
+            .strip()
             for record in store.query_records()
             if isinstance(record.metadata, dict)
         }
@@ -99,13 +114,17 @@ class SelfImprovementService:
 
     def _maintenance_proposals_from_reinforcement(self) -> list[SkillProposal]:
         skills = self.state.memory.data.get("skills", {})
-        reinforcement = skills.get("reinforcement", {}) if isinstance(skills, dict) else {}
+        reinforcement = (
+            skills.get("reinforcement", {}) if isinstance(skills, dict) else {}
+        )
         proposals: list[SkillProposal] = []
         for skill_id, item in reinforcement.items():
             if not isinstance(item, dict):
                 continue
             failure_count = int(item.get("failure_count") or 0)
-            success_count = int(item.get("success_count") or item.get("reinforcement_count") or 0)
+            success_count = int(
+                item.get("success_count") or item.get("reinforcement_count") or 0
+            )
             scope = str(item.get("scope") or "shared")
             name = str(item.get("name") or "").strip()
             if not name:
@@ -139,14 +158,18 @@ class SelfImprovementService:
                         target_skill_id=f"{scope}:{name}",
                         patch_reason="Contradictory evidence across outcomes.",
                         old_evidence=["Procedure based on older, conflicting steps."],
-                        new_evidence=["Procedure updated to align with latest successful outcomes."],
+                        new_evidence=[
+                            "Procedure updated to align with latest successful outcomes."
+                        ],
                         confidence=0.7,
                         metadata={"source": "reinforcement"},
                     )
                 )
         return proposals
 
-    def apply_reinforcement_and_decay(self, *, threshold_days: int = 30) -> dict[str, Any]:
+    def apply_reinforcement_and_decay(
+        self, *, threshold_days: int = 30
+    ) -> dict[str, Any]:
         store = MemoryStore(self.state.memory)
         decayed = store.decay_stale_records(threshold_days=threshold_days)
         skills = self.state.memory.data.get("skills", {})

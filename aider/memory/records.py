@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, Optional
 from uuid import uuid4
 
 from .scopes import SCOPE_PROJECT, validate_scope
+from .visibility import validate_visibility
 
 MEMORY_RECORD_SCHEMA_VERSION = 1
 
@@ -46,6 +47,28 @@ class MemoryRecord:
             self.tags = list(self.tags or [])
         if self.metadata is None:
             self.metadata = {}
+        if self.skill_evidence is None and isinstance(
+            self.metadata.get("skill_evidence"), dict
+        ):
+            self.skill_evidence = dict(self.metadata.pop("skill_evidence"))
+
+    def validate(self, *, allow_legacy_visibility: bool = True) -> None:
+        """Validate required canonical fields before a record is persisted."""
+
+        if not self.record_id:
+            raise ValueError("memory record id is required")
+        validate_scope(self.scope)
+        self.visibility = validate_visibility(
+            self.visibility, allow_legacy=allow_legacy_visibility
+        )
+        if not self.kind:
+            raise ValueError("memory record kind is required")
+        if not self.created_at:
+            raise ValueError("memory record created_at is required")
+        if self.skill_evidence is not None and not isinstance(
+            self.skill_evidence, dict
+        ):
+            raise ValueError("memory record skill_evidence must be a dictionary")
 
     @property
     def id(self) -> str:
@@ -82,25 +105,43 @@ class MemoryRecord:
             raise ValueError("memory record must be a dictionary")
         record_id = data.get("record_id") or data.get("id")
         kind = data.get("kind") or data.get("type") or "note"
-        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        metadata = (
+            data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        )
+        custom_metadata = dict(metadata)
+        skill_evidence = data.get("skill_evidence") or custom_metadata.pop(
+            "skill_evidence", None
+        )
         return cls(
-            schema_version=int(data.get("schema_version") or MEMORY_RECORD_SCHEMA_VERSION),
+            schema_version=int(
+                data.get("schema_version") or MEMORY_RECORD_SCHEMA_VERSION
+            ),
             record_id=str(record_id) if record_id else f"mem_{uuid4().hex}",
             kind=str(kind),
             content=data.get("content"),
-            scope=str(data.get("scope") or SCOPE_PROJECT),
-            visibility=str(data.get("visibility") or "project"),
-            created_at=str(data.get("created_at") or utc_now_iso()),
-            updated_at=data.get("updated_at"),
-            author=data.get("author"),
-            department=data.get("department") or metadata.get("department"),
-            project_id=data.get("project_id") or metadata.get("project_id"),
-            thread_id=data.get("thread_id") or metadata.get("thread_id"),
-            channel_id=data.get("channel_id") or metadata.get("channel_id") or metadata.get("channel"),
-            user_id=data.get("user_id") or metadata.get("user_id"),
-            tags=list(data.get("tags") or []),
-            metadata=dict(metadata),
-            skill_evidence=data.get("skill_evidence"),
+            scope=str(data.get("scope") or custom_metadata.pop("scope", SCOPE_PROJECT)),
+            visibility=str(
+                data.get("visibility") or custom_metadata.pop("visibility", "project")
+            ),
+            created_at=str(
+                data.get("created_at")
+                or custom_metadata.pop("created_at", utc_now_iso())
+            ),
+            updated_at=data.get("updated_at")
+            or custom_metadata.pop("updated_at", None),
+            author=data.get("author") or custom_metadata.pop("author", None),
+            department=data.get("department")
+            or custom_metadata.pop("department", None),
+            project_id=data.get("project_id")
+            or custom_metadata.pop("project_id", None),
+            thread_id=data.get("thread_id") or custom_metadata.pop("thread_id", None),
+            channel_id=data.get("channel_id")
+            or custom_metadata.pop("channel_id", None)
+            or custom_metadata.pop("channel", None),
+            user_id=data.get("user_id") or custom_metadata.pop("user_id", None),
+            tags=list(data.get("tags") or custom_metadata.pop("tags", []) or []),
+            metadata=custom_metadata,
+            skill_evidence=skill_evidence,
         )
 
 

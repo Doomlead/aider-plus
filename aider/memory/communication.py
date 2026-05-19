@@ -236,12 +236,18 @@ def append_communication_record(
             "targets": [target for target in (targets or []) if target],
         }
     )
+    department = None
+    if isinstance(scope, str) and scope.startswith("department:"):
+        department = scope.split(":", 1)[1]
     record = MemoryRecord(
         kind=event_type,
         content=content,
         scope=scope,
         visibility=visibility,
         author=origin,
+        department=department,
+        thread_id=thread_id,
+        channel_id=safe_metadata.get("channel_id") or safe_metadata.get("channel"),
         tags=["communication", event_type],
         metadata=safe_metadata,
         skill_evidence=skill_evidence,

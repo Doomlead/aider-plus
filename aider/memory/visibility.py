@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from .records import MemoryQuery, MemoryRecord
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .records import MemoryQuery, MemoryRecord
 from .scopes import SCOPE_GLOBAL, SCOPE_SHARED, parse_scope, validate_scope
 
 VISIBILITY_PRIVATE = "private"
@@ -32,8 +35,8 @@ LEGACY_VISIBILITY_ALIASES = {
 ALL_VISIBILITIES = frozenset((*VALID_VISIBILITIES, *LEGACY_VISIBILITY_ALIASES))
 
 
-def validate_visibility(visibility: str | None) -> str:
-    """Return the canonical visibility value or raise for unknown values."""
+def normalize_visibility(visibility: str | None) -> str:
+    """Return the canonical visibility value, accepting legacy persisted aliases."""
 
     value = visibility or VISIBILITY_PROJECT
     canonical = LEGACY_VISIBILITY_ALIASES.get(value, value)
@@ -45,14 +48,29 @@ def validate_visibility(visibility: str | None) -> str:
     return canonical
 
 
-def is_visible(record: MemoryRecord, query: MemoryQuery | None = None) -> bool:
+def validate_visibility(visibility: str | None, *, allow_legacy: bool = True) -> str:
+    """Return a canonical visibility value or raise for unknown/legacy writes."""
+
+    value = visibility or VISIBILITY_PROJECT
+    if not allow_legacy and value in LEGACY_VISIBILITY_ALIASES:
+        raise ValueError(
+            f"legacy memory visibility {value!r} is not accepted on write; use "
+            f"{LEGACY_VISIBILITY_ALIASES[value]!r}"
+        )
+    return normalize_visibility(value)
+
+
+def is_visible(record: "MemoryRecord", query: "MemoryQuery" | None = None) -> bool:
     """Apply canonical memory visibility rules for a record/query pair."""
 
-    visibility = validate_visibility(record.visibility)
+    visibility = normalize_visibility(record.visibility)
     if visibility == VISIBILITY_SYSTEM:
         return True
 
-    query = query or MemoryQuery()
+    if query is None:
+        from .records import MemoryQuery
+
+        query = MemoryQuery()
     requester_scope = query.requester_scope or query.scope
     record_scope = validate_scope(record.scope)
 
@@ -83,10 +101,9 @@ def is_visible(record: MemoryRecord, query: MemoryQuery | None = None) -> bool:
                 and requester.name in str(rec.name or "").split(":")
             )
         if rec.prefix == "channel_pair":
-            return (
-                requester.prefix in {"department", "role"}
-                and requester.name in str(rec.name or "").split(":")
-            )
+            return requester.prefix in {"department", "role"} and requester.name in str(
+                rec.name or ""
+            ).split(":")
         return rec == requester
 
     # Project visibility: broadly visible inside the project, but records scoped
@@ -119,6 +136,6 @@ def is_visible(record: MemoryRecord, query: MemoryQuery | None = None) -> bool:
 
 
 def filter_visible(
-    records: list[MemoryRecord], query: MemoryQuery | None = None
-) -> list[MemoryRecord]:
+    records: list["MemoryRecord"], query: "MemoryQuery" | None = None
+) -> list["MemoryRecord"]:
     return [record for record in records if is_visible(record, query)]

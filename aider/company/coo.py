@@ -17,6 +17,7 @@ from aider.company.workflow import WorkflowError
 from aider.company.schemas import CompanyTask, Deliverable
 from aider.company.skills import CompanySkillManager
 from aider.memory import ProjectMemory
+from aider.memory.store import MemoryStore
 from aider.memory import communication as communication_memory
 
 
@@ -1098,6 +1099,20 @@ class NanobotCOO:
         if any(
             phrase in prompt_lower
             for phrase in (
+                "memory health",
+                "memory fabric health",
+                "what is the memory health",
+            )
+        ):
+            return COOActionDecision(
+                action="inspect_knowledge",
+                response_to_ceo=self._format_memory_health_for_ceo(),
+                confidence=0.95,
+                reasoning="CEO asked for memory health.",
+            )
+        if any(
+            phrase in prompt_lower
+            for phrase in (
                 "what knowledge",
                 "inspect knowledge",
                 "knowledge overview",
@@ -1386,7 +1401,6 @@ class NanobotCOO:
             self.orchestrator.state, self.orchestrator.company_config.skill_learning
         ).search_knowledge(query)
 
-
     def list_skills_needing_attention(self) -> dict[str, Any]:
         """COO personal action: list pending patch/retirement skill proposals."""
 
@@ -1408,11 +1422,16 @@ class NanobotCOO:
             if skill.get("name") == skill_name or skill.get("id") == skill_name:
                 return km.get_evidence_for_skill(str(skill.get("id")))
         for proposal in km.get_skill_proposals():
-            if proposal.get("name") == skill_name or proposal.get("proposal_id") == skill_name:
+            if (
+                proposal.get("name") == skill_name
+                or proposal.get("proposal_id") == skill_name
+            ):
                 return km.get_evidence_for_skill(str(proposal.get("proposal_id")))
         return {"skill_name": skill_name, "status": "not_found"}
 
-    def review_proposal(self, proposal_id: str, decision: str = "approve") -> dict[str, Any]:
+    def review_proposal(
+        self, proposal_id: str, decision: str = "approve"
+    ) -> dict[str, Any]:
         """COO personal action: approve/reject pending skill proposal."""
 
         km = KnowledgeManager(
@@ -1546,6 +1565,7 @@ class NanobotCOO:
             "daemon": self.list_daemon_workflows(),
             "last_deployment": self._last_deployment_payload(),
             "security": self._security_status_payload(),
+            "memory_health": self._memory_health_payload(),
         }
 
     def _last_deployment_payload(self) -> dict[str, Any] | None:
@@ -1607,11 +1627,7 @@ class NanobotCOO:
         skills = self.inspect_skills()
         pending = skills.get("pending_proposals", [])
         patch_needed = len(
-            [
-                p
-                for p in pending
-                if isinstance(p, dict) and p.get("action") == "patch"
-            ]
+            [p for p in pending if isinstance(p, dict) and p.get("action") == "patch"]
         )
         return {
             "available_count": skills.get("available_count", 0),
@@ -1633,11 +1649,7 @@ class NanobotCOO:
         ]
         pending = skills.get("pending_proposals", [])
         patch_needed = len(
-            [
-                p
-                for p in pending
-                if isinstance(p, dict) and p.get("action") == "patch"
-            ]
+            [p for p in pending if isinstance(p, dict) and p.get("action") == "patch"]
         )
         lines.append(
             f"- Skill health: {patch_needed} skills need patching, {skills.get('retired_skills_count', 0)} retired."
@@ -1757,6 +1769,7 @@ class NanobotCOO:
             f"- Skills: {status['skills_summary'].get('available_count', 0)} available / "
             f"{status['skills_summary'].get('recently_used_count', 0)} recently used",
             f"- Daemon: {status['daemon'].get('status', 'not_configured')}",
+            self._format_memory_health_line(status.get("memory_health")),
             self._format_security_status_line(status.get("security")),
             self._format_last_deployment_status_line(status.get("last_deployment")),
         ]
@@ -1772,6 +1785,42 @@ class NanobotCOO:
             lines.append("  - " + ", ".join(status["pending_approvals"]))
         if status["recent_errors"]:
             lines.append(f"- Recent COO errors: {len(status['recent_errors'])}")
+        return "\n".join(lines)
+
+    def _memory_health_payload(self) -> dict[str, Any]:
+        try:
+            return MemoryStore(self.orchestrator.state.memory).get_metrics()
+        except Exception as exc:
+            return {"status": "unavailable", "error": str(exc)}
+
+    @staticmethod
+    def _format_memory_health_line(memory_health: dict[str, Any] | None) -> str:
+        if not memory_health or memory_health.get("status") == "unavailable":
+            return "- Memory health: unavailable"
+        score = float(memory_health.get("memory_health_score", 0.0) or 0.0)
+        badge = "🟢" if score >= 80 else ("🟡" if score >= 60 else "🔴")
+        return (
+            f"- Memory health: {score:.1f}% {badge} "
+            f"({int(memory_health.get('total_records', memory_health.get('memory_records_total', 0)) or 0)} records, "
+            f"{int(memory_health.get('stale_count', memory_health.get('stale_memory_count', 0)) or 0)} stale, "
+            f"{float(memory_health.get('skill_evidence_coverage_pct', 0.0) or 0.0):.1f}% evidence coverage)"
+        )
+
+    def _format_memory_health_for_ceo(self) -> str:
+        memory_health = self._memory_health_payload()
+        lines = [
+            "CEO, current memory health:",
+            self._format_memory_health_line(memory_health),
+        ]
+        if memory_health.get("status") == "unavailable":
+            lines.append(f"- Error: {memory_health.get('error')}")
+        else:
+            lines.append(
+                f"- Recall hit rate: {float(memory_health.get('recall_hit_rate', 0.0) or 0.0):.2f}"
+            )
+            lines.append(
+                f"- Skill evidence records: {int(memory_health.get('skill_evidence_records', 0) or 0)}"
+            )
         return "\n".join(lines)
 
     def _security_status_payload(self) -> dict[str, Any]:
@@ -1942,6 +1991,7 @@ class NanobotCOO:
             "last_human_escalation": session_snapshot.get("last_human_escalation"),
             "skills_summary": self._skills_status_summary(),
             "daemon": self.list_daemon_workflows(),
+            "memory_health_card": self._memory_health_payload(),
             "security_card": self._security_status_payload(),
             "attention": {
                 "has_recent_errors": bool(session_snapshot.get("recent_errors")),

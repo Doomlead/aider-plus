@@ -21,6 +21,8 @@ class ProjectMemory:
         "memory": {
             "records": [],
             "threads": [],
+            "migration_log": [],
+            "corrupt_backup": [],
         },
         "observability": {
             "turns_per_phase": {},

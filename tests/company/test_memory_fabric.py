@@ -40,7 +40,9 @@ def test_memory_schema_migration_preserves_existing_project_data(tmp_path):
         ]
         == 12
     )
-    assert data["memory"] == {"records": [], "threads": []}
+    assert data["memory"]["records"] == []
+    assert data["memory"]["threads"] == []
+    assert isinstance(data["memory"]["migration_log"], list)
     assert "memory_metrics" in data["observability"]
     assert "migration" in data
 
@@ -77,7 +79,9 @@ def test_memory_store_appends_persists_and_queries_records(tmp_path):
 def test_memory_store_applies_basic_visibility_filtering(tmp_path):
     store = MemoryStore(ProjectMemory(str(tmp_path)))
     shared = store.append_record(
-        MemoryRecord(content="shared rollout note", scope="shared", visibility="project")
+        MemoryRecord(
+            content="shared rollout note", scope="shared", visibility="project"
+        )
     )
     engineering = store.append_record(
         MemoryRecord(

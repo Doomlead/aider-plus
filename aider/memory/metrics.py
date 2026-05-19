@@ -32,8 +32,10 @@ def summarize_memory_metrics(memory_namespace: dict[str, Any]) -> dict[str, Any]
 
     return {
         "memory_records_total": len(records),
+        "total_records": len(records),
         "records_by_scope": dict(by_scope),
         "stale_memory_count": stale_count,
+        "stale_count": stale_count,
         "skill_evidence_records": evidence_count,
         "skill_evidence_coverage_pct": evidence_pct,
     }

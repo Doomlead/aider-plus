@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from abc import ABC, abstractmethod
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
 CURRENT_SCHEMA_VERSION = 5
+logger = logging.getLogger(__name__)
 
 
 class MemoryRepository(ABC):
@@ -136,6 +139,8 @@ class ProjectMemoryMigrator:
             data["memory"] = memory
         memory.setdefault("records", [])
         memory.setdefault("threads", [])
+        memory.setdefault("migration_log", [])
+        memory.setdefault("corrupt_backup", [])
         return data
 
     def _migrate_to_v5(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -150,49 +155,130 @@ class ProjectMemoryMigrator:
             migration = {}
             data["migration"] = migration
         migration.setdefault("last_schema_backup", None)
-        self._normalize_memory_records_for_v5(data)
+        memory = self._ensure_memory_namespace(data)
+        already_ran = any(
+            isinstance(item, dict) and int(item.get("to_version") or 0) >= 5
+            for item in memory.get("migration_log", [])
+        )
+        if already_ran:
+            return data
+        records_processed = self._normalize_memory_records_for_v5(data)
+        memory.setdefault("migration_log", []).append(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "from_version": 4,
+                "to_version": 5,
+                "records_processed": records_processed,
+            }
+        )
         return data
 
-    def _normalize_memory_records_for_v5(self, data: Dict[str, Any]) -> None:
-        """Rewrite legacy visibility aliases during the one-time v5 migration."""
+    def _normalize_memory_records_for_v5(self, data: Dict[str, Any]) -> int:
+        """Rewrite legacy aliases, validate records, and quarantine corrupt rows."""
 
-        from .visibility import LEGACY_VISIBILITY_ALIASES, VALID_VISIBILITIES
+        from .records import MemoryRecord
+        from .visibility import LEGACY_VISIBILITY_ALIASES
 
-        memory = data.get("memory")
-        if not isinstance(memory, dict):
-            return
+        memory = self._ensure_memory_namespace(data)
         records = memory.get("records")
         if not isinstance(records, list):
-            return
+            records = []
+            memory["records"] = records
         rewrites = 0
+        valid_records: list[dict[str, Any]] = []
+        corrupt_records: list[Any] = []
+        lifted_keys = (
+            "scope",
+            "visibility",
+            "kind",
+            "created_at",
+            "updated_at",
+            "author",
+            "department",
+            "project_id",
+            "thread_id",
+            "channel_id",
+            "channel",
+            "user_id",
+            "tags",
+            "skill_evidence",
+        )
         for item in records:
             if not isinstance(item, dict):
+                corrupt_records.append(item)
+                logger.warning(
+                    "Skipping corrupt v5 memory record during migration: non-dict"
+                )
                 continue
-            metadata = item.get("metadata")
-            if isinstance(metadata, dict):
-                for key in (
-                    "scope",
-                    "visibility",
-                    "kind",
-                    "created_at",
-                    "skill_evidence",
-                ):
-                    if key in metadata and key not in item:
-                        item[key] = metadata.pop(key)
-                        rewrites += 1
-            visibility = item.get("visibility")
+            candidate = dict(item)
+            metadata = (
+                dict(candidate.get("metadata"))
+                if isinstance(candidate.get("metadata"), dict)
+                else {}
+            )
+            for key in lifted_keys:
+                if key in metadata and key not in candidate:
+                    candidate[key] = metadata.pop(key)
+                    rewrites += 1
+            if "channel" in candidate and "channel_id" not in candidate:
+                candidate["channel_id"] = candidate.pop("channel")
+                rewrites += 1
+            candidate["metadata"] = metadata
+            visibility = candidate.get("visibility")
             if visibility in LEGACY_VISIBILITY_ALIASES:
-                item["visibility"] = LEGACY_VISIBILITY_ALIASES[visibility]
+                candidate["visibility"] = LEGACY_VISIBILITY_ALIASES[visibility]
                 rewrites += 1
             elif not visibility:
-                item["visibility"] = "project"
+                candidate["visibility"] = "project"
                 rewrites += 1
-            elif visibility not in VALID_VISIBILITIES:
+            try:
+                record = MemoryRecord.from_dict(candidate)
+                record.validate(allow_legacy_visibility=True)
+            except Exception as exc:
+                corrupt_records.append(item)
+                logger.warning(
+                    "Quarantining corrupt v5 memory record during migration: %s", exc
+                )
                 continue
-        if rewrites:
-            migration = data.setdefault("migration", {})
-            if isinstance(migration, dict):
-                migration["v5_visibility_records_normalized"] = rewrites
+            serialized = record.to_dict()
+            valid_records.append(serialized)
+            if serialized != item:
+                rewrites += 1
+        memory["records"] = valid_records
+        if corrupt_records:
+            self._append_corrupt_backup(memory, corrupt_records)
+        migration = data.setdefault("migration", {})
+        if isinstance(migration, dict):
+            migration["v5_visibility_records_normalized"] = rewrites
+            if corrupt_records:
+                migration["v5_corrupt_records_quarantined"] = len(corrupt_records)
+        return len(records)
+
+    def _ensure_memory_namespace(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        memory = data.get("memory")
+        if not isinstance(memory, dict):
+            memory = {}
+            data["memory"] = memory
+        if not isinstance(memory.get("records"), list):
+            memory["records"] = []
+        if not isinstance(memory.get("threads"), list):
+            memory["threads"] = []
+        if not isinstance(memory.get("migration_log"), list):
+            memory["migration_log"] = []
+        if not isinstance(memory.get("corrupt_backup"), list):
+            memory["corrupt_backup"] = []
+        return memory
+
+    def _append_corrupt_backup(
+        self, memory: Dict[str, Any], records: list[Any]
+    ) -> None:
+        memory.setdefault("corrupt_backup", []).append(
+            {
+                "quarantined_at": datetime.now(timezone.utc).isoformat(),
+                "reason": "v5 migration validation failed",
+                "records": records,
+            }
+        )
 
     def _ensure_defaults(self, data: Dict[str, Any]) -> None:
         for key, value in self.defaults.items():
@@ -215,6 +301,10 @@ class ProjectMemoryMigrator:
             memory["records"] = []
         if not isinstance(memory.get("threads"), list):
             memory["threads"] = []
+        if not isinstance(memory.get("migration_log"), list):
+            memory["migration_log"] = []
+        if not isinstance(memory.get("corrupt_backup"), list):
+            memory["corrupt_backup"] = []
         observability = data.get("observability")
         if not isinstance(observability, dict):
             observability = {}

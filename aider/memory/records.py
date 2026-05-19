@@ -11,6 +11,23 @@ from .visibility import validate_visibility
 MEMORY_RECORD_SCHEMA_VERSION = 1
 
 
+def normalize_graph_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(metadata or {})
+    edge_keys = ("co_occurs_with", "handoff_from", "handoff_to", "derived_from")
+    for key in edge_keys:
+        value = normalized.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            normalized[key] = [value]
+            continue
+        if isinstance(value, list):
+            normalized[key] = [str(v) for v in value if v]
+            continue
+        normalized.pop(key, None)
+    return normalized
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -137,7 +154,7 @@ class MemoryRecord:
         metadata = (
             data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
         )
-        custom_metadata = dict(metadata)
+        custom_metadata = normalize_graph_metadata(dict(metadata))
         skill_evidence = data.get("skill_evidence") or custom_metadata.pop(
             "skill_evidence", None
         )

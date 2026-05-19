@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from .policy import RankingPolicy
+from .ranking import compute_graph_boosts
 from .records import MemoryQuery, MemoryRecord
 from .retrieval import MemoryRetriever
 
@@ -63,15 +64,18 @@ class LocalTFIDFIndex(MemoryIndex, MemoryBackendAdapter):
         texts = [self._text_builder(record) for record in records]
         scored = MemoryRetriever(texts).score(query.text)
         score_map: dict[str, float] = {text: score for text, score in scored}
+        graph_boosts = compute_graph_boosts(records)
 
         def total_score(record: MemoryRecord) -> float:
             relevance = score_map.get(self._text_builder(record), 0.0)
             reinforcement = float(record.reinforcement_score or 0.0)
             recency = self._recency_boost(record.last_used_at)
+            graph = graph_boosts.get(record.id, 0.0)
             return (
                 relevance
                 + self._policy.reinforcement_weight * reinforcement
                 + self._policy.recency_weight * recency
+                + graph
             )
 
         return sorted(

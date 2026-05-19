@@ -84,6 +84,12 @@ def test_company_help_is_parse_error_with_usage():
         parse_company_cli(["company", "help"])
 
 
+def test_company_memory_backfill_parses():
+    command, aider_args = parse_company_cli(["company", "memory", "backfill"])
+    assert command.action == "memory-backfill"
+    assert aider_args == []
+
+
 def test_render_zero_to_mvp_prompt_has_template_specific_quality_gates():
     prompt = render_zero_to_mvp_prompt(
         idea="Build an internal refund approval tool",

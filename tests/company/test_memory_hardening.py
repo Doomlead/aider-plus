@@ -143,3 +143,49 @@ def test_migration_v5_quarantines_invalid_records_after_validation(tmp_path, cap
     assert migrated["migration"]["v5_corrupt_records_quarantined"] == 1
     assert migrated["memory"]["corrupt_backup"][-1]["records"][0]["id"] == "bad"
     assert "Quarantining corrupt v5 memory record" in caplog.text
+
+
+def test_backfill_legacy_records_is_idempotent_and_tracks_migration_stats(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    memory.update(
+        {
+            "project_id": "proj-1",
+            "audit_log": [
+                {
+                    "event_id": "evt-1",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "project_id": "proj-1",
+                    "department": "qa",
+                    "event_type": "qa_passed",
+                    "payload_summary": "All tests passed",
+                    "metadata": {"task_id": "T-1"},
+                }
+            ],
+            "playbook": {
+                "coding_standards": ["Use typed APIs"],
+                "ux_preferences": ["Prefer clear CTA labels"],
+            },
+        }
+    )
+    memory.persist()
+    store = MemoryStore(memory)
+
+    first = store.backfill_legacy_records()
+    second = store.backfill_legacy_records()
+    records = store.query_records()
+
+    assert first["legacy_items_scanned"] == 3
+    assert first["legacy_records_created"] == 3
+    assert second["legacy_records_created"] == 0
+    assert second["legacy_records_skipped_existing"] == 3
+    assert len(records) == 3
+    assert all(
+        isinstance(record.metadata.get("source"), dict)
+        and record.metadata["source"].get("legacy_path")
+        for record in records
+    )
+    migration = memory.data["migration"]
+    assert migration["v5_backfill_legacy_items_scanned"] == 6
+    assert migration["v5_backfill_records_created"] == 3
+    assert migration["v5_backfill_records_skipped_existing"] == 3
+    assert migration["v5_backfill_last_run_at"]

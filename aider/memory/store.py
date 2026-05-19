@@ -302,6 +302,8 @@ class MemoryStore:
             + 0.2 * recall_hit_rate
         )
         metrics["memory_health_score"] = max(0.0, min(100.0, round(score, 1)))
+        metrics["total_records"] = total
+        metrics["stale_count"] = int(summary.get("stale_memory_count", 0))
         metrics["skill_evidence_coverage_pct"] = summary.get(
             "skill_evidence_coverage_pct", 0.0
         )
@@ -368,10 +370,16 @@ class MemoryStore:
             self.project_memory.data["memory"] = memory
         memory.setdefault("records", [])
         memory.setdefault("threads", [])
+        memory.setdefault("migration_log", [])
+        memory.setdefault("corrupt_backup", [])
         if not isinstance(memory["records"], list):
             memory["records"] = []
         if not isinstance(memory["threads"], list):
             memory["threads"] = []
+        if not isinstance(memory["migration_log"], list):
+            memory["migration_log"] = []
+        if not isinstance(memory["corrupt_backup"], list):
+            memory["corrupt_backup"] = []
         return memory
 
     def _record_dicts(self) -> Iterable[Dict[str, Any]]:

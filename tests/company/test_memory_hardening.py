@@ -66,6 +66,9 @@ def test_migration_v4_to_v5_safe_backup(tmp_path):
     migrated = migrator.migrate(data)
     assert migrated["schema_version"] == 5
     assert "memory_metrics" in migrated["observability"]
+    assert migrated["memory"]["migration_log"][-1]["from_version"] == 4
+    assert migrated["memory"]["migration_log"][-1]["to_version"] == 5
+    assert migrated["memory"]["migration_log"][-1]["records_processed"] == 0
 
 
 def test_append_rejects_legacy_visibility_aliases(tmp_path):
@@ -101,3 +104,42 @@ def test_migration_v5_normalizes_legacy_visibility_and_core_metadata(tmp_path):
     assert record["skill_evidence"] == {"task_id": "t1"}
     assert record["metadata"] == {"custom": True}
     assert migrated["migration"]["v5_visibility_records_normalized"] >= 1
+    assert len(migrated["memory"]["migration_log"]) == 1
+    remigrated = migrator.migrate(migrated)
+    assert len(remigrated["memory"]["migration_log"]) == 1
+
+
+def test_migration_v5_quarantines_invalid_records_after_validation(tmp_path, caplog):
+    migrator = ProjectMemoryMigrator(ProjectMemory.DEFAULTS)
+    data = {
+        "schema_version": 4,
+        "memory": {
+            "records": [
+                {
+                    "id": "good",
+                    "content": "valid",
+                    "metadata": {
+                        "scope": "project",
+                        "visibility": "team",
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                    },
+                },
+                {
+                    "id": "bad",
+                    "content": "invalid scope",
+                    "scope": "invalid:scope",
+                    "visibility": "project",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+            ],
+            "threads": [],
+        },
+    }
+
+    migrated = migrator.migrate(data)
+
+    assert [record["id"] for record in migrated["memory"]["records"]] == ["good"]
+    assert migrated["memory"]["records"][0]["visibility"] == "project"
+    assert migrated["migration"]["v5_corrupt_records_quarantined"] == 1
+    assert migrated["memory"]["corrupt_backup"][-1]["records"][0]["id"] == "bad"
+    assert "Quarantining corrupt v5 memory record" in caplog.text

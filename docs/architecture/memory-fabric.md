@@ -355,6 +355,8 @@ Required ranking factors:
 
 Use `channel:<surface_id>` for records owned by one external or runtime channel, for example `channel:discord-prod`. Use the same canonical form for repeated department-to-department communication patterns, for example `channel:engineering:qa`. `channel_pair:<department_a>:<department_b>` is deprecated and remains a read-only legacy alias during the current rollout so existing evidence remains retrievable; remove that reader path in a future schema migration after old records have been rewritten.
 
+**Deprecation note:** do not write new `channel_pair:` scopes. Treat existing `channel_pair:` records as read-only legacy data in Phase 1. The recommended migration path is to rewrite each `channel_pair:<department_a>:<department_b>` scope to `channel:<department_a>:<department_b>` during the v6 schema migration, preserving the original scope in metadata (for example `metadata.legacy_scope`) until operators verify recall parity. After v6 has rewritten persisted records and dashboards show no remaining `channel_pair:` scopes, remove the legacy reader alias in a later cleanup release.
+
 ### 7.5 Explanation generation
 
 Every injected memory or skill summary must include a concise explanation. The explanation should be stored in task context and recent-injection telemetry.

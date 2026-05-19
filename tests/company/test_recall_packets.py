@@ -55,7 +55,7 @@ def test_recall_packet_scopes_department_private_and_channel_memory(tmp_path):
     pair_channel = store.append_record(
         MemoryRecord(
             content="Engineering and QA agreed to preserve checkout retry handoff notes.",
-            scope="channel_pair:engineering:qa",
+            scope="channel:engineering:qa",
             visibility="project",
         )
     )

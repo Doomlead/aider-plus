@@ -118,6 +118,7 @@ class RecallEngine:
             for item in items
             if item.get("id") or item.get("record_id")
         }
+        self._record_recall_read_path(canonical_only=True)
         return packet
 
     def _department_channel_scopes(self, department: str) -> list[str]:
@@ -127,11 +128,7 @@ class RecallEngine:
         scopes: set[str] = set()
         for record in self.store.query_records():
             scope = str(record.scope or "")
-            if scope.startswith("channel_pair:"):
-                parts = [p for p in scope.split(":")[1:] if p]
-                if dept in parts:
-                    scopes.add(scope)
-            elif scope.startswith("channel:"):
+            if scope.startswith("channel:"):
                 # Canonical department-pair channel scopes are encoded as
                 # channel:<department_a>:<department_b>. Keep channel_pair above
                 # only as a deprecated legacy reader path.
@@ -203,6 +200,26 @@ class RecallEngine:
             for record in records
             if record.scope == scope or record.scope.startswith(f"{scope}:")
         ]
+
+
+    def _record_recall_read_path(self, *, canonical_only: bool) -> None:
+        observability = self.store.project_memory.data.setdefault("observability", {})
+        if not isinstance(observability, dict):
+            return
+        memory_metrics = observability.setdefault("memory_metrics", {})
+        if not isinstance(memory_metrics, dict):
+            return
+        total = int(memory_metrics.get("recall_requests_total") or 0) + 1
+        canonical = int(memory_metrics.get("recall_requests_canonical_only") or 0)
+        if canonical_only:
+            canonical += 1
+        memory_metrics["recall_requests_total"] = total
+        memory_metrics["recall_requests_canonical_only"] = canonical
+        memory_metrics["recall_requests_canonical_only_pct"] = round(
+            (canonical / total) * 100.0, 2
+        )
+        self.store.project_memory.update({"observability": observability})
+        self.store.project_memory.persist()
 
     def _rank_records(
         self,

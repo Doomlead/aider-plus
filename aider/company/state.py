@@ -6,9 +6,7 @@ from typing import Any, List, Optional
 
 from aider.company.audit import append_audit_event
 from aider.company.project import Project
-from aider.memory import ProjectMemory
-from aider.memory.records import MemoryRecord
-from aider.memory.store import MemoryStore
+from aider.memory import MemoryQuery, MemoryRecord, MemoryStore, ProjectMemory
 
 
 class CompanyStateManager:
@@ -72,33 +70,60 @@ class CompanyStateManager:
         return self._memory_store
 
     def get_playbook(self) -> dict:
-        canonical: dict[str, list[dict[str, Any]]] = {}
-        records = self._store().query_records(kind="playbook")
-        for record in records:
-            metadata = record.metadata if isinstance(record.metadata, dict) else {}
-            category = str(metadata.get("playbook_category") or "coding_standards")
-            canonical.setdefault(category, []).append(record.content)
+        store = MemoryStore(self._memory)
+        project_scope = f"project:{self.get_project_id()}"
+        canonical = store.query_records(MemoryQuery(kind="playbook", scope=project_scope))
         if canonical:
-            return canonical
+            grouped: dict[str, list[tuple[int, Any]]] = {}
+            for record in canonical:
+                content = record.content if isinstance(record.content, dict) else {}
+                category = content.get("category")
+                if not isinstance(category, str):
+                    continue
+                index_value = content.get("index", 0)
+                try:
+                    index = int(index_value)
+                except (TypeError, ValueError):
+                    index = 0
+                grouped.setdefault(category, []).append((index, content.get("entry")))
+            return {
+                category: [entry for _, entry in sorted(entries, key=lambda item: item[0])]
+                for category, entries in grouped.items()
+            }
         playbook = self._memory.data.get("playbook", {})
         return playbook if isinstance(playbook, dict) else {}
 
     def save_playbook(self, playbook: dict) -> None:
-        if not isinstance(playbook, dict):
-            return
-        for category, entries in playbook.items():
-            if not isinstance(entries, list):
+        previous_playbook = self.get_playbook()
+        self._append_playbook_memory_records(previous_playbook, playbook)
+        self._memory.persist()
+
+    def _append_playbook_memory_records(
+        self, previous_playbook: dict, new_playbook: dict
+    ) -> None:
+        store = MemoryStore(self._memory)
+        for category, new_entries in new_playbook.items():
+            if not isinstance(new_entries, list):
                 continue
-            for entry in entries:
-                self._store().append_record(
+            old_entries = previous_playbook.get(category, [])
+            old_len = len(old_entries) if isinstance(old_entries, list) else 0
+            if old_len >= len(new_entries):
+                continue
+            for index, entry in enumerate(new_entries[old_len:], start=old_len):
+                kind = "playbook" if category == "coding_standards" else "pattern"
+                store.append_record(
                     MemoryRecord(
-                        kind="playbook",
-                        content=entry,
+                        kind=kind,
                         scope=f"project:{self.get_project_id()}",
                         visibility="project",
-                        department="orchestrator",
                         project_id=self.get_project_id(),
-                        metadata={"playbook_category": str(category)},
+                        department="orchestrator",
+                        channel_id="playbook",
+                        content={
+                            "category": category,
+                            "entry": entry,
+                            "index": index,
+                        },
                     )
                 )
 
@@ -374,22 +399,30 @@ class CompanyStateManager:
         return round(prompt_cost + completion_cost, 6)
 
     def get_audit_log(self) -> List[dict]:
-        records = self._store().query_records(kind="audit_summary")
+        store = MemoryStore(self._memory)
+        project_scope = f"project:{self.get_project_id()}"
+        records = store.query_records(
+            MemoryQuery(kind="audit_summary", scope=project_scope)
+        )
         if records:
-            return [
-                {
-                    "event_id": record.id,
-                    "timestamp": record.created_at,
-                    "project_id": record.project_id or self.get_project_id(),
-                    "department": record.department or "orchestrator",
-                    "event_type": str((record.metadata or {}).get("event_type") or "event"),
-                    "payload_summary": str(record.content),
-                    "metadata": dict(record.metadata or {}),
-                }
-                for record in records
-            ]
-        raw = self._memory.data.get("audit_log", [])
-        if not isinstance(raw, list):
+            audit_rows = []
+            for record in records:
+                content = record.content if isinstance(record.content, dict) else {}
+                metadata = content.get("metadata", {})
+                audit_rows.append(
+                    {
+                        "event_id": content.get("event_id"),
+                        "timestamp": content.get("timestamp"),
+                        "project_id": record.project_id,
+                        "department": record.department,
+                        "event_type": content.get("event_type"),
+                        "payload_summary": content.get("payload_summary"),
+                        "metadata": metadata if isinstance(metadata, dict) else {},
+                    }
+                )
+            return audit_rows
+        records = self._memory.data.get("audit_log", [])
+        if not isinstance(records, list):
             return []
         return [record for record in raw if isinstance(record, dict)]
 

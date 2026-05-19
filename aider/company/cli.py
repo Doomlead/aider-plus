@@ -69,6 +69,7 @@ USAGE = """Usage:
   aider company daemon --workflow PATH [--tracker TYPE] [--repo OWNER/REPO] [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N] [--watch] [--filter EVENT_TYPE]
   aider company memory status
   aider company memory repair [--yes]
+  aider company memory backfill
   aider warehouse init [PATH]
   aider warehouse list [--warehouse PATH]
   aider warehouse open PRODUCT [--warehouse PATH]
@@ -119,8 +120,11 @@ def parse_company_cli(
     if action == "daemon":
         return _parse_company_daemon(rest), aider_args
     if action == "memory":
-        if not rest or rest[0] not in {"status", "repair"}:
-            raise CompanyCLIError("`aider company memory` supports `status` or `repair`.\n" + USAGE)
+        if not rest or rest[0] not in {"status", "repair", "backfill"}:
+            raise CompanyCLIError(
+                "`aider company memory` supports `status`, `repair`, or `backfill`.\n"
+                + USAGE
+            )
         return CompanyCLICommand(action=f"memory-{rest[0]}", yes="--yes" in rest), aider_args
 
     if action not in {"create", "new"}:
@@ -425,10 +429,13 @@ def handle_company_cli_pre_coder(command: CompanyCLICommand) -> int | None:
         return 0
     if command.action == "daemon":
         return handle_company_daemon_cli(command)
-    if command.action in {"memory-status", "memory-repair"}:
+    if command.action in {"memory-status", "memory-repair", "memory-backfill"}:
         store = MemoryStore(ProjectMemory(str(Path.cwd())))
         if command.action == "memory-status":
             print(store.get_metrics())
+            return 0
+        if command.action == "memory-backfill":
+            print(store.backfill_legacy_records())
             return 0
         result = store.repair(confirm=command.yes)
         print(result if command.yes else {"dry_run": True, **result})

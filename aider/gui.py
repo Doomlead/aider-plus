@@ -694,6 +694,11 @@ class DesktopCompanySession:
         if warehouse_registry.exists():
             active_products = str(warehouse_registry)
         daemon = self.daemon_status()
+        memory_health = MemoryStore(self.orchestrator.memory).get_metrics()
+        memory_score = float(memory_health.get("memory_health_score", 0.0) or 0.0)
+        memory_badge = (
+            "🟢" if memory_score >= 80 else ("🟡" if memory_score >= 60 else "🔴")
+        )
         deploy_result = getattr(self.active_project, "deploy_result", None)
         deploy_payload = (
             getattr(deploy_result, "payload", {})
@@ -789,6 +794,8 @@ class DesktopCompanySession:
             "daemon_pending_proof_of_work": daemon.get("pending_proof_of_work", 0),
             "daemon_recent_proof_of_work": daemon.get("recent_proof_of_work", []),
             "daemon_recent_runs": daemon.get("runs", [])[-5:],
+            "memory_health": memory_health,
+            "memory_health_status": f"{memory_score:.1f}% {memory_badge}",
             "security_status": (
                 (self.orchestrator.memory.data.get("security", {}) or {}).get(
                     "status", "not_scanned"
@@ -1670,6 +1677,33 @@ class GUI:
         )
         o5.metric("Pending escalations", overview["pending_escalations"])
         o6.metric("Daemon status", overview["daemon_status"])
+        memory_health = overview.get("memory_health") or {}
+        with st.container(border=True):
+            st.subheader("Memory Health Card")
+            st.write(f"**Status:** {overview.get('memory_health_status', '0.0% 🔴')}")
+            mh1, mh2, mh3 = st.columns(3)
+            mh1.metric(
+                "Records",
+                int(
+                    memory_health.get(
+                        "total_records", memory_health.get("memory_records_total", 0)
+                    )
+                    or 0
+                ),
+            )
+            mh2.metric(
+                "Stale",
+                int(
+                    memory_health.get(
+                        "stale_count", memory_health.get("stale_memory_count", 0)
+                    )
+                    or 0
+                ),
+            )
+            mh3.metric(
+                "Evidence",
+                f"{float(memory_health.get('skill_evidence_coverage_pct', 0.0) or 0.0):.1f}%",
+            )
         with st.container(border=True):
             st.write(f"**Caching enabled:** {overview['caching']}")
             st.write(
@@ -1975,7 +2009,13 @@ class GUI:
         mc1, mc2, mc3 = st.columns(3)
         mc1.metric("Records", int(memory_health.get("memory_records_total", 0) or 0))
         mc2.metric("Stale", int(memory_health.get("stale_memory_count", 0) or 0))
-        mc3.metric("Recall Hit Rate", f"{float(memory_health.get('recall_hit_rate', 0.0) or 0.0):.2f}")
+        mc3.metric(
+            "Evidence",
+            f"{float(memory_health.get('skill_evidence_coverage_pct', 0.0) or 0.0):.1f}%",
+        )
+        st.caption(
+            f"Recall hit rate: {float(memory_health.get('recall_hit_rate', 0.0) or 0.0):.2f}"
+        )
         ba, bb = st.columns(2)
         if ba.button("Compact Now", key="memory_compact_now"):
             removed = company.compact_memory()
@@ -2088,20 +2128,23 @@ class GUI:
                 if skill.get("metadata"):
                     st.json(skill.get("metadata"))
 
-
         st.subheader("Skills Needing Patch")
         patch_items = overview.get("skills_needing_patch") or []
         if not patch_items:
             st.caption("No pending patch proposals.")
         for proposal in patch_items:
-            st.info(f"{proposal.get('proposal_id')} · {proposal.get('scope')}/{proposal.get('name')}")
+            st.info(
+                f"{proposal.get('proposal_id')} · {proposal.get('scope')}/{proposal.get('name')}"
+            )
 
         st.subheader("Skills Needing Retirement")
         retire_items = overview.get("skills_needing_retirement") or []
         if not retire_items:
             st.caption("No pending retirement proposals.")
         for proposal in retire_items:
-            st.warning(f"{proposal.get('proposal_id')} · {proposal.get('scope')}/{proposal.get('name')}")
+            st.warning(
+                f"{proposal.get('proposal_id')} · {proposal.get('scope')}/{proposal.get('name')}"
+            )
 
         st.subheader("Skill Proposals")
         proposals = overview.get("proposals") or []
@@ -2128,7 +2171,9 @@ class GUI:
                         company.approve_skill_proposal(proposal_id)
                         st.success(f"Patched via {proposal_id}")
                         st.rerun()
-                    if col_c.button("Retire", key=f"retire_skill_proposal_{proposal_id}"):
+                    if col_c.button(
+                        "Retire", key=f"retire_skill_proposal_{proposal_id}"
+                    ):
                         company.approve_skill_proposal(proposal_id)
                         st.success(f"Retired via {proposal_id}")
                         st.rerun()

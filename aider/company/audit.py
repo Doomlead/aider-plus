@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import dataclass, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
-from aider.memory.records import MemoryRecord
-from aider.memory.store import MemoryStore
+from aider.memory import MemoryRecord, MemoryStore
 
 
 @dataclass(frozen=True)
@@ -42,10 +41,10 @@ def append_audit_event(
     payload: Any,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> CompanyEventRecord:
-    """Append a company event record to project_memory['audit_log'].
+    """Append a company event record to canonical memory records.
 
-    This function is the sole write path for audit data; callers should not mutate
-    the audit log directly.
+    Legacy ``project_memory['audit_log']`` is intentionally not updated during
+    normal operation. Use export/snapshot paths for compatibility if needed.
     """
     record = CompanyEventRecord.create(
         project_id=project_id,
@@ -54,19 +53,25 @@ def append_audit_event(
         payload=payload,
         metadata=metadata,
     )
-    store = MemoryStore(project_memory)
-    store.append_record(
+    MemoryStore(project_memory).append_record(
         MemoryRecord(
             kind="audit_summary",
-            content=record.payload_summary,
             scope=f"project:{project_id}",
             visibility="project",
-            department=record.department,
-            project_id=project_id,
-            metadata={"event_type": event_type, **dict(record.metadata or {})},
-            created_at=record.timestamp,
+            project_id=str(project_id),
+            department=str(department or "orchestrator"),
+            channel_id="audit_log",
+            thread_id=(metadata or {}).get("task_id") if isinstance(metadata, dict) else None,
+            content={
+                "event_id": record.event_id,
+                "event_type": record.event_type,
+                "payload_summary": record.payload_summary,
+                "metadata": record.metadata,
+                "timestamp": record.timestamp,
+            },
         )
     )
+    project_memory.persist()
     return record
 
 

@@ -117,11 +117,32 @@ class KnowledgeManager:
         return {}
 
     def get_memory_record(self, record_id: str) -> dict[str, Any] | None:
-        records = ((self.memory.data.get("memory") or {}).get("records") or [])
-        for record in records:
-            if isinstance(record, dict) and record.get("id") == record_id:
-                return dict(record)
+        store = MemoryStore(self.memory)
+        record = store.get_record(record_id)
+        if record is not None:
+            self._record_reader_metric(canonical_only=True)
+            return record.to_dict()
+        self._record_reader_metric(canonical_only=True)
         return None
+
+    def _record_reader_metric(self, *, canonical_only: bool) -> None:
+        observability = self.memory.data.setdefault("observability", {})
+        if not isinstance(observability, dict):
+            return
+        memory_metrics = observability.setdefault("memory_metrics", {})
+        if not isinstance(memory_metrics, dict):
+            return
+        total = int(memory_metrics.get("reader_requests_total") or 0) + 1
+        canonical = int(memory_metrics.get("reader_requests_canonical_only") or 0)
+        if canonical_only:
+            canonical += 1
+        memory_metrics["reader_requests_total"] = total
+        memory_metrics["reader_requests_canonical_only"] = canonical
+        memory_metrics["reader_requests_canonical_only_pct"] = round(
+            (canonical / total) * 100.0, 2
+        )
+        self.memory.update({"observability": observability})
+        self.memory.persist()
 
     def explain_retrieval(self, query: str, context_items) -> list[str]:
         """Explain why memories or skills were selected for a query."""

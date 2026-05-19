@@ -9,6 +9,8 @@ from aider.company.project import Project
 from aider.company.recall import RecallEngine
 from aider.company.schemas import CompanyTask
 from aider.company.state import CompanyStateManager
+from aider.memory.explanations import explanation_telemetry, format_recall_explanation
+from aider.memory.fabric import MemoryFabric
 from aider.memory.pattern_extractor import pattern_text
 from aider.memory.retrieval import MemoryRetriever
 from aider.memory.store import MemoryStore
@@ -22,6 +24,8 @@ _MAX_RECENT_INJECTED_ITEMS = 5
 _MAX_PRD_LINES = 80
 # Minimum retrieval score to include a chunk. Below this it's noise.
 _MIN_SCORE = 0.05
+_PREPASS_MAX_ITEMS = 3
+_PREPASS_MAX_CHARS = 700
 
 
 class ContextBuilder:
@@ -52,6 +56,11 @@ class ContextBuilder:
         context = dict(task.context or {})
         requirements = list(requirements or [])
 
+        # --- Proactive pre-recall candidate generation (small bounded prepass) ---
+        prepass = self._proactive_recall_prepass(task)
+        if prepass:
+            context["recall_prepass"] = prepass
+
         # --- Scoped memory recall packet (additive; playbooks/skills unchanged) ---
         context.setdefault("recall_packet", self._build_recall_packet(task))
 
@@ -74,8 +83,10 @@ class ContextBuilder:
         if playbook:
             context["playbook"] = playbook
             context["playbook_guidance"] = self._format_playbook_guidance(playbook)
-            context["playbook_retrieval_explanations"] = self._playbook_explanations(
-                playbook
+            playbook_explanations = self._playbook_explanations(playbook)
+            context["playbook_retrieval_explanations"] = playbook_explanations
+            context.setdefault("recall_explanation_telemetry", []).extend(
+                self._explanation_telemetry(playbook_explanations)
             )
 
         # --- Procedural skills (retrieval-filtered) ---
@@ -87,6 +98,9 @@ class ContextBuilder:
                 self._skill_context_dict(skill, skill_explanations) for skill in skills
             ]
             context["skill_retrieval_explanations"] = skill_explanations
+            context.setdefault("recall_explanation_telemetry", []).extend(
+                self._explanation_telemetry(skill_explanations)
+            )
             context["skill_guidance"] = self._format_skill_guidance_with_explanations(
                 manager.format_skill_guidance(skills), skill_explanations
             )
@@ -100,6 +114,23 @@ class ContextBuilder:
             RecallEngine(MemoryStore(self.state.memory))
             .build_recall_packet(task)
             .to_dict()
+        )
+
+
+    def _proactive_recall_prepass(self, task: CompanyTask) -> list[dict[str, Any]]:
+        context = task.context if isinstance(task.context, dict) else {}
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        thread_id = str(context.get("thread_id") or payload.get("thread_id") or "") or None
+        channel_id = str(context.get("channel_id") or payload.get("channel_id") or "") or None
+        user_id = str(context.get("user_id") or payload.get("user_id") or "") or None
+        query = self._task_query(task)[:_PREPASS_MAX_CHARS]
+        fabric = MemoryFabric(MemoryStore(self.state.memory))
+        return fabric.proactive_recall_prepass(
+            query=query,
+            thread_id=thread_id,
+            channel_id=channel_id,
+            user_id=user_id,
+            limit=_PREPASS_MAX_ITEMS,
         )
 
     def retrieve(
@@ -548,18 +579,17 @@ class ContextBuilder:
         recency_score: float,
     ) -> str:
         terms = cls._matching_terms(query, text)
-        reasons = []
-        if terms:
-            reasons.append(f"matches keyword(s) {', '.join(terms)}")
-        else:
-            reasons.append("is one of the strongest available semantic matches")
-        if usage_count:
-            reasons.append(
-                f"was used successfully {usage_count} time{'s' if usage_count != 1 else ''}"
-            )
-        if recency_score >= 0.25:
-            reasons.append("was used recently")
-        return "Why this was included: " + "; ".join(reasons) + "."
+        scope_reason = "procedural memory" if item_type == "memory" else "procedural skill"
+        freshness = "fresh" if recency_score >= 0.25 else "stale"
+        evidence_count = max(1, usage_count)
+        return format_recall_explanation(
+            label=f"{item_type}",
+            matching_terms=terms,
+            scope_reason=scope_reason,
+            confidence=max(0.0, min(1.0, 0.35 + recency_score)),
+            updated_at=freshness,
+            evidence_count=evidence_count,
+        )
 
     # ------------------------------------------------------------------
     # Query construction
@@ -606,3 +636,22 @@ class ContextBuilder:
             for entry in entries:
                 guidance.append(str(entry))
         return guidance
+
+
+    @staticmethod
+    def _explanation_telemetry(explanations: list[str]) -> list[dict[str, Any]]:
+        telemetry: list[dict[str, Any]] = []
+        for item in explanations:
+            label, payload = (item.split(" — ", 1) + [""])[:2] if " — " in item else ("", item)
+            telemetry.append(
+                explanation_telemetry(
+                    label=label or "retrieval",
+                    matching_terms=[],
+                    scope_reason="context_injection",
+                    confidence=0.5,
+                    updated_at="",
+                    evidence_count=1,
+                )
+                | {"explanation": payload or item}
+            )
+        return telemetry

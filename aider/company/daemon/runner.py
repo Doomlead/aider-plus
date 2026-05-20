@@ -11,6 +11,7 @@ from typing import Any
 from aider.company.coo import NanobotCOO
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
+from aider.company.runtime import CompanyRunRequest, run_company_task
 from aider.company.tracker import TrackerIssue
 
 DEFAULT_DEPARTMENT_SEQUENCE: tuple[tuple[str, str], ...] = (
@@ -143,7 +144,18 @@ class CompanyDaemonRunner:
                     context=dict(context),
                 )
                 try:
-                    deliverable = await self.coo.run_department_task(task)
+                    # TODO(2026-06-30): remove legacy daemon-owned sequencing once
+                    # orchestration sequencing is fully centralized.
+                    async def _execute(req_task, _metadata):
+                        deliverable = await self.coo.run_department_task(req_task)
+                        return {"deliverable": deliverable}
+
+                    req = CompanyRunRequest(
+                        surface="daemon",
+                        session_id=f"daemon:{issue.identifier}",
+                        task=task,
+                    )
+                    deliverable = (await run_company_task(req, execute=_execute))["deliverable"]
                 except Exception as exc:
                     failed_stages.append(department)
                     risk_notes.append(f"{department} failed: {exc}")

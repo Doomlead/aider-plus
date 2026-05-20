@@ -9,6 +9,7 @@ from typing import Sequence
 
 from aider.company.daemon import CompanyDaemon, CompanyDaemonError, load_daemon
 from aider.company.workflow import TrackerWorkflowConfig, WorkflowError
+from aider.company.runtime import CompanyRunRequest, run_company_task
 from aider.memory import ProjectMemory
 from aider.memory.store import MemoryStore
 from aider.company.templates import (
@@ -657,7 +658,29 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
     coder.io.tool_output(
         "Routing the product brief through Aider's repo-aware implementation loop.\n"
     )
-    coder.run(with_message=prompt)
+    # TODO(2026-06-30): Remove direct surface execution fallback once all
+    # company surfaces use orchestrator-native execution under run_company_task.
+    from aider.company.schemas import CompanyTask
+
+    async def _execute(task, _metadata):
+        content = coder.run(with_message=str(task.payload))
+        return {"summary": str(content or ""), "status": "success"}
+
+    import asyncio
+
+    request = CompanyRunRequest(
+        surface="cli",
+        session_id="cli",
+        task=CompanyTask(
+            task_id="cli-company-create",
+            origin="ceo",
+            target="engineering",
+            artifact_type="raw_prompt",
+            payload=prompt,
+            blocking=False,
+        ),
+    )
+    asyncio.run(run_company_task(request, execute=_execute))
     return 0
 
 

@@ -153,6 +153,7 @@ class Coder:
         io=None,
         from_coder=None,
         summarize_from_coder=True,
+        show_announcements=True,
         **kwargs,
     ):
         import aider.coders as coders
@@ -215,6 +216,8 @@ class Coder:
             if hasattr(coder, "edit_format") and coder.edit_format == edit_format:
                 res = coder(main_model, io, **kwargs)
                 res.original_kwargs = dict(kwargs)
+                if show_announcements:
+                    res.show_announcements()
                 return res
 
         valid_formats = [

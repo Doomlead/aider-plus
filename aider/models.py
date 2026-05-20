@@ -999,7 +999,14 @@ class Model(ModelSettings):
         if functions is not None:
             function = functions[0]
             kwargs["tools"] = [dict(type="function", function=function)]
-            kwargs["tool_choice"] = {"type": "function", "function": {"name": function["name"]}}
+
+            # Some OpenRouter routes reject explicit object-form tool_choice with 404.
+            # Let the provider auto-select while still exposing the tool definitions.
+            if not self.name.startswith("openrouter/"):
+                kwargs["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": function["name"]},
+                }
         if self.extra_params:
             kwargs.update(self.extra_params)
         if self.is_ollama() and "num_ctx" not in kwargs:

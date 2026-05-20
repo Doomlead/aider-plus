@@ -48,6 +48,17 @@ The `CompanyOnboarding` flow walks through the core studio setup:
 
 The same helper is exposed in the Streamlit browser UI and the native Tkinter desktop UI under **Onboarding / Quick Start**. Use `--skip-onboarding` on normal `aider` launches when you do not want the first-run offer.
 
+
+### Reducing first-run complexity
+
+If adoption feedback says onboarding feels dense, prioritize defaults over choices:
+
+- Start with a **minimal preset** (`warehouse + template + one model`) and defer advanced options to a post-setup `aider company init --advanced` pass.
+- Auto-detect sensible defaults from environment variables and only ask questions when confidence is low.
+- Keep the first run focused on one success outcome: creating the first product repo and shipping a first change.
+- Collapse optional configuration (daemon, MCP, per-department overrides) behind explicit “configure later” toggles.
+- Show a short progress indicator (for example, “Step 2 of 4”) so users understand setup scope before making decisions.
+
 ```bash
 aider company init --warehouse ~/AiderPlusWarehouse --template nextjs-saas --github-repo owner/repo --model gpt-5.5 --enable-mcp --product-idea "Build my MVP" --product-name my-mvp --yes
 ```

@@ -664,8 +664,42 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
     # to CLI sessions (current default behavior).
     from aider.company.schemas import CompanyTask
 
+    def _dirty_files() -> list[str]:
+        repo = getattr(coder, "repo", None)
+        if repo is None:
+            return []
+        try:
+            out = repo.repo.git.status("--short")
+        except Exception:
+            return []
+        return [line.strip() for line in out.splitlines() if line.strip()]
+
     async def _execute(task, _metadata):
+        exhausted_before = int(getattr(coder, "num_exhausted_context_windows", 0) or 0)
+        dirty_before = _dirty_files()
+
         content = coder.run(with_message=str(task.payload))
+
+        exhausted_after = int(getattr(coder, "num_exhausted_context_windows", 0) or 0)
+        if exhausted_after > exhausted_before:
+            dirty_after = _dirty_files()
+            if dirty_after and dirty_after != dirty_before:
+                coder.io.tool_warning(
+                    "Model output was truncated by token limits and left uncommitted edits. "
+                    "Review with `git status`/`git diff` before continuing."
+                )
+            else:
+                coder.io.tool_warning(
+                    "Model output was truncated by token limits. Retrying once with a "
+                    "continuation prompt to complete the remaining changes."
+                )
+                continuation = (
+                    str(task.payload)
+                    + "\n\nContinue from where you stopped. Keep the response short and only "
+                    "emit the next minimal patch needed to finish."
+                )
+                content = coder.run(with_message=continuation)
+
         return {"summary": str(content or ""), "status": "success"}
 
     import asyncio

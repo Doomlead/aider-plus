@@ -11,17 +11,12 @@ from typing import Any
 from aider.company.coo import NanobotCOO
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
-from aider.company.tracker import TrackerIssue
-
-DEFAULT_DEPARTMENT_SEQUENCE: tuple[tuple[str, str], ...] = (
-    ("product", "raw_prompt"),
-    ("ux", "prd"),
-    ("engineering", "prd"),
-    ("qa", "code"),
-    ("delivery", "test_report"),
-    ("devops", "deploy_request"),
+from aider.company.runtime import (
+    CompanyRunRequest,
+    run_company_task,
+    select_company_department_sequence,
 )
-
+from aider.company.tracker import TrackerIssue
 
 @dataclass(frozen=True)
 class CompanyDaemonRunnerOptions:
@@ -143,7 +138,18 @@ class CompanyDaemonRunner:
                     context=dict(context),
                 )
                 try:
-                    deliverable = await self.coo.run_department_task(task)
+                    # TODO(2026-06-30): remove legacy daemon-owned sequencing once
+                    # orchestration sequencing is fully centralized.
+                    async def _execute(req_task, _metadata):
+                        deliverable = await self.coo.run_department_task(req_task)
+                        return {"deliverable": deliverable}
+
+                    req = CompanyRunRequest(
+                        surface="daemon",
+                        session_id=f"daemon:{issue.identifier}",
+                        task=task,
+                    )
+                    deliverable = (await run_company_task(req, execute=_execute))["deliverable"]
                 except Exception as exc:
                     failed_stages.append(department)
                     risk_notes.append(f"{department} failed: {exc}")
@@ -284,15 +290,10 @@ class CompanyDaemonRunner:
         }
 
     def _selected_sequence(self) -> tuple[tuple[str, str], ...]:
-        selected = set(self.options.normalized_departments())
-        sequence = tuple(
-            item
-            for item in DEFAULT_DEPARTMENT_SEQUENCE
-            if not selected or item[0] in selected
+        return select_company_department_sequence(
+            selected_departments=self.options.normalized_departments(),
+            max_iterations=self.options.max_iterations,
         )
-        if self.options.max_iterations is not None:
-            sequence = sequence[: max(0, self.options.max_iterations)]
-        return sequence
 
     def _record_progress(
         self,

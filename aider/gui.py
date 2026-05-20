@@ -39,6 +39,7 @@ from aider.company.workflow import WorkflowError
 from aider.company.project import Project
 from aider.company.skills import CompanySkillManager
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
+from aider.company.runtime import select_company_entry_target
 from aider.company.surface_messages import format_runtime_event_message
 from aider.dump import dump  # noqa: F401
 from aider.io import InputOutput
@@ -458,7 +459,11 @@ class DesktopCompanySession:
         return self.submit_background(self._run_instruction(prompt), "Engineering")
 
     async def receive_human_input(self, prompt: str):
-        if self.active_project.phase == "prototyping" and not self.active_project.prd:
+        target = select_company_entry_target(
+            phase=self.active_project.phase,
+            has_prd=bool(self.active_project.prd),
+        )
+        if target == "product":
             return await self._run_prototype(prompt)
         return await self._run_instruction(prompt)
 

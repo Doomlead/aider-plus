@@ -26,6 +26,8 @@ from aider.company.surface_messages import (
     format_runtime_event_message,
 )
 from aider.main import main as aider_main
+from aider.company.runtime import CompanyRunRequest, run_company_task
+from aider.company.schemas import CompanyTask
 from aider.memory import ConversationMemory, ProjectMemory, consolidate_conversation
 from aider.memory import communication as communication_memory
 
@@ -246,17 +248,36 @@ class DiscordAiderBot(ThinAdapter):
                 metadata={"repo_path": repo_path},
             )
 
-        async def run_coder():
-            return await asyncio.to_thread(coder.run, prompt)
+        # TODO(2026-06-30): replace coder-backed execute with orchestrator-backed
+        # execute once Discord sessions attach directly to Company runtime services.
+        async def _execute(task, _metadata):
+            return await asyncio.to_thread(coder.run, str(task.payload))
+
+        req = CompanyRunRequest(
+            surface="discord",
+            session_id=f"discord:{key.channel_id}",
+            task=CompanyTask(
+                task_id=f"discord:{key.channel_id}:{int(time.time())}",
+                origin="user",
+                target="engineering",
+                artifact_type="raw_prompt",
+                payload=prompt,
+                blocking=False,
+            ),
+            metadata={"user_id": user_id, "repo_path": repo_path},
+        )
 
         try:
             content = await asyncio.wait_for(
-                run_coder(), timeout=self.config.max_runtime_seconds
+                run_company_task(req, execute=_execute), timeout=self.config.max_runtime_seconds
             )
         except asyncio.TimeoutError as err:
             raise TimeoutError("Aider request timed out") from err
 
-        result_content = content if isinstance(content, str) else str(content or "")
+        if isinstance(content, dict):
+            result_content = str(content.get("summary") or content.get("content") or "")
+        else:
+            result_content = content if isinstance(content, str) else str(content or "")
         project_memory = getattr(coder, "project_memory", None)
         if isinstance(project_memory, ProjectMemory):
             project_memory.update(

@@ -660,6 +660,8 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
     )
     # TODO(2026-06-30): Remove direct surface execution fallback once all
     # company surfaces use orchestrator-native execution under run_company_task.
+    # Explicit trigger: fallback is used when no orchestrator runtime is attached
+    # to CLI sessions (current default behavior).
     from aider.company.schemas import CompanyTask
 
     async def _execute(task, _metadata):

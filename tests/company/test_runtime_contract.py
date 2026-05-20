@@ -2,7 +2,11 @@ import asyncio
 from pathlib import Path
 
 from aider.company.daemon.runner import CompanyDaemonRunner
-from aider.company.runtime import CompanyRunRequest, run_company_task
+from aider.company.runtime import (
+    CompanyRunRequest,
+    run_company_task,
+    select_company_department_sequence,
+)
 from aider.company.schemas import CompanyEvent, CompanyTask, Deliverable, EventMessage
 from aider.company.tracker import TrackerIssue
 from aider.integrations.discord import DiscordAiderBot, DiscordSessionKey
@@ -94,3 +98,32 @@ def test_event_parity_cli_daemon_discord(monkeypatch, tmp_path):
 
     assert calls["count"] == 1
     assert "daemon_run_progress" in events
+
+
+def test_sequence_selection_is_centralized_in_runtime():
+    seq = select_company_department_sequence(selected_departments=("engineering", "qa"))
+    assert seq == (("engineering", "prd"), ("qa", "code"))
+
+
+def test_run_company_task_end_to_end_stubbed_department_flow():
+    async def _execute(task, metadata):
+        return {
+            "deliverable": f"{metadata['surface']}:{task.target}:{task.payload}",
+            "status": "success",
+        }
+
+    req = CompanyRunRequest(
+        surface="cli",
+        session_id="cli:s1",
+        task=CompanyTask(
+            task_id="x1",
+            origin="ceo",
+            target="engineering",
+            artifact_type="raw_prompt",
+            payload="build feature",
+            blocking=False,
+        ),
+    )
+    result = asyncio.run(run_company_task(req, execute=_execute))
+    assert result["deliverable"] == "cli:engineering:build feature"
+    assert result["status"] == "success"

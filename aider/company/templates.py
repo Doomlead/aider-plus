@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from string import Template
 from types import MappingProxyType
 from typing import Mapping
@@ -457,6 +458,40 @@ def main(argv: list[str] | None = None) -> int:
         ],
         example_prd_prompt="Draft a PRD for a Python CLI MVP covering command verbs, input/output contracts, config precedence, exit codes, and packaging notes.",
     ),
+    "repo-native": ProjectTemplate(
+        key="repo-native",
+        label="Repo-native custom MVP",
+        description="Template-free mode that derives structure from the product request and current repository.",
+        discovery_focus=(
+            "core user workflow, acceptance criteria, and explicit non-goals for v0",
+            "existing repository constraints, conventions, and integration boundaries",
+            "minimum architecture needed now versus deferred decisions",
+        ),
+        engineering_defaults=(
+            "do not force-fit an existing template shape when signals are weak or mismatched",
+            "create only the smallest coherent folders/files needed for the requested product",
+            "prefer interfaces and seams that preserve future iteration flexibility",
+        ),
+        qa_focus=(
+            "risk-based checks that match the actual implementation shape",
+            "smoke tests for the main workflow plus focused regression checks",
+        ),
+        iteration_hooks=(
+            "record why a custom structure was chosen in product memory for future runs",
+            "capture architecture and naming decisions to reduce re-discovery in later iterations",
+        ),
+        recommended_skills=["product", "generalist", "qa", "devops"],
+        post_creation_instructions=(
+            "Document custom architecture decisions in `.aider/company/product.json` and `docs/product-brief.md`.",
+            "Prefer adding files incrementally as requirements harden instead of pre-creating broad scaffolds.",
+        ),
+        qa_gates=[
+            "Product brief explains why template-free structure was selected.",
+            "Core workflow has runnable smoke checks and clear run instructions.",
+            "Custom conventions and architecture decisions are documented for future Company runs.",
+        ],
+        example_prd_prompt="Draft a concise PRD for a custom MVP shape, including users, v0 scope, acceptance criteria, architectural constraints, and iteration plan.",
+    ),
 }
 
 COMMON_STARTER_FILES: dict[str, str] = {
@@ -615,6 +650,7 @@ CANONICAL_TEMPLATE_KEYS: tuple[str, ...] = (
     "internal-admin",
     "nextjs-saas",
     "python-cli",
+    "repo-native",
     "streamlit-dashboard",
 )
 
@@ -633,10 +669,50 @@ TEMPLATE_ALIASES: Mapping[str, str] = MappingProxyType(
 )
 
 
+def detect_template_from_repo(root: Path | None = None) -> str:
+    """Guess the best template key based on existing repo contents.
+
+    Called when no ``--template`` flag is given. Returns DEFAULT_TEMPLATE_KEY
+    if no signals are found.
+    """
+    r = root or Path.cwd()
+
+    is_python = any(
+        (r / f).exists()
+        for f in ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt")
+    )
+    if is_python:
+        if (r / "app.py").exists() or any(r.glob("*streamlit*")):
+            return "streamlit-dashboard"
+        if any(r.glob("src/*/cli.py")) or (r / "cli.py").exists():
+            return "python-cli"
+        if (r / "app" / "main.py").exists() or any(r.glob("app/api*")):
+            return "fastapi-api"
+        return "python-cli"
+
+    if (r / "package.json").exists():
+        if (r / "next.config.js").exists() or (r / "next.config.ts").exists():
+            return "nextjs-saas"
+        if (r / "electron" / "main").exists() or any(r.glob("electron/*")):
+            return "electron-desktop"
+        return "nextjs-saas"
+
+    if (r / "electron").is_dir():
+        return "electron-desktop"
+
+    if (r / "extension").is_dir() or any(r.glob("*/manifest.json")):
+        return "browser-extension"
+
+    if (r / "data" / "sample").exists() or any(r.glob("src/*/metrics*")):
+        return "data-dashboard"
+
+    return "repo-native"
+
+
 def resolve_template_key(key: str | None) -> tuple[str, str | None]:
     """Return ``(canonical_key, alias_used)`` for a template key."""
 
-    requested = (key or DEFAULT_TEMPLATE_KEY).strip().lower()
+    requested = (key or detect_template_from_repo()).strip().lower()
     canonical = TEMPLATE_ALIASES.get(requested, requested)
     return canonical, (requested if requested != canonical else None)
 

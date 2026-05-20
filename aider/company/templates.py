@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from string import Template
 from types import MappingProxyType
 from typing import Mapping
@@ -633,10 +634,50 @@ TEMPLATE_ALIASES: Mapping[str, str] = MappingProxyType(
 )
 
 
+def detect_template_from_repo(root: Path | None = None) -> str:
+    """Guess the best template key based on existing repo contents.
+
+    Called when no ``--template`` flag is given. Returns DEFAULT_TEMPLATE_KEY
+    if no signals are found.
+    """
+    r = root or Path.cwd()
+
+    is_python = any(
+        (r / f).exists()
+        for f in ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt")
+    )
+    if is_python:
+        if (r / "app.py").exists() or any(r.glob("*streamlit*")):
+            return "streamlit-dashboard"
+        if any(r.glob("src/*/cli.py")) or (r / "cli.py").exists():
+            return "python-cli"
+        if (r / "app" / "main.py").exists() or any(r.glob("app/api*")):
+            return "fastapi-api"
+        return "python-cli"
+
+    if (r / "package.json").exists():
+        if (r / "next.config.js").exists() or (r / "next.config.ts").exists():
+            return "nextjs-saas"
+        if (r / "electron" / "main").exists() or any(r.glob("electron/*")):
+            return "electron-desktop"
+        return "nextjs-saas"
+
+    if (r / "electron").is_dir():
+        return "electron-desktop"
+
+    if (r / "extension").is_dir() or any(r.glob("*/manifest.json")):
+        return "browser-extension"
+
+    if (r / "data" / "sample").exists() or any(r.glob("src/*/metrics*")):
+        return "data-dashboard"
+
+    return DEFAULT_TEMPLATE_KEY
+
+
 def resolve_template_key(key: str | None) -> tuple[str, str | None]:
     """Return ``(canonical_key, alias_used)`` for a template key."""
 
-    requested = (key or DEFAULT_TEMPLATE_KEY).strip().lower()
+    requested = (key or detect_template_from_repo()).strip().lower()
     canonical = TEMPLATE_ALIASES.get(requested, requested)
     return canonical, (requested if requested != canonical else None)
 

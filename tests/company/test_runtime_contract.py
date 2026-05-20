@@ -6,6 +6,7 @@ from aider.company.runtime import (
     CompanyRunRequest,
     run_company_task,
     select_company_department_sequence,
+    select_company_entry_target,
 )
 from aider.company.schemas import CompanyEvent, CompanyTask, Deliverable, EventMessage
 from aider.company.tracker import TrackerIssue
@@ -127,3 +128,9 @@ def test_run_company_task_end_to_end_stubbed_department_flow():
     result = asyncio.run(run_company_task(req, execute=_execute))
     assert result["deliverable"] == "cli:engineering:build feature"
     assert result["status"] == "success"
+
+
+def test_entry_target_selection_is_runtime_owned():
+    assert select_company_entry_target(phase="prototyping", has_prd=False) == "product"
+    assert select_company_entry_target(phase="prototyping", has_prd=True) == "engineering"
+    assert select_company_entry_target(phase="development", has_prd=False) == "engineering"

@@ -357,7 +357,11 @@ class DesktopCompanySession:
         return self.submit_background(self._run_instruction(prompt), "Engineering")
 
     async def receive_human_input(self, prompt: str):
-        if self.active_project.phase == "prototyping" and not self.active_project.prd:
+        target = select_company_entry_target(
+            phase=self.active_project.phase,
+            has_prd=bool(self.active_project.prd),
+        )
+        if target == "product":
             return await self._run_prototype(prompt)
         return await self._run_instruction(prompt)
 

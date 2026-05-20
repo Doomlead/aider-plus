@@ -61,3 +61,11 @@ def select_company_department_sequence(
     if max_iterations is not None:
         sequence = sequence[: max(0, int(max_iterations))]
     return sequence
+
+
+def select_company_entry_target(*, phase: str | None, has_prd: bool) -> str:
+    """Return the runtime-owned initial target department for a user run."""
+
+    if str(phase or "").strip().lower() == "prototyping" and not has_prd:
+        return "product"
+    return "engineering"

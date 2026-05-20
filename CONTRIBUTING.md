@@ -42,15 +42,15 @@ All contributors will be asked to complete the agreement as part of the PR proce
 ### Clone the Repository
 
 ```
-git clone https://github.com/Aider-AI/aider.git
-cd aider
+git clone https://github.com/Aider-AI/aider-plus.git
+cd aider-plus
 ```
 
 ### Create a Virtual Environment
 
 It is recommended to create a virtual environment outside of the repository to keep your development environment isolated.
 
-#### Using `venv` (Python 3.9 and later)
+#### Using `venv` (Python 3.10 and later)
 
 ```
 python -m venv /path/to/venv
@@ -155,7 +155,7 @@ The built documentation will be available in the `aider/website/_site` directory
 
 ### Python Compatibility
 
-Aider supports Python versions 3.9, 3.10, 3.11, and 3.12. When contributing code, ensure compatibility with these supported Python versions.
+Aider Plus supports Python versions 3.10, 3.11, 3.12, 3.13, and 3.14 (`>=3.10,<3.15`). When contributing code, ensure compatibility with this supported range.
 
 ### Code Style
 
@@ -188,7 +188,7 @@ pytest tests/basic/test_coder.py::TestCoder::test_specific_case
 
 The project uses GitHub Actions for continuous integration. The testing workflows are defined in the following files:
 
-- `.github/workflows/ubuntu-tests.yml`: Runs tests on Ubuntu for Python versions 3.9 through 3.12.
+- `.github/workflows/ubuntu-tests.yml`: Runs tests on Ubuntu for supported Python versions in this repository.
 - `.github/workflows/windows-tests.yml`: Runs that on Windows
 
 These workflows are triggered on push and pull request events to the `main` branch, ignoring changes to the `aider/website/**` and `README.md` files.
@@ -208,7 +208,7 @@ If you need to mock or create test data, consider adding it to the test files or
 The project uses `pytest` as the testing framework, which is installed as a development dependency. To install the development dependencies, run the following command:
 
 ```
-pip install -r requirements-dev.txt
+pip install -r requirements/requirements-dev.txt
 ```
 
 ### Managing Dependencies

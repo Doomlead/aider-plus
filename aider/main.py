@@ -581,7 +581,13 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         argv = sys.argv[1:]
 
     company_cli_command = None
-    if argv and argv[0] == "warehouse":
+
+    prefix_flags: list[str] = []
+    command_argv = list(argv)
+    while command_argv and command_argv[0].startswith("-"):
+        prefix_flags.append(command_argv.pop(0))
+
+    if command_argv and command_argv[0] == "warehouse":
         from aider.company.cli import (
             CompanyCLIError,
             handle_warehouse_cli,
@@ -589,13 +595,14 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         )
 
         try:
-            warehouse_cli_command, argv = parse_warehouse_cli(argv)
+            warehouse_cli_command, parsed_argv = parse_warehouse_cli(command_argv)
         except CompanyCLIError as exc:
             print(str(exc))
             return 1
+        argv = prefix_flags + parsed_argv
         return handle_warehouse_cli(warehouse_cli_command)
 
-    if argv and argv[0] == "company":
+    if command_argv and command_argv[0] == "company":
         from aider.company.cli import (
             CompanyCLIError,
             handle_company_cli_pre_coder,
@@ -604,10 +611,11 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         )
 
         try:
-            company_cli_command, argv = parse_company_cli(argv)
+            company_cli_command, parsed_argv = parse_company_cli(command_argv)
         except CompanyCLIError as exc:
             print(str(exc))
             return 1
+        argv = prefix_flags + parsed_argv
 
         pre_coder_result = handle_company_cli_pre_coder(company_cli_command)
         if pre_coder_result is not None:
@@ -618,8 +626,8 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
             print(str(exc))
             return 1
 
-    if argv and argv[0] == "mcp":
-        if len(argv) >= 2 and argv[1] == "tools":
+    if command_argv and command_argv[0] == "mcp":
+        if len(command_argv) >= 2 and command_argv[1] == "tools":
             from aider.mcp import list_builtin_mcp_tools
 
             print("MCP tools (approval-aware):")
@@ -632,16 +640,18 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
         print("Usage: aider mcp tools")
         return 1
 
-    if argv and argv[0] in {"onboard", "init"}:
+    if command_argv and command_argv[0] in {"onboard", "init"}:
         io = InputOutput(pretty=True, yes=False, input=input, output=output)
         return run_onboarding(io)
 
-    if argv and argv[0] in {"approve", "reject"}:
-        if len(argv) < 2:
-            print(f"Usage: aider {argv[0]} <gate-id> [reason]")
+    if command_argv and command_argv[0] in {"approve", "reject"}:
+        if len(command_argv) < 2:
+            print(f"Usage: aider {command_argv[0]} <gate-id> [reason]")
             return 1
         return _handle_approval_cli(
-            argv[0], argv[1], argv[2] if len(argv) > 2 else None
+            command_argv[0],
+            command_argv[1],
+            command_argv[2] if len(command_argv) > 2 else None,
         )
 
     if git is None:

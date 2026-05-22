@@ -838,6 +838,9 @@ def render_zero_to_mvp_prompt(
     idea: str,
     template_key: str | None = None,
     project_name: str | None = None,
+    decision_reasons: tuple[str, ...] = (),
+    avoided_mismatches: tuple[str, ...] = (),
+    memory_evidence_ids: tuple[str, ...] = (),
 ) -> str:
     """Render the canonical zero-to-MVP prompt used by `aider company create`."""
 
@@ -851,9 +854,26 @@ def render_zero_to_mvp_prompt(
     def bullets(items: tuple[str, ...]) -> str:
         return "\n".join(f"- {item}" for item in items)
 
+    decision_block = [
+        "Template selection rationale:",
+        f"- Selected template: {template.label} ({template.key})",
+    ]
+    if decision_reasons:
+        decision_block.append("- Why chosen:")
+        decision_block.extend(f"  - {reason}" for reason in decision_reasons)
+    if avoided_mismatches:
+        decision_block.append("- Mismatches avoided:")
+        decision_block.extend(f"  - {item}" for item in avoided_mismatches)
+    if memory_evidence_ids:
+        decision_block.append(f"- Memory evidence IDs: {', '.join(memory_evidence_ids)}")
+    else:
+        decision_block.append("- Memory evidence IDs: none")
+
     return "\n".join(
         [
             "You are Aider Plus Company Mode creating a zero-to-MVP product.",
+            "",
+            *decision_block,
             "",
             "Mission:",
             idea.strip(),

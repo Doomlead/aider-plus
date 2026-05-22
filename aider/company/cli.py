@@ -37,6 +37,8 @@ class CompanyCLICommand:
     template: str = DEFAULT_TEMPLATE_KEY
     template_alias_note: str | None = None
     template_selection_note: str | None = None
+    template_selection_reasons: tuple[str, ...] = ()
+    template_selection_memory_ids: tuple[str, ...] = ()
     project_name: str | None = None
     dry_plan: bool = False
     warehouse_path: str | None = None
@@ -173,6 +175,8 @@ def parse_company_cli(
         )
     requested_template = template
     template_selection_note: str | None = None
+    template_selection_reasons: tuple[str, ...] = ()
+    template_selection_memory_ids: tuple[str, ...] = ()
     if requested_template is None:
         decision = select_template(
             idea=idea,
@@ -186,6 +190,8 @@ def parse_company_cli(
             f"(confidence {decision.confidence:.2f}). "
             f"Reasons: {'; '.join(decision.reasons[:2])}"
         )
+        template_selection_reasons = tuple(decision.reasons)
+        template_selection_memory_ids = tuple(decision.memory_record_ids)
     else:
         try:
             template = get_template(requested_template).key
@@ -199,6 +205,8 @@ def parse_company_cli(
             template=template,
             template_alias_note=template_alias_note(requested_template),
             template_selection_note=template_selection_note,
+            template_selection_reasons=template_selection_reasons,
+            template_selection_memory_ids=template_selection_memory_ids,
             project_name=project_name,
             dry_plan=dry_plan,
             warehouse_path=warehouse_path,
@@ -431,10 +439,16 @@ def format_template_list() -> str:
 def render_company_plan(command: CompanyCLICommand) -> str:
     """Render the execution prompt for a parsed create command."""
 
+    avoided_mismatches = tuple(
+        reason for reason in command.template_selection_reasons if "custom" in reason.lower() or "mismatch" in reason.lower()
+    )
     return render_zero_to_mvp_prompt(
         idea=command.idea,
         template_key=command.template,
         project_name=command.project_name,
+        decision_reasons=command.template_selection_reasons,
+        avoided_mismatches=avoided_mismatches,
+        memory_evidence_ids=command.template_selection_memory_ids,
     )
 
 

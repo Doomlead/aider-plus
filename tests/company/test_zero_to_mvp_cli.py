@@ -119,3 +119,26 @@ def test_render_zero_to_mvp_prompt_has_template_specific_quality_gates():
         "Summarize the Product, UX, Engineering, QA, release, and post-mortem outcomes"
         in prompt
     )
+
+
+def test_render_zero_to_mvp_prompt_includes_decision_rationale_block():
+    prompt = render_zero_to_mvp_prompt(
+        idea="Build an internal refund approval tool",
+        template_key="internal-admin",
+        project_name="RefundOps",
+        decision_reasons=(
+            "Selected internal-admin from semantic+memory scoring.",
+            "Evidence margin over next candidate: 0.31.",
+        ),
+        avoided_mismatches=(
+            "Top confidence below threshold for dashboard templates; selected internal-admin.",
+        ),
+        memory_evidence_ids=("mem-101", "mem-204"),
+    )
+
+    assert "Template selection rationale:" in prompt
+    assert "Selected template:" in prompt
+    assert "(internal-admin)" in prompt
+    assert "Why chosen:" in prompt
+    assert "Mismatches avoided:" in prompt
+    assert "Memory evidence IDs: mem-101, mem-204" in prompt

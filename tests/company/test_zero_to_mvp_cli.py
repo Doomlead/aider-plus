@@ -94,6 +94,15 @@ def test_company_create_without_template_uses_repo_detection(tmp_path, monkeypat
     monkeypatch.chdir(tmp_path)
     command, _ = parse_company_cli(["company", "create", "Build", "a", "novel", "tool"])
     assert command.template == "custom"
+    assert command.template_selection_note
+
+
+def test_company_create_with_explicit_template_skips_auto_selection_note():
+    command, _ = parse_company_cli(
+        ["company", "create", "Build", "a", "Stripe", "API", "--template", "fastapi-api"]
+    )
+    assert command.template == "fastapi-api"
+    assert command.template_selection_note is None
 
 
 def test_render_zero_to_mvp_prompt_has_template_specific_quality_gates():

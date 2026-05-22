@@ -10,6 +10,7 @@ from typing import Sequence
 from aider.company.daemon import CompanyDaemon, CompanyDaemonError, load_daemon
 from aider.company.workflow import TrackerWorkflowConfig, WorkflowError
 from aider.company.runtime import CompanyRunRequest, run_company_task
+from aider.company.template_selector import select_template
 from aider.memory import ProjectMemory
 from aider.memory.store import MemoryStore
 from aider.company.templates import (
@@ -35,6 +36,7 @@ class CompanyCLICommand:
     idea: str = ""
     template: str = DEFAULT_TEMPLATE_KEY
     template_alias_note: str | None = None
+    template_selection_note: str | None = None
     project_name: str | None = None
     dry_plan: bool = False
     warehouse_path: str | None = None
@@ -170,10 +172,25 @@ def parse_company_cli(
             f"`aider company {action}` requires a product idea.\n" + USAGE
         )
     requested_template = template
-    try:
-        template = get_template(requested_template).key
-    except ValueError as exc:
-        raise CompanyCLIError(str(exc) + "\n" + USAGE) from exc
+    template_selection_note: str | None = None
+    if requested_template is None:
+        decision = select_template(
+            idea=idea,
+            project_name=project_name,
+            role_context=action,
+            memory_store=MemoryStore(ProjectMemory(str(Path.cwd()))),
+        )
+        template = get_template(decision.template_key).key
+        template_selection_note = (
+            f"Auto-selected template `{template}` "
+            f"(confidence {decision.confidence:.2f}). "
+            f"Reasons: {'; '.join(decision.reasons[:2])}"
+        )
+    else:
+        try:
+            template = get_template(requested_template).key
+        except ValueError as exc:
+            raise CompanyCLIError(str(exc) + "\n" + USAGE) from exc
 
     return (
         CompanyCLICommand(
@@ -181,6 +198,7 @@ def parse_company_cli(
             idea=idea,
             template=template,
             template_alias_note=template_alias_note(requested_template),
+            template_selection_note=template_selection_note,
             project_name=project_name,
             dry_plan=dry_plan,
             warehouse_path=warehouse_path,
@@ -458,6 +476,8 @@ def handle_company_cli_pre_coder(command: CompanyCLICommand) -> int | None:
             )
         if command.template_alias_note:
             print(command.template_alias_note)
+        if command.template_selection_note:
+            print(command.template_selection_note)
         print(render_company_plan(command))
         return 0
     return None
@@ -651,6 +671,8 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
     coder.io.tool_output(f"Template: {command.template}")
     if command.template_alias_note:
         coder.io.tool_output(command.template_alias_note)
+    if command.template_selection_note:
+        coder.io.tool_output(command.template_selection_note)
     if command.project_name:
         coder.io.tool_output(f"Project: {command.project_name}")
     if command.product_path:

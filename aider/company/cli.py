@@ -8,10 +8,14 @@ from pathlib import Path
 from typing import Sequence
 
 from aider.company.daemon import CompanyDaemon, CompanyDaemonError, load_daemon
+from aider.company.self_improvement import SelfImprovementService
+from aider.company.state import CompanyStateManager
 from aider.company.workflow import TrackerWorkflowConfig, WorkflowError
 from aider.company.runtime import CompanyRunRequest, run_company_task
 from aider.company.template_selector import select_template
 from aider.memory import ProjectMemory
+from aider.memory.records import MemoryRecord
+from aider.memory.reinforcement import record_memory_outcome, record_skill_outcome
 from aider.memory.store import MemoryStore
 from aider.company.templates import (
     DEFAULT_TEMPLATE_KEY,
@@ -738,6 +742,31 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
 
         return {"summary": str(content or ""), "status": "success"}
 
+    def _collect_rewrite_signals() -> tuple[list[str], dict[str, dict[str, int]], str]:
+        repo = getattr(coder, "repo", None)
+        if repo is None:
+            return [], {}, "no_repo"
+        try:
+            output = repo.repo.git.diff("--numstat", "HEAD")
+        except Exception:
+            return [], {}, "diff_unavailable"
+        heavy: list[str] = []
+        stats: dict[str, dict[str, int]] = {}
+        for line in output.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            added_raw, deleted_raw, path = parts[0], parts[1], parts[2]
+            try:
+                added = int(added_raw)
+                deleted = int(deleted_raw)
+            except ValueError:
+                continue
+            stats[path] = {"added": added, "deleted": deleted}
+            if added + deleted >= 80:
+                heavy.append(path)
+        return heavy, stats, "ok"
+
     import asyncio
 
     request = CompanyRunRequest(
@@ -752,7 +781,79 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
             blocking=False,
         ),
     )
-    asyncio.run(run_company_task(request, execute=_execute))
+    run_result = asyncio.run(run_company_task(request, execute=_execute))
+
+    selected = command.template
+    confidence = None
+    if command.template_selection_note:
+        import re
+
+        match = re.search(r"confidence\s+([0-9]+(?:\.[0-9]+)?)", command.template_selection_note)
+        if match:
+            try:
+                confidence = float(match.group(1))
+            except ValueError:
+                confidence = None
+    status_value = str((run_result or {}).get("status") or "success").lower()
+    accepted = status_value == "success"
+    outcome = "success" if accepted else "failure"
+    heavy_files, rewrite_stats, rewrite_status = _collect_rewrite_signals()
+    feedback = {
+        "selected_template": selected,
+        "confidence": confidence,
+        "accepted": accepted,
+        "outcome": outcome,
+        "heavily_rewritten_files": heavy_files,
+        "pass_fail_outcome": status_value,
+        "rewrite_detection_status": rewrite_status,
+    }
+    store = MemoryStore(ProjectMemory(str(Path.cwd())))
+    record = store.append_record(
+        MemoryRecord(
+            content=f"Template selection reflection for {command.action}: {selected}",
+            kind="reflection",
+            scope="project",
+            metadata={
+                "source": "company_cli_post_run_reflection",
+                "template_key": selected,
+                "selection_confidence": confidence,
+                "accepted": accepted,
+                "outcome": outcome,
+                "pass_fail_outcome": status_value,
+                "heavily_rewritten_files": heavy_files,
+                "rewrite_stats": rewrite_stats,
+                "idea": command.idea,
+                "project_name": command.project_name or "",
+            },
+            skill_evidence={"role": "engineering", "outcome": outcome},
+        )
+    )
+    record_skill_outcome(
+        store,
+        skill_name="template-selection",
+        scope="engineering",
+        task_id=f"cli-{command.action}",
+        outcome=outcome,
+        supporting_memory_ids=[record.id, *list(command.template_selection_memory_ids)],
+    )
+    for memory_id in command.template_selection_memory_ids:
+        record_memory_outcome(
+            store,
+            record_id=memory_id,
+            outcome=outcome,
+            related_skill_ids=["engineering:template-selection"],
+        )
+    try:
+        state = CompanyStateManager(Path.cwd())
+        service = SelfImprovementService(state)
+        reinforcement = service.apply_reinforcement_and_decay()
+        feedback["reinforcement"] = reinforcement
+    except Exception:
+        feedback["reinforcement"] = {"decayed_records": 0, "review_candidates": []}
+    coder.io.tool_output(
+        f"Recorded template reflection outcome: {outcome}; "
+        f"heavy rewrites={len(heavy_files)}."
+    )
     return 0
 
 

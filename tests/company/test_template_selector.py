@@ -52,3 +52,43 @@ def test_select_template_falls_back_to_custom_without_evidence(tmp_path, monkeyp
     assert decision.template_key == "custom"
     assert decision.confidence <= 0.6
     assert decision.memory_record_ids == []
+
+
+def test_select_template_applies_correction_and_preference_penalties(tmp_path):
+    store = MemoryStore(ProjectMemory(str(tmp_path)))
+    store.append_record(
+        MemoryRecord(
+            content="Build dashboard for analytics",
+            scope="project",
+            usage_count=5,
+            successful_uses=4,
+            acceptance_rate=0.8,
+            reinforcement_score=0.8,
+            metadata={
+                "template_key": "data-dashboard",
+                "rewrite_count": 4,
+                "template_preferences": {"data-dashboard": "avoid"},
+            },
+        )
+    )
+    winner = store.append_record(
+        MemoryRecord(
+            content="Build dashboard for analytics",
+            scope="project",
+            usage_count=2,
+            successful_uses=2,
+            acceptance_rate=1.0,
+            reinforcement_score=1.0,
+            metadata={"template_key": "streamlit-dashboard"},
+        )
+    )
+
+    decision = select_template(
+        idea="Build analytics dashboard",
+        project_name="KPI Board",
+        role_context="product",
+        memory_store=store,
+    )
+
+    assert decision.template_key == "streamlit-dashboard"
+    assert winner.id in decision.memory_record_ids

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any
 
 from aider.company.templates import CANONICAL_TEMPLATE_KEYS, TEMPLATES, detect_template_from_repo
@@ -14,6 +15,30 @@ class SelectionDecision:
     confidence: float
     reasons: list[str] = field(default_factory=list)
     memory_record_ids: list[str] = field(default_factory=list)
+
+
+def _tokenize(text: str) -> set[str]:
+    return {tok for tok in re.split(r"[^a-z0-9]+", text.lower()) if tok}
+
+
+def _semantic_template_score(template_key: str, query_text: str) -> float:
+    template = TEMPLATES[template_key]
+    template_text = " ".join(
+        [
+            template.key,
+            template.label,
+            template.description,
+            *template.discovery_focus,
+            *template.engineering_defaults,
+            *template.qa_focus,
+        ]
+    )
+    query_tokens = _tokenize(query_text)
+    template_tokens = _tokenize(template_text)
+    if not query_tokens or not template_tokens:
+        return 0.0
+    overlap = len(query_tokens & template_tokens)
+    return min(1.0, overlap / max(4, len(query_tokens)))
 
 
 def select_template(
@@ -45,7 +70,14 @@ def select_template(
     memory_records = memory_store.query_records(
         MemoryQuery(scope="project", text=query_text, limit=20)
     )
-    evidence_scores: dict[str, float] = {key: 0.0 for key in CANONICAL_TEMPLATE_KEYS}
+    evidence_scores: dict[str, float] = {}
+    reasons_by_template: dict[str, list[str]] = {}
+    for key in CANONICAL_TEMPLATE_KEYS:
+        semantic = _semantic_template_score(key, query_text)
+        evidence_scores[key] = 0.35 * semantic
+        reasons_by_template[key] = [
+            f"Semantic match score {semantic:.2f} from template description/focus overlap."
+        ]
     memory_ids: list[str] = []
 
     for record in memory_records[:8]:
@@ -53,19 +85,56 @@ def select_template(
         template_key = str(metadata.get("template_key") or metadata.get("template") or "").strip()
         if template_key in evidence_scores:
             usage = max(1, int(record.usage_count))
-            success_bias = max(0.0, float(record.acceptance_rate))
-            evidence_scores[template_key] += 1.0 + (0.5 * success_bias) + (0.1 * usage)
+            success_bias = max(0.0, float(record.acceptance_rate or 0.0))
+            reinforcement = max(0.0, float(record.reinforcement_score or 0.0))
+            correction_penalty = max(
+                0.0,
+                float(
+                    metadata.get("correction_penalty")
+                    or metadata.get("rewrite_count")
+                    or metadata.get("manual_rewrites")
+                    or 0.0
+                ),
+            )
+            template_penalty = 0.25 * min(4.0, correction_penalty)
+            # user preference: avoid template unless explicitly requested
+            preference_penalty = 0.0
+            preferences = metadata.get("template_preferences")
+            if isinstance(preferences, dict):
+                avoid = {str(k).strip().lower() for k, v in preferences.items() if v == "avoid"}
+                prefer = {str(k).strip().lower() for k, v in preferences.items() if v == "prefer"}
+                if template_key in avoid:
+                    preference_penalty += 0.8
+                if template_key in prefer:
+                    evidence_scores[template_key] += 0.4
+            evidence_scores[template_key] += (
+                0.9 + (0.6 * success_bias) + (0.4 * reinforcement) + (0.08 * usage)
+            )
+            evidence_scores[template_key] -= template_penalty + preference_penalty
+            reasons_by_template[template_key].append(
+                "Memory evidence contributed success/reinforcement boosts with correction/preference penalties."
+            )
             memory_ids.append(record.id)
 
     if any(score > 0 for score in evidence_scores.values()):
         ranked = sorted(evidence_scores.items(), key=lambda item: item[1], reverse=True)
         top_key, top_score = ranked[0]
         second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+        if not memory_ids and top_score < 0.30:
+            return SelectionDecision(
+                template_key="custom",
+                confidence=0.5,
+                reasons=[
+                    "Semantic signal was weak and no memory evidence existed; defaulted to custom.",
+                ],
+                memory_record_ids=[],
+            )
         margin = max(0.0, top_score - second_score)
         confidence = min(0.95, 0.45 + (top_score / (top_score + 2.0)) + (0.1 * min(1.0, margin)))
         reasons = [
-            f"Selected {top_key} from {len(memory_ids)} matching memory records.",
+            f"Selected {top_key} from semantic+memory scoring across {len(memory_records[:8])} records.",
             f"Evidence margin over next candidate: {margin:.2f}.",
+            *reasons_by_template.get(top_key, [])[:3],
         ]
         return SelectionDecision(
             template_key=top_key,

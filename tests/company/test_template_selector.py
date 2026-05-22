@@ -92,3 +92,32 @@ def test_select_template_applies_correction_and_preference_penalties(tmp_path):
 
     assert decision.template_key == "streamlit-dashboard"
     assert winner.id in decision.memory_record_ids
+
+
+def test_select_template_demotes_when_repeated_mismatches_present(tmp_path):
+    store = MemoryStore(ProjectMemory(str(tmp_path)))
+    for _ in range(2):
+        store.append_record(
+            MemoryRecord(
+                content="Build internal admin workflow with approvals",
+                scope="project",
+                usage_count=4,
+                successful_uses=3,
+                acceptance_rate=0.75,
+                reinforcement_score=0.5,
+                metadata={
+                    "template_key": "internal-admin",
+                    "rewrite_count": 3,
+                },
+            )
+        )
+
+    decision = select_template(
+        idea="Build internal admin workflow with approvals",
+        project_name="Ops Workbench",
+        role_context="product",
+        memory_store=store,
+    )
+
+    assert decision.template_key == "custom"
+    assert any("repeated mismatch evidence" in reason for reason in decision.reasons)

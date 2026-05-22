@@ -17,6 +17,11 @@ class SelectionDecision:
     memory_record_ids: list[str] = field(default_factory=list)
 
 
+CONFIDENCE_THRESHOLD = 0.65
+UNCERTAINTY_MARGIN_THRESHOLD = 0.12
+MISMATCH_DEMOTION_THRESHOLD = 2
+
+
 def _tokenize(text: str) -> set[str]:
     return {tok for tok in re.split(r"[^a-z0-9]+", text.lower()) if tok}
 
@@ -79,6 +84,7 @@ def select_template(
             f"Semantic match score {semantic:.2f} from template description/focus overlap."
         ]
     memory_ids: list[str] = []
+    mismatch_counts: dict[str, int] = {key: 0 for key in CANONICAL_TEMPLATE_KEYS}
 
     for record in memory_records[:8]:
         metadata = record.metadata if isinstance(record.metadata, dict) else {}
@@ -111,6 +117,8 @@ def select_template(
                 0.9 + (0.6 * success_bias) + (0.4 * reinforcement) + (0.08 * usage)
             )
             evidence_scores[template_key] -= template_penalty + preference_penalty
+            if correction_penalty >= 2:
+                mismatch_counts[template_key] += 1
             reasons_by_template[template_key].append(
                 "Memory evidence contributed success/reinforcement boosts with correction/preference penalties."
             )
@@ -131,6 +139,35 @@ def select_template(
             )
         margin = max(0.0, top_score - second_score)
         confidence = min(0.95, 0.45 + (top_score / (top_score + 2.0)) + (0.1 * min(1.0, margin)))
+        # Hard-stop confidence gate to avoid mismatched scaffolds.
+        if mismatch_counts.get(top_key, 0) >= MISMATCH_DEMOTION_THRESHOLD:
+            return SelectionDecision(
+                template_key="custom",
+                confidence=0.5,
+                reasons=[
+                    f"Top template {top_key} had repeated mismatch evidence; demoted to custom.",
+                    f"Mismatch count: {mismatch_counts.get(top_key, 0)}.",
+                ],
+                memory_record_ids=memory_ids,
+            )
+        if confidence < CONFIDENCE_THRESHOLD:
+            return SelectionDecision(
+                template_key="custom",
+                confidence=round(confidence, 3),
+                reasons=[
+                    f"Top confidence {confidence:.2f} below threshold {CONFIDENCE_THRESHOLD:.2f}; selected custom.",
+                ],
+                memory_record_ids=memory_ids,
+            )
+        if margin < UNCERTAINTY_MARGIN_THRESHOLD:
+            return SelectionDecision(
+                template_key="custom",
+                confidence=round(confidence, 3),
+                reasons=[
+                    f"Top margin {margin:.2f} below uncertainty threshold {UNCERTAINTY_MARGIN_THRESHOLD:.2f}; selected custom.",
+                ],
+                memory_record_ids=memory_ids,
+            )
         reasons = [
             f"Selected {top_key} from semantic+memory scoring across {len(memory_records[:8])} records.",
             f"Evidence margin over next candidate: {margin:.2f}.",

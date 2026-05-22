@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
 
 from aider.company.daemon import CompanyDaemon, CompanyDaemonError, load_daemon
+from aider.company.self_improvement import SelfImprovementService
+from aider.company.state import CompanyStateManager
 from aider.company.workflow import TrackerWorkflowConfig, WorkflowError
 from aider.company.runtime import CompanyRunRequest, run_company_task
+from aider.company.template_selector import select_template
 from aider.memory import ProjectMemory
+from aider.memory.records import MemoryRecord
+from aider.memory.reinforcement import record_memory_outcome, record_skill_outcome
 from aider.memory.store import MemoryStore
 from aider.company.templates import (
     DEFAULT_TEMPLATE_KEY,
@@ -35,6 +41,12 @@ class CompanyCLICommand:
     idea: str = ""
     template: str = DEFAULT_TEMPLATE_KEY
     template_alias_note: str | None = None
+    template_selection_note: str | None = None
+    template_selection_reasons: tuple[str, ...] = ()
+    template_selection_memory_ids: tuple[str, ...] = ()
+    template_selection_confidence: float | None = None
+    template_strict: bool = False
+    explain_template_choice: bool = False
     project_name: str | None = None
     dry_plan: bool = False
     warehouse_path: str | None = None
@@ -65,8 +77,8 @@ USAGE = """Usage:
   aider company init [--warehouse PATH] [--template TEMPLATE] [--github-repo OWNER/REPO] [--github-token TOKEN] [--model MODEL] [--enable-mcp|--skip-mcp] [--product-idea IDEA] [--product-name NAME] [--yes]
   aider company setup [same options as init]
   aider company templates
-  aider company create <idea> [--template TEMPLATE] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
-  aider company new <idea> [--template TEMPLATE] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
+  aider company create <idea> [--template TEMPLATE|auto|custom] [--template-strict] [--explain-template-choice] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
+  aider company new <idea> [--template TEMPLATE|auto|custom] [--template-strict] [--explain-template-choice] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
   aider company daemon --workflow PATH [--tracker TYPE] [--repo OWNER/REPO] [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N] [--watch] [--filter EVENT_TYPE]
   aider company memory status
   aider company memory repair [--yes]
@@ -131,7 +143,9 @@ def parse_company_cli(
     if action not in {"create", "new"}:
         raise CompanyCLIError(f"Unknown company command: {action}\n{USAGE}")
 
-    template = DEFAULT_TEMPLATE_KEY
+    template: str | None = None
+    template_strict = False
+    explain_template_choice = False
     project_name: str | None = None
     dry_plan = False
     warehouse_path: str | None = None
@@ -156,6 +170,10 @@ def parse_company_cli(
             warehouse_path = rest[index]
         elif token == "--dry-plan":
             dry_plan = True
+        elif token == "--template-strict":
+            template_strict = True
+        elif token == "--explain-template-choice":
+            explain_template_choice = True
         elif token.startswith("--"):
             raise CompanyCLIError(
                 f"Unknown company {action} option: {token}. Put Aider options after `--`.\n{USAGE}"
@@ -169,11 +187,56 @@ def parse_company_cli(
         raise CompanyCLIError(
             f"`aider company {action}` requires a product idea.\n" + USAGE
         )
+    default_mode = _load_default_template_mode(Path.cwd())
+    if template is None and default_mode == "custom":
+        template = "custom"
+    elif template is None and default_mode not in {"", "auto", "custom"}:
+        template = default_mode
+    if template == "auto":
+        template = None
     requested_template = template
-    try:
-        template = get_template(requested_template).key
-    except ValueError as exc:
-        raise CompanyCLIError(str(exc) + "\n" + USAGE) from exc
+    template_selection_note: str | None = None
+    template_selection_reasons: tuple[str, ...] = ()
+    template_selection_memory_ids: tuple[str, ...] = ()
+    template_selection_confidence: float | None = None
+    if requested_template is None:
+        decision = select_template(
+            idea=idea,
+            project_name=project_name,
+            role_context=action,
+            memory_store=MemoryStore(ProjectMemory(str(Path.cwd()))),
+        )
+        template = get_template(decision.template_key).key
+        template_selection_confidence = decision.confidence
+        if template_strict and template == "custom":
+            ranked = sorted(
+                decision.score_breakdown.items(), key=lambda item: item[1], reverse=True
+            )
+            non_custom = next((key for key, _score in ranked if key != "custom"), None)
+            if non_custom:
+                template = get_template(non_custom).key
+                template_selection_note = (
+                    f"Template strict mode forced non-custom template `{template}` "
+                    f"after auto-selection fallback."
+                )
+        template_selection_note = (
+            f"Auto-selected template `{template}` "
+            f"(confidence {decision.confidence:.2f}). "
+            f"Reasons: {'; '.join(decision.reasons[:2])}"
+        )
+        if explain_template_choice and decision.score_breakdown:
+            top = sorted(
+                decision.score_breakdown.items(), key=lambda item: item[1], reverse=True
+            )[:3]
+            explain = ", ".join(f"{k}={v:.2f}" for k, v in top)
+            template_selection_note += f" Score breakdown: {explain}. Evidence IDs: {', '.join(decision.memory_record_ids) or 'none'}."
+        template_selection_reasons = tuple(decision.reasons)
+        template_selection_memory_ids = tuple(decision.memory_record_ids)
+    else:
+        try:
+            template = get_template(requested_template).key
+        except ValueError as exc:
+            raise CompanyCLIError(str(exc) + "\n" + USAGE) from exc
 
     return (
         CompanyCLICommand(
@@ -181,12 +244,30 @@ def parse_company_cli(
             idea=idea,
             template=template,
             template_alias_note=template_alias_note(requested_template),
+            template_selection_note=template_selection_note,
+            template_selection_reasons=template_selection_reasons,
+            template_selection_memory_ids=template_selection_memory_ids,
+            template_selection_confidence=template_selection_confidence,
+            template_strict=template_strict,
+            explain_template_choice=explain_template_choice,
             project_name=project_name,
             dry_plan=dry_plan,
             warehouse_path=warehouse_path,
         ),
         aider_args,
     )
+
+
+def _load_default_template_mode(root: Path) -> str:
+    config = root / ".aider" / "company" / "onboarding.json"
+    if not config.exists():
+        return "auto"
+    try:
+        data = json.loads(config.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "auto"
+    mode = str(data.get("default_template_mode") or "auto").strip().lower()
+    return mode or "auto"
 
 
 def _parse_company_onboarding(action: str, args: Sequence[str]) -> CompanyCLICommand:
@@ -413,10 +494,16 @@ def format_template_list() -> str:
 def render_company_plan(command: CompanyCLICommand) -> str:
     """Render the execution prompt for a parsed create command."""
 
+    avoided_mismatches = tuple(
+        reason for reason in command.template_selection_reasons if "custom" in reason.lower() or "mismatch" in reason.lower()
+    )
     return render_zero_to_mvp_prompt(
         idea=command.idea,
         template_key=command.template,
         project_name=command.project_name,
+        decision_reasons=command.template_selection_reasons,
+        avoided_mismatches=avoided_mismatches,
+        memory_evidence_ids=command.template_selection_memory_ids,
     )
 
 
@@ -458,6 +545,8 @@ def handle_company_cli_pre_coder(command: CompanyCLICommand) -> int | None:
             )
         if command.template_alias_note:
             print(command.template_alias_note)
+        if command.template_selection_note:
+            print(command.template_selection_note)
         print(render_company_plan(command))
         return 0
     return None
@@ -651,6 +740,8 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
     coder.io.tool_output(f"Template: {command.template}")
     if command.template_alias_note:
         coder.io.tool_output(command.template_alias_note)
+    if command.template_selection_note:
+        coder.io.tool_output(command.template_selection_note)
     if command.project_name:
         coder.io.tool_output(f"Project: {command.project_name}")
     if command.product_path:
@@ -702,6 +793,31 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
 
         return {"summary": str(content or ""), "status": "success"}
 
+    def _collect_rewrite_signals() -> tuple[list[str], dict[str, dict[str, int]], str]:
+        repo = getattr(coder, "repo", None)
+        if repo is None:
+            return [], {}, "no_repo"
+        try:
+            output = repo.repo.git.diff("--numstat", "HEAD")
+        except Exception:
+            return [], {}, "diff_unavailable"
+        heavy: list[str] = []
+        stats: dict[str, dict[str, int]] = {}
+        for line in output.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            added_raw, deleted_raw, path = parts[0], parts[1], parts[2]
+            try:
+                added = int(added_raw)
+                deleted = int(deleted_raw)
+            except ValueError:
+                continue
+            stats[path] = {"added": added, "deleted": deleted}
+            if added + deleted >= 80:
+                heavy.append(path)
+        return heavy, stats, "ok"
+
     import asyncio
 
     request = CompanyRunRequest(
@@ -716,7 +832,79 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
             blocking=False,
         ),
     )
-    asyncio.run(run_company_task(request, execute=_execute))
+    run_result = asyncio.run(run_company_task(request, execute=_execute))
+
+    selected = command.template
+    confidence = None
+    if command.template_selection_note:
+        import re
+
+        match = re.search(r"confidence\s+([0-9]+(?:\.[0-9]+)?)", command.template_selection_note)
+        if match:
+            try:
+                confidence = float(match.group(1))
+            except ValueError:
+                confidence = None
+    status_value = str((run_result or {}).get("status") or "success").lower()
+    accepted = status_value == "success"
+    outcome = "success" if accepted else "failure"
+    heavy_files, rewrite_stats, rewrite_status = _collect_rewrite_signals()
+    feedback = {
+        "selected_template": selected,
+        "confidence": confidence,
+        "accepted": accepted,
+        "outcome": outcome,
+        "heavily_rewritten_files": heavy_files,
+        "pass_fail_outcome": status_value,
+        "rewrite_detection_status": rewrite_status,
+    }
+    store = MemoryStore(ProjectMemory(str(Path.cwd())))
+    record = store.append_record(
+        MemoryRecord(
+            content=f"Template selection reflection for {command.action}: {selected}",
+            kind="reflection",
+            scope="project",
+            metadata={
+                "source": "company_cli_post_run_reflection",
+                "template_key": selected,
+                "selection_confidence": confidence,
+                "accepted": accepted,
+                "outcome": outcome,
+                "pass_fail_outcome": status_value,
+                "heavily_rewritten_files": heavy_files,
+                "rewrite_stats": rewrite_stats,
+                "idea": command.idea,
+                "project_name": command.project_name or "",
+            },
+            skill_evidence={"role": "engineering", "outcome": outcome},
+        )
+    )
+    record_skill_outcome(
+        store,
+        skill_name="template-selection",
+        scope="engineering",
+        task_id=f"cli-{command.action}",
+        outcome=outcome,
+        supporting_memory_ids=[record.id, *list(command.template_selection_memory_ids)],
+    )
+    for memory_id in command.template_selection_memory_ids:
+        record_memory_outcome(
+            store,
+            record_id=memory_id,
+            outcome=outcome,
+            related_skill_ids=["engineering:template-selection"],
+        )
+    try:
+        state = CompanyStateManager(Path.cwd())
+        service = SelfImprovementService(state)
+        reinforcement = service.apply_reinforcement_and_decay()
+        feedback["reinforcement"] = reinforcement
+    except Exception:
+        feedback["reinforcement"] = {"decayed_records": 0, "review_candidates": []}
+    coder.io.tool_output(
+        f"Recorded template reflection outcome: {outcome}; "
+        f"heavy rewrites={len(heavy_files)}."
+    )
     return 0
 
 

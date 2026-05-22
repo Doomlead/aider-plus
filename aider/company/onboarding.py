@@ -109,6 +109,9 @@ class CompanyOnboarding:
             "version": 1,
             "warehouse_path": str(warehouse_path),
             "default_template": template,
+            "default_template_mode": str(
+                self.defaults.get("default_template_mode") or "auto"
+            ),
             "github_repo": github_repo,
             "github_token_configured": github_token_configured,
             "mcp_enabled": mcp_enabled,

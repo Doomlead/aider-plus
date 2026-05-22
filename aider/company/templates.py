@@ -458,9 +458,9 @@ def main(argv: list[str] | None = None) -> int:
         ],
         example_prd_prompt="Draft a PRD for a Python CLI MVP covering command verbs, input/output contracts, config precedence, exit codes, and packaging notes.",
     ),
-    "repo-native": ProjectTemplate(
-        key="repo-native",
-        label="Repo-native custom MVP",
+    "custom": ProjectTemplate(
+        key="custom",
+        label="Custom (template-free) MVP",
         description="Template-free mode that derives structure from the product request and current repository.",
         discovery_focus=(
             "core user workflow, acceptance criteria, and explicit non-goals for v0",
@@ -650,7 +650,7 @@ CANONICAL_TEMPLATE_KEYS: tuple[str, ...] = (
     "internal-admin",
     "nextjs-saas",
     "python-cli",
-    "repo-native",
+    "custom",
     "streamlit-dashboard",
 )
 
@@ -662,9 +662,13 @@ TEMPLATE_ALIASES: Mapping[str, str] = MappingProxyType(
         "data-dashboard-streamlit": "streamlit-dashboard",
         "electron-desktop-app": "electron-desktop",
         "fastapi-backend": "fastapi-api",
+        "from-scratch": "custom",
         "nextjs-app": "nextjs-saas",
+        "none": "custom",
         "python-fastapi-api": "fastapi-api",
+        "repo-native": "custom",
         "saas-dashboard": "nextjs-saas",
+        "blank": "custom",
     }
 )
 
@@ -706,7 +710,7 @@ def detect_template_from_repo(root: Path | None = None) -> str:
     if (r / "data" / "sample").exists() or any(r.glob("src/*/metrics*")):
         return "data-dashboard"
 
-    return "repo-native"
+    return "custom"
 
 
 def resolve_template_key(key: str | None) -> tuple[str, str | None]:
@@ -834,6 +838,9 @@ def render_zero_to_mvp_prompt(
     idea: str,
     template_key: str | None = None,
     project_name: str | None = None,
+    decision_reasons: tuple[str, ...] = (),
+    avoided_mismatches: tuple[str, ...] = (),
+    memory_evidence_ids: tuple[str, ...] = (),
 ) -> str:
     """Render the canonical zero-to-MVP prompt used by `aider company create`."""
 
@@ -847,9 +854,26 @@ def render_zero_to_mvp_prompt(
     def bullets(items: tuple[str, ...]) -> str:
         return "\n".join(f"- {item}" for item in items)
 
+    decision_block = [
+        "Template selection rationale:",
+        f"- Selected template: {template.label} ({template.key})",
+    ]
+    if decision_reasons:
+        decision_block.append("- Why chosen:")
+        decision_block.extend(f"  - {reason}" for reason in decision_reasons)
+    if avoided_mismatches:
+        decision_block.append("- Mismatches avoided:")
+        decision_block.extend(f"  - {item}" for item in avoided_mismatches)
+    if memory_evidence_ids:
+        decision_block.append(f"- Memory evidence IDs: {', '.join(memory_evidence_ids)}")
+    else:
+        decision_block.append("- Memory evidence IDs: none")
+
     return "\n".join(
         [
             "You are Aider Plus Company Mode creating a zero-to-MVP product.",
+            "",
+            *decision_block,
             "",
             "Mission:",
             idea.strip(),

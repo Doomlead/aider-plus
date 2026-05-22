@@ -90,6 +90,21 @@ def test_company_memory_backfill_parses():
     assert aider_args == []
 
 
+def test_company_create_without_template_uses_repo_detection(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    command, _ = parse_company_cli(["company", "create", "Build", "a", "novel", "tool"])
+    assert command.template == "custom"
+    assert command.template_selection_note
+
+
+def test_company_create_with_explicit_template_skips_auto_selection_note():
+    command, _ = parse_company_cli(
+        ["company", "create", "Build", "a", "Stripe", "API", "--template", "fastapi-api"]
+    )
+    assert command.template == "fastapi-api"
+    assert command.template_selection_note is None
+
+
 def test_render_zero_to_mvp_prompt_has_template_specific_quality_gates():
     prompt = render_zero_to_mvp_prompt(
         idea="Build an internal refund approval tool",
@@ -104,3 +119,51 @@ def test_render_zero_to_mvp_prompt_has_template_specific_quality_gates():
         "Summarize the Product, UX, Engineering, QA, release, and post-mortem outcomes"
         in prompt
     )
+
+
+def test_render_zero_to_mvp_prompt_includes_decision_rationale_block():
+    prompt = render_zero_to_mvp_prompt(
+        idea="Build an internal refund approval tool",
+        template_key="internal-admin",
+        project_name="RefundOps",
+        decision_reasons=(
+            "Selected internal-admin from semantic+memory scoring.",
+            "Evidence margin over next candidate: 0.31.",
+        ),
+        avoided_mismatches=(
+            "Top confidence below threshold for dashboard templates; selected internal-admin.",
+        ),
+        memory_evidence_ids=("mem-101", "mem-204"),
+    )
+
+    assert "Template selection rationale:" in prompt
+    assert "Selected template:" in prompt
+    assert "(internal-admin)" in prompt
+    assert "Why chosen:" in prompt
+    assert "Mismatches avoided:" in prompt
+    assert "Memory evidence IDs: mem-101, mem-204" in prompt
+
+
+def test_company_create_template_auto_alias_triggers_selector(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    command, _ = parse_company_cli(["company", "create", "Build", "tool", "--template", "auto"])
+    assert command.template_selection_note
+
+
+def test_company_create_explain_template_choice_adds_breakdown(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    command, _ = parse_company_cli([
+        "company", "create", "Build", "tool", "--explain-template-choice"
+    ])
+    assert command.template_selection_note
+    assert "Score breakdown:" in command.template_selection_note
+
+
+def test_company_create_respects_default_template_mode_custom(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conf = tmp_path / ".aider" / "company"
+    conf.mkdir(parents=True, exist_ok=True)
+    (conf / "onboarding.json").write_text('{"default_template_mode":"custom"}', encoding="utf-8")
+    command, _ = parse_company_cli(["company", "create", "Build", "tool"])
+    assert command.template == "custom"
+    assert command.template_selection_note is None

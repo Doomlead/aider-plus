@@ -131,7 +131,7 @@ def parse_company_cli(
     if action not in {"create", "new"}:
         raise CompanyCLIError(f"Unknown company command: {action}\n{USAGE}")
 
-    template = DEFAULT_TEMPLATE_KEY
+    template: str | None = None
     project_name: str | None = None
     dry_plan = False
     warehouse_path: str | None = None

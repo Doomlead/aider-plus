@@ -458,9 +458,9 @@ def main(argv: list[str] | None = None) -> int:
         ],
         example_prd_prompt="Draft a PRD for a Python CLI MVP covering command verbs, input/output contracts, config precedence, exit codes, and packaging notes.",
     ),
-    "repo-native": ProjectTemplate(
-        key="repo-native",
-        label="Repo-native custom MVP",
+    "custom": ProjectTemplate(
+        key="custom",
+        label="Custom (template-free) MVP",
         description="Template-free mode that derives structure from the product request and current repository.",
         discovery_focus=(
             "core user workflow, acceptance criteria, and explicit non-goals for v0",
@@ -650,7 +650,7 @@ CANONICAL_TEMPLATE_KEYS: tuple[str, ...] = (
     "internal-admin",
     "nextjs-saas",
     "python-cli",
-    "repo-native",
+    "custom",
     "streamlit-dashboard",
 )
 
@@ -662,9 +662,13 @@ TEMPLATE_ALIASES: Mapping[str, str] = MappingProxyType(
         "data-dashboard-streamlit": "streamlit-dashboard",
         "electron-desktop-app": "electron-desktop",
         "fastapi-backend": "fastapi-api",
+        "from-scratch": "custom",
         "nextjs-app": "nextjs-saas",
+        "none": "custom",
         "python-fastapi-api": "fastapi-api",
+        "repo-native": "custom",
         "saas-dashboard": "nextjs-saas",
+        "blank": "custom",
     }
 )
 
@@ -706,7 +710,7 @@ def detect_template_from_repo(root: Path | None = None) -> str:
     if (r / "data" / "sample").exists() or any(r.glob("src/*/metrics*")):
         return "data-dashboard"
 
-    return "repo-native"
+    return "custom"
 
 
 def resolve_template_key(key: str | None) -> tuple[str, str | None]:

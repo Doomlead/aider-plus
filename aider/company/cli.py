@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
@@ -43,6 +44,9 @@ class CompanyCLICommand:
     template_selection_note: str | None = None
     template_selection_reasons: tuple[str, ...] = ()
     template_selection_memory_ids: tuple[str, ...] = ()
+    template_selection_confidence: float | None = None
+    template_strict: bool = False
+    explain_template_choice: bool = False
     project_name: str | None = None
     dry_plan: bool = False
     warehouse_path: str | None = None
@@ -73,8 +77,8 @@ USAGE = """Usage:
   aider company init [--warehouse PATH] [--template TEMPLATE] [--github-repo OWNER/REPO] [--github-token TOKEN] [--model MODEL] [--enable-mcp|--skip-mcp] [--product-idea IDEA] [--product-name NAME] [--yes]
   aider company setup [same options as init]
   aider company templates
-  aider company create <idea> [--template TEMPLATE] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
-  aider company new <idea> [--template TEMPLATE] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
+  aider company create <idea> [--template TEMPLATE|auto|custom] [--template-strict] [--explain-template-choice] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
+  aider company new <idea> [--template TEMPLATE|auto|custom] [--template-strict] [--explain-template-choice] [--name PRODUCT_NAME] [--warehouse PATH] [--dry-plan] [-- AIDER_ARGS...]
   aider company daemon --workflow PATH [--tracker TYPE] [--repo OWNER/REPO] [--once] [--dry-run] [--status] [--run ISSUE_ID] [--departments LIST] [--max-iterations N] [--watch] [--filter EVENT_TYPE]
   aider company memory status
   aider company memory repair [--yes]
@@ -140,6 +144,8 @@ def parse_company_cli(
         raise CompanyCLIError(f"Unknown company command: {action}\n{USAGE}")
 
     template: str | None = None
+    template_strict = False
+    explain_template_choice = False
     project_name: str | None = None
     dry_plan = False
     warehouse_path: str | None = None
@@ -164,6 +170,10 @@ def parse_company_cli(
             warehouse_path = rest[index]
         elif token == "--dry-plan":
             dry_plan = True
+        elif token == "--template-strict":
+            template_strict = True
+        elif token == "--explain-template-choice":
+            explain_template_choice = True
         elif token.startswith("--"):
             raise CompanyCLIError(
                 f"Unknown company {action} option: {token}. Put Aider options after `--`.\n{USAGE}"
@@ -177,10 +187,18 @@ def parse_company_cli(
         raise CompanyCLIError(
             f"`aider company {action}` requires a product idea.\n" + USAGE
         )
+    default_mode = _load_default_template_mode(Path.cwd())
+    if template is None and default_mode == "custom":
+        template = "custom"
+    elif template is None and default_mode not in {"", "auto", "custom"}:
+        template = default_mode
+    if template == "auto":
+        template = None
     requested_template = template
     template_selection_note: str | None = None
     template_selection_reasons: tuple[str, ...] = ()
     template_selection_memory_ids: tuple[str, ...] = ()
+    template_selection_confidence: float | None = None
     if requested_template is None:
         decision = select_template(
             idea=idea,
@@ -189,11 +207,29 @@ def parse_company_cli(
             memory_store=MemoryStore(ProjectMemory(str(Path.cwd()))),
         )
         template = get_template(decision.template_key).key
+        template_selection_confidence = decision.confidence
+        if template_strict and template == "custom":
+            ranked = sorted(
+                decision.score_breakdown.items(), key=lambda item: item[1], reverse=True
+            )
+            non_custom = next((key for key, _score in ranked if key != "custom"), None)
+            if non_custom:
+                template = get_template(non_custom).key
+                template_selection_note = (
+                    f"Template strict mode forced non-custom template `{template}` "
+                    f"after auto-selection fallback."
+                )
         template_selection_note = (
             f"Auto-selected template `{template}` "
             f"(confidence {decision.confidence:.2f}). "
             f"Reasons: {'; '.join(decision.reasons[:2])}"
         )
+        if explain_template_choice and decision.score_breakdown:
+            top = sorted(
+                decision.score_breakdown.items(), key=lambda item: item[1], reverse=True
+            )[:3]
+            explain = ", ".join(f"{k}={v:.2f}" for k, v in top)
+            template_selection_note += f" Score breakdown: {explain}. Evidence IDs: {', '.join(decision.memory_record_ids) or 'none'}."
         template_selection_reasons = tuple(decision.reasons)
         template_selection_memory_ids = tuple(decision.memory_record_ids)
     else:
@@ -211,12 +247,27 @@ def parse_company_cli(
             template_selection_note=template_selection_note,
             template_selection_reasons=template_selection_reasons,
             template_selection_memory_ids=template_selection_memory_ids,
+            template_selection_confidence=template_selection_confidence,
+            template_strict=template_strict,
+            explain_template_choice=explain_template_choice,
             project_name=project_name,
             dry_plan=dry_plan,
             warehouse_path=warehouse_path,
         ),
         aider_args,
     )
+
+
+def _load_default_template_mode(root: Path) -> str:
+    config = root / ".aider" / "company" / "onboarding.json"
+    if not config.exists():
+        return "auto"
+    try:
+        data = json.loads(config.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "auto"
+    mode = str(data.get("default_template_mode") or "auto").strip().lower()
+    return mode or "auto"
 
 
 def _parse_company_onboarding(action: str, args: Sequence[str]) -> CompanyCLICommand:

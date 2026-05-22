@@ -142,3 +142,28 @@ def test_render_zero_to_mvp_prompt_includes_decision_rationale_block():
     assert "Why chosen:" in prompt
     assert "Mismatches avoided:" in prompt
     assert "Memory evidence IDs: mem-101, mem-204" in prompt
+
+
+def test_company_create_template_auto_alias_triggers_selector(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    command, _ = parse_company_cli(["company", "create", "Build", "tool", "--template", "auto"])
+    assert command.template_selection_note
+
+
+def test_company_create_explain_template_choice_adds_breakdown(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    command, _ = parse_company_cli([
+        "company", "create", "Build", "tool", "--explain-template-choice"
+    ])
+    assert command.template_selection_note
+    assert "Score breakdown:" in command.template_selection_note
+
+
+def test_company_create_respects_default_template_mode_custom(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conf = tmp_path / ".aider" / "company"
+    conf.mkdir(parents=True, exist_ok=True)
+    (conf / "onboarding.json").write_text('{"default_template_mode":"custom"}', encoding="utf-8")
+    command, _ = parse_company_cli(["company", "create", "Build", "tool"])
+    assert command.template == "custom"
+    assert command.template_selection_note is None

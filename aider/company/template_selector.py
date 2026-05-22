@@ -15,6 +15,7 @@ class SelectionDecision:
     confidence: float
     reasons: list[str] = field(default_factory=list)
     memory_record_ids: list[str] = field(default_factory=list)
+    score_breakdown: dict[str, float] = field(default_factory=dict)
 
 
 CONFIDENCE_THRESHOLD = 0.65
@@ -70,6 +71,7 @@ def select_template(
             confidence=0.55,
             reasons=["No request text; used repository template detection fallback."],
             memory_record_ids=[],
+            score_breakdown={fallback: 0.55},
         )
 
     memory_records = memory_store.query_records(
@@ -136,6 +138,7 @@ def select_template(
                     "Semantic signal was weak and no memory evidence existed; defaulted to custom.",
                 ],
                 memory_record_ids=[],
+                score_breakdown=dict(evidence_scores),
             )
         margin = max(0.0, top_score - second_score)
         confidence = min(0.95, 0.45 + (top_score / (top_score + 2.0)) + (0.1 * min(1.0, margin)))
@@ -149,6 +152,7 @@ def select_template(
                     f"Mismatch count: {mismatch_counts.get(top_key, 0)}.",
                 ],
                 memory_record_ids=memory_ids,
+                score_breakdown=dict(evidence_scores),
             )
         if confidence < CONFIDENCE_THRESHOLD:
             return SelectionDecision(
@@ -158,6 +162,7 @@ def select_template(
                     f"Top confidence {confidence:.2f} below threshold {CONFIDENCE_THRESHOLD:.2f}; selected custom.",
                 ],
                 memory_record_ids=memory_ids,
+                score_breakdown=dict(evidence_scores),
             )
         if margin < UNCERTAINTY_MARGIN_THRESHOLD:
             return SelectionDecision(
@@ -167,6 +172,7 @@ def select_template(
                     f"Top margin {margin:.2f} below uncertainty threshold {UNCERTAINTY_MARGIN_THRESHOLD:.2f}; selected custom.",
                 ],
                 memory_record_ids=memory_ids,
+                score_breakdown=dict(evidence_scores),
             )
         reasons = [
             f"Selected {top_key} from semantic+memory scoring across {len(memory_records[:8])} records.",
@@ -178,6 +184,7 @@ def select_template(
             confidence=round(confidence, 3),
             reasons=reasons,
             memory_record_ids=memory_ids,
+            score_breakdown=dict(evidence_scores),
         )
 
     fallback = detect_template_from_repo()
@@ -190,4 +197,49 @@ def select_template(
             f"Used repository detection fallback: {fallback_label} ({fallback}).",
         ],
         memory_record_ids=[],
+        score_breakdown={fallback: 0.6 if fallback != "custom" else 0.5},
     )
+
+
+def select_file_generation_policy(
+    *,
+    file_path: str,
+    request_text: str,
+    memory_store: MemoryStore,
+) -> dict[str, Any]:
+    lowered = f"{file_path} {request_text}".lower()
+    if any(token in lowered for token in ("api", "endpoint", "route", "handler")):
+        intent = "api_handler"
+    elif any(token in lowered for token in ("etl", "pipeline", "transform", "batch")):
+        intent = "etl_job"
+    elif any(token in lowered for token in ("component", "jsx", "tsx", "react", "vue", "ui")):
+        intent = "ui_component"
+    elif any(token in lowered for token in ("cli", "command", "argparse", "click", "typer")):
+        intent = "cli_command"
+    else:
+        intent = "generic_file"
+    matches = memory_store.query_records(
+        MemoryQuery(scope="project", text=f"{intent} {file_path} {request_text}", limit=5)
+    )
+    evidence_ids = [record.id for record in matches[:3]]
+    if len(matches) < 2:
+        return {
+            "intent": intent,
+            "confidence": 0.45,
+            "strategy": "neutral_todo_boundaries",
+            "memory_evidence_ids": evidence_ids,
+            "guidance": (
+                "Use a minimal neutral file shape with clear TODO boundaries, "
+                "no framework-specific assumptions."
+            ),
+        }
+    return {
+        "intent": intent,
+        "confidence": 0.75,
+        "strategy": "memory_pattern_informed",
+        "memory_evidence_ids": evidence_ids,
+        "guidance": (
+            "Use successful memory patterns for this file intent; keep boundaries explicit "
+            "and avoid unrelated framework conventions."
+        ),
+    }

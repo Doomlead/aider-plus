@@ -1,4 +1,4 @@
-from aider.company.template_selector import select_template
+from aider.company.template_selector import select_file_generation_policy, select_template
 from aider.memory import MemoryRecord, MemoryStore, ProjectMemory
 
 
@@ -121,3 +121,17 @@ def test_select_template_demotes_when_repeated_mismatches_present(tmp_path):
 
     assert decision.template_key == "custom"
     assert any("repeated mismatch evidence" in reason for reason in decision.reasons)
+
+
+def test_select_file_generation_policy_falls_back_to_neutral_when_uncertain(tmp_path):
+    from aider.memory import ProjectMemory
+    from aider.memory.store import MemoryStore
+
+    store = MemoryStore(ProjectMemory(str(tmp_path)))
+    policy = select_file_generation_policy(
+        file_path="src/worker/tasks.py",
+        request_text="create job",
+        memory_store=store,
+    )
+    assert policy["strategy"] == "neutral_todo_boundaries"
+    assert policy["intent"] in {"etl_job", "generic_file", "api_handler", "cli_command", "ui_component"}

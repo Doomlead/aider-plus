@@ -769,7 +769,7 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
         exhausted_before = int(getattr(coder, "num_exhausted_context_windows", 0) or 0)
         dirty_before = _dirty_files()
 
-        content = coder.run(with_message=str(task.payload))
+        content = await asyncio.to_thread(coder.run, with_message=str(task.payload))
 
         exhausted_after = int(getattr(coder, "num_exhausted_context_windows", 0) or 0)
         if exhausted_after > exhausted_before:
@@ -789,7 +789,7 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
                     + "\n\nContinue from where you stopped. Keep the response short and only "
                     "emit the next minimal patch needed to finish."
                 )
-                content = coder.run(with_message=continuation)
+                content = await asyncio.to_thread(coder.run, with_message=continuation)
 
         return {"summary": str(content or ""), "status": "success"}
 

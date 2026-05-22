@@ -90,6 +90,12 @@ def test_company_memory_backfill_parses():
     assert aider_args == []
 
 
+def test_company_create_without_template_uses_repo_detection(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    command, _ = parse_company_cli(["company", "create", "Build", "a", "novel", "tool"])
+    assert command.template == "repo-native"
+
+
 def test_render_zero_to_mvp_prompt_has_template_specific_quality_gates():
     prompt = render_zero_to_mvp_prompt(
         idea="Build an internal refund approval tool",

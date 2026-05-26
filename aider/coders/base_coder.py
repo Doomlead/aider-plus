@@ -1117,13 +1117,27 @@ class Coder:
         self.done_messages += self.cur_messages
         self.summarize_start()
 
-        # TODO check for impact on image messages
         if message:
-            self.done_messages += [
-                dict(role="user", content=message),
-                dict(role="assistant", content="Ok."),
-            ]
+            self.done_messages += self._normalize_done_message_pair(message)
         self.cur_messages = []
+
+
+    def _normalize_done_message_pair(self, message):
+        """Return the synthetic user/assistant turn used to archive `cur_messages`."""
+        if isinstance(message, list):
+            content = list(message)
+        else:
+            content = message
+
+        return [
+            dict(role="user", content=content),
+            dict(role="assistant", content="Ok."),
+        ]
+
+    def show_partial_function_call(self):
+        args = self.parse_partial_args()
+        if args:
+            self.io.ai_output(json.dumps(args, indent=4))
 
     def normalize_language(self, lang_code):
         """
@@ -1374,7 +1388,6 @@ class Coder:
         chunks.cur = list(self.cur_messages)
         chunks.reminder = []
 
-        # TODO review impact of token count on image messages
         messages_tokens = self.main_model.token_count(chunks.all_messages())
         reminder_tokens = self.main_model.token_count(reminder_message)
         cur_tokens = self.main_model.token_count(chunks.cur)
@@ -1399,8 +1412,13 @@ class Coder:
         ):
             if self.main_model.reminder == "sys":
                 chunks.reminder = reminder_message
-            elif self.main_model.reminder == "user" and final and final["role"] == "user":
-                # stuff it into the user message
+            elif (
+                self.main_model.reminder == "user"
+                and final
+                and final["role"] == "user"
+                and isinstance(final.get("content"), str)
+            ):
+                # stuff it into the user text message
                 new_content = (
                     final["content"]
                     + "\n\n"
@@ -1918,10 +1936,7 @@ class Coder:
             if self.partial_response_content:
                 self.io.ai_output(self.partial_response_content)
             elif self.partial_response_function_call:
-                # TODO: push this into subclasses
-                args = self.parse_partial_args()
-                if args:
-                    self.io.ai_output(json.dumps(args, indent=4))
+                self.show_partial_function_call()
 
     def show_send_output(self, completion):
         # Stop spinner once we have a response

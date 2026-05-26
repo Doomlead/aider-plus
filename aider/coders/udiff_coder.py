@@ -131,11 +131,14 @@ def do_replace(fname, content, hunk):
     if content is None:
         return
 
-    # TODO: handle inserting into new file
     if not before_text.strip():
         # append to existing file, or start a new file
-        new_content = content + after_text
-        return new_content
+        if not content:
+            return after_text
+
+        needs_newline = not content.endswith("\n") and after_text and not after_text.startswith("\n")
+        joiner = "\n" if needs_newline else ""
+        return content + joiner + after_text
 
     new_content = None
 

@@ -749,10 +749,6 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
     coder.io.tool_output(
         "Routing the product brief through Aider's repo-aware implementation loop.\n"
     )
-    # TODO(2026-06-30): Remove direct surface execution fallback once all
-    # company surfaces use orchestrator-native execution under run_company_task.
-    # Explicit trigger: fallback is used when no orchestrator runtime is attached
-    # to CLI sessions (current default behavior).
     from aider.company.schemas import CompanyTask
 
     def _dirty_files() -> list[str]:
@@ -766,6 +762,16 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
         return [line.strip() for line in out.splitlines() if line.strip()]
 
     async def _execute(task, _metadata):
+        orchestrator = getattr(coder, "orchestrator", None)
+        if orchestrator is not None and hasattr(orchestrator, "submit"):
+            await orchestrator.submit(task)
+            project = getattr(orchestrator, "active_project", None)
+            deliverable = getattr(project, "engineering_result", None) if project else None
+            summary = ""
+            if deliverable is not None:
+                summary = str(getattr(deliverable, "summary", "") or getattr(deliverable, "payload", "") or "")
+            return {"summary": summary, "status": "success"}
+
         exhausted_before = int(getattr(coder, "num_exhausted_context_windows", 0) or 0)
         dirty_before = _dirty_files()
 

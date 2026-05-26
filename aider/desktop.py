@@ -58,9 +58,10 @@ from aider.gui_settings_manager import (
     save_settings as persist_settings,
 )
 from aider.settings import COMPANY_AGENT_NAMES
+from aider.workspace import TaskSessionPool, WorkspaceStore
 
 logger = logging.getLogger(__name__)
-_COMPANY_SESSIONS: dict[str, "DesktopCompanySession"] = {}
+_TASK_SESSION_POOL = TaskSessionPool(max_active=4)
 _COMPANY_SESSIONS_LOCK = threading.Lock()
 
 AGENT_DISPLAY_NAMES = {
@@ -346,9 +347,6 @@ class DesktopCompanySession:
             and threading.current_thread() is not self.loop_thread
         ):
             self.loop_thread.join(timeout=5)
-        with _COMPANY_SESSIONS_LOCK:
-            if _COMPANY_SESSIONS.get(self.repo_path) is self:
-                _COMPANY_SESSIONS.pop(self.repo_path, None)
 
     def start_prototype(self, prompt: str):
         return self.submit_background(self._run_prototype(prompt), "Prototype")
@@ -879,15 +877,11 @@ class DesktopCompanySession:
             project_memory.persist()
 
 
-def get_desktop_company_session(coder: Coder) -> DesktopCompanySession:
+def get_desktop_company_session(coder: Coder, task_key: str | None = None) -> DesktopCompanySession:
     repo_path = str(Path(coder.root).resolve())
+    key = task_key or f"{repo_path}:default"
     with _COMPANY_SESSIONS_LOCK:
-        session = _COMPANY_SESSIONS.get(repo_path)
-        if session is not None and not session._shutdown:
-            return session
-        session = DesktopCompanySession(coder)
-        _COMPANY_SESSIONS[repo_path] = session
-        return session
+        return _TASK_SESSION_POOL.get_or_create(key, lambda: DesktopCompanySession(coder))
 
 
 APP_TITLE = "Aider Plus"
@@ -1126,9 +1120,11 @@ class AiderPlusDesktop:
         self.agent_api_key_vars: dict[str, tk.StringVar] = {}
         self.agent_local_vars: dict[str, tk.StringVar] = {}
         self.chat_transcripts: dict[str, scrolledtext.ScrolledText] = {}
+        self.workspace_store = WorkspaceStore("desktop")
+        self.workspace = self.workspace_store.load()
 
         self._setup_style()
-        self._setup_ui()
+        self._build_ui()
         self._set_busy(True, "Starting Aider backend…")
         self._init_backend()
         self.root.after(POLL_INTERVAL_MS, self._poll_background)
@@ -1146,7 +1142,7 @@ class AiderPlusDesktop:
         style.configure("Status.TLabel", padding=(8, 4))
         style.configure("Accent.TButton", padding=(10, 6))
 
-    def _setup_ui(self):
+    def _build_ui(self):
         outer = ttk.Frame(self.root, padding=8)
         outer.pack(fill="both", expand=True)
 
@@ -1164,6 +1160,9 @@ class AiderPlusDesktop:
         self.notebook = ttk.Notebook(outer)
         self.notebook.pack(fill="both", expand=True)
 
+        self.projects_frame = ttk.Frame(self.notebook, padding=8)
+        self.tasks_frame = ttk.Frame(self.notebook, padding=8)
+        self.runs_frame = ttk.Frame(self.notebook, padding=8)
         self.chat_frame = ttk.Frame(self.notebook, padding=8)
         self.dashboard_frame = ttk.Frame(self.notebook, padding=8)
         self.approvals_frame = ttk.Frame(self.notebook, padding=8)
@@ -1173,6 +1172,9 @@ class AiderPlusDesktop:
         self.guide_frame = ttk.Frame(self.notebook, padding=8)
         self.onboarding_frame = ttk.Frame(self.notebook, padding=8)
 
+        self.notebook.add(self.projects_frame, text="📁 Projects")
+        self.notebook.add(self.tasks_frame, text="🧩 Tasks")
+        self.notebook.add(self.runs_frame, text="🏃 Runs")
         self.notebook.add(self.chat_frame, text="💬 Chat")
         self.notebook.add(self.settings_frame, text="⚙ Settings")
         self.notebook.add(self.dashboard_frame, text="📊 Company Dashboard")
@@ -1182,6 +1184,9 @@ class AiderPlusDesktop:
         self.notebook.add(self.onboarding_frame, text="🚀 Onboarding")
         self.notebook.add(self.guide_frame, text="📚 Guide")
 
+        self._build_projects_tab()
+        self._build_tasks_tab()
+        self._build_runs_tab()
         self._build_chat_tab()
         self._build_settings_tab()
         self._build_dashboard_tab()
@@ -1216,6 +1221,21 @@ class AiderPlusDesktop:
             )
         frame.columnconfigure(1, weight=1)
         return frame
+
+    def _build_projects_tab(self):
+        ttk.Label(self.projects_frame, text="Workspace Projects", style="Header.TLabel").pack(anchor="w")
+        self.projects_list = tk.Listbox(self.projects_frame, height=8)
+        self.projects_list.pack(fill="x", pady=(8, 8))
+
+    def _build_tasks_tab(self):
+        ttk.Label(self.tasks_frame, text="Workspace Tasks", style="Header.TLabel").pack(anchor="w")
+        self.tasks_list = tk.Listbox(self.tasks_frame, height=10)
+        self.tasks_list.pack(fill="x", pady=(8, 8))
+
+    def _build_runs_tab(self):
+        ttk.Label(self.runs_frame, text="Runs", style="Header.TLabel").pack(anchor="w")
+        self.runs_text = scrolledtext.ScrolledText(self.runs_frame, wrap=tk.WORD, state="disabled", height=10)
+        self.runs_text.pack(fill="both", expand=True, pady=(8, 8))
 
     def _build_chat_tab(self):
         self.chat_targets = [

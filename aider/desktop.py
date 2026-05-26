@@ -13,7 +13,12 @@ import atexit
 import concurrent.futures
 import json
 import logging
+import os
+import platform
+import pty
 import queue
+import select
+import subprocess
 import threading
 import tkinter as tk
 import uuid
@@ -58,6 +63,7 @@ from aider.gui_settings_manager import (
     save_settings as persist_settings,
 )
 from aider.settings import COMPANY_AGENT_NAMES
+from aider.desktop_api import DesktopApiServer
 from aider.workspace import TaskSessionPool, WorkspaceStore
 
 logger = logging.getLogger(__name__)
@@ -888,8 +894,23 @@ APP_TITLE = "Aider Plus"
 WINDOW_SIZE = "1200x800"
 MIN_WINDOW_SIZE = (1000, 700)
 POLL_INTERVAL_MS = 350
+TERMINAL_SAFE_COMMAND_PREFIXES = (
+    "pytest",
+    "python -m pytest",
+    "ruff",
+    "flake8",
+    "mypy",
+    "npm test",
+    "npm run lint",
+    "git status",
+    "git diff",
+)
 
 DESKTOP_TAB_GUIDE = {
+    "Terminal": (
+        "Run shell commands from a built-in terminal panel with command policy controls, "
+        "streamed output, task/cwd context, and one-click test/lint/git helpers."
+    ),
     "Chat": (
         "Talk to classic Aider, send work through the full Company workflow, or open a "
         "dedicated conversation with one Company agent. The text box at the bottom sends "
@@ -969,6 +990,13 @@ CHAT_FIELD_GUIDE = (
     ),
     ("Message box", "Type the prompt to send to the selected chat sub-tab."),
     ("Send", "Submits the message box contents to the selected chat sub-tab."),
+)
+TERMINAL_FIELD_GUIDE = (
+    ("Active task", "Task label shown beside the terminal session."),
+    ("Current working dir", "Execution directory used for commands."),
+    ("Command", "Shell command that will be executed in the terminal backend."),
+    ("Allow policy", "Only safe command prefixes execute unless override is checked."),
+    ("Preset actions", "One-click test, lint, git status, and branch diff commands."),
 )
 
 SETTINGS_FIELD_GUIDE = (
@@ -1120,14 +1148,29 @@ class AiderPlusDesktop:
         self.agent_api_key_vars: dict[str, tk.StringVar] = {}
         self.agent_local_vars: dict[str, tk.StringVar] = {}
         self.chat_transcripts: dict[str, scrolledtext.ScrolledText] = {}
+        self._terminal_procs: set[subprocess.Popen] = set()
         self.workspace_store = WorkspaceStore("desktop")
         self.workspace = self.workspace_store.load()
+        self.api_server: DesktopApiServer | None = None
 
         self._setup_style()
         self._build_ui()
         self._set_busy(True, "Starting Aider backend…")
         self._init_backend()
+        self._init_local_api()
         self.root.after(POLL_INTERVAL_MS, self._poll_background)
+
+    def _init_local_api(self):
+        def provider(task_id: str):
+            if self.coder is None:
+                raise RuntimeError("Desktop backend is not ready")
+            return get_desktop_company_session(self.coder, task_key=f"{self.coder.root}:{task_id}")
+
+        self.api_server = DesktopApiServer(
+            self.workspace_store, provider, terminal_executor=self.run_terminal_command_from_api
+        )
+        self.api_server.start()
+        self.repo_label.config(text=f"Initializing… API {self.api_server.host}:{self.api_server.port}")
 
     def _setup_style(self):
         style = ttk.Style(self.root)
@@ -1164,6 +1207,7 @@ class AiderPlusDesktop:
         self.tasks_frame = ttk.Frame(self.notebook, padding=8)
         self.runs_frame = ttk.Frame(self.notebook, padding=8)
         self.chat_frame = ttk.Frame(self.notebook, padding=8)
+        self.terminal_frame = ttk.Frame(self.notebook, padding=8)
         self.dashboard_frame = ttk.Frame(self.notebook, padding=8)
         self.approvals_frame = ttk.Frame(self.notebook, padding=8)
         self.knowledge_frame = ttk.Frame(self.notebook, padding=8)
@@ -1176,6 +1220,7 @@ class AiderPlusDesktop:
         self.notebook.add(self.tasks_frame, text="🧩 Tasks")
         self.notebook.add(self.runs_frame, text="🏃 Runs")
         self.notebook.add(self.chat_frame, text="💬 Chat")
+        self.notebook.add(self.terminal_frame, text="🖥 Terminal")
         self.notebook.add(self.settings_frame, text="⚙ Settings")
         self.notebook.add(self.dashboard_frame, text="📊 Company Dashboard")
         self.notebook.add(self.approvals_frame, text="✅ Approvals")
@@ -1188,6 +1233,7 @@ class AiderPlusDesktop:
         self._build_tasks_tab()
         self._build_runs_tab()
         self._build_chat_tab()
+        self._build_terminal_tab()
         self._build_settings_tab()
         self._build_dashboard_tab()
         self._build_approvals_tab()
@@ -1316,6 +1362,119 @@ class AiderPlusDesktop:
                 tag="system",
                 target=target,
             )
+
+    def _build_terminal_tab(self):
+        ttk.Label(self.terminal_frame, text="Terminal", style="Header.TLabel").pack(anchor="w")
+        self._add_field_guide(self.terminal_frame, "Terminal Fields", TERMINAL_FIELD_GUIDE)
+
+        meta = ttk.Frame(self.terminal_frame)
+        meta.pack(fill="x", pady=(0, 8))
+        self.active_task_var = tk.StringVar(value="default")
+        self.terminal_cwd_var = tk.StringVar(value=str(Path.cwd()))
+        ttk.Label(meta, text="Active task:", style="Metric.TLabel").pack(side="left")
+        ttk.Entry(meta, textvariable=self.active_task_var, width=20).pack(side="left", padx=(6, 12))
+        ttk.Label(meta, text="CWD:", style="Metric.TLabel").pack(side="left")
+        ttk.Entry(meta, textvariable=self.terminal_cwd_var, width=42).pack(side="left", padx=(6, 0))
+
+        self.terminal_output = scrolledtext.ScrolledText(
+            self.terminal_frame, wrap=tk.WORD, state="disabled", height=18, font=("TkFixedFont", 10)
+        )
+        self.terminal_output.pack(fill="both", expand=True, pady=(0, 8))
+
+        controls = ttk.Frame(self.terminal_frame)
+        controls.pack(fill="x")
+        self.terminal_cmd_var = tk.StringVar()
+        self.terminal_allow_unsafe_var = tk.BooleanVar(value=False)
+        ttk.Entry(controls, textvariable=self.terminal_cmd_var).pack(side="left", fill="x", expand=True)
+        ttk.Button(controls, text="Run", command=self._run_terminal_command).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(
+            controls, text="Allow non-preset commands", variable=self.terminal_allow_unsafe_var
+        ).pack(side="left", padx=(8, 0))
+
+        presets = ttk.Frame(self.terminal_frame)
+        presets.pack(fill="x", pady=(8, 0))
+        for label, cmd in (
+            ("Test", "pytest"),
+            ("Lint", "ruff check ."),
+            ("Git Status", "git status --short --branch"),
+            ("Branch Diff", "git diff --stat @{upstream}...HEAD"),
+        ):
+            ttk.Button(presets, text=label, command=lambda c=cmd: self._run_terminal_command(c)).pack(
+                side="left", padx=(0, 6)
+            )
+        self._append_terminal_output("Terminal ready.\n")
+
+    def _run_terminal_command(self, command: str | None = None):
+        cmd = (command or self.terminal_cmd_var.get()).strip()
+        if not cmd:
+            return
+        if not self.terminal_allow_unsafe_var.get() and not any(
+            cmd.startswith(prefix) for prefix in TERMINAL_SAFE_COMMAND_PREFIXES
+        ):
+            self._append_terminal_output(f"Denied by policy: {cmd}\n")
+            return
+        cwd = Path(self.terminal_cwd_var.get()).expanduser()
+        if not cwd.exists():
+            self._append_terminal_output(f"Invalid cwd: {cwd}\n")
+            return
+        self._append_terminal_output(
+            f"\n[{self.active_task_var.get()} @ {cwd}]$ {cmd}\n"
+        )
+        thread = threading.Thread(target=self._terminal_worker, args=(cmd, cwd), daemon=True)
+        thread.start()
+
+    @staticmethod
+    def _is_terminal_command_allowed(command: str, allow_unsafe: bool) -> bool:
+        cmd = str(command or "").strip()
+        return allow_unsafe or any(cmd.startswith(prefix) for prefix in TERMINAL_SAFE_COMMAND_PREFIXES)
+
+    def run_terminal_command_from_api(self, task_id: str, command: str, allow_high_risk: bool) -> dict[str, Any]:
+        if not allow_high_risk:
+            return {"accepted": False, "reason": "high-risk endpoint requires allow_high_risk=true"}
+        if not self._is_terminal_command_allowed(command, allow_unsafe=False):
+            return {"accepted": False, "reason": "denied by terminal command policy"}
+        self.active_task_var.set(task_id or "api-task")
+        self.terminal_cmd_var.set(command)
+        self._run_terminal_command(command)
+        return {"accepted": True}
+
+    def _terminal_worker(self, cmd: str, cwd: Path):
+        if platform.system().lower().startswith("win"):
+            proc = subprocess.Popen(
+                cmd, cwd=str(cwd), shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
+            self._terminal_procs.add(proc)
+            out, _ = proc.communicate()
+            self._terminal_procs.discard(proc)
+            self._ui_queue.put(("terminal_output", out))
+            self._ui_queue.put(("terminal_output", f"\n[exit {proc.returncode}]\n"))
+            return
+        master_fd, slave_fd = pty.openpty()
+        proc = subprocess.Popen(
+            ["/bin/bash", "-lc", cmd], cwd=str(cwd), stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, close_fds=True
+        )
+        self._terminal_procs.add(proc)
+        os.close(slave_fd)
+        try:
+            while True:
+                readable, _, _ = select.select([master_fd], [], [], 0.2)
+                if readable:
+                    data = os.read(master_fd, 4096)
+                    if not data:
+                        break
+                    self._ui_queue.put(("terminal_output", data.decode(errors="replace")))
+                if proc.poll() is not None and not readable:
+                    break
+        finally:
+            os.close(master_fd)
+            self._terminal_procs.discard(proc)
+        self._ui_queue.put(("terminal_output", f"\n[exit {proc.returncode}]\n"))
+
+    def _append_terminal_output(self, text: str):
+        self.terminal_output.configure(state="normal")
+        self.terminal_output.insert("end", text)
+        self.terminal_output.see("end")
+        self.terminal_output.configure(state="disabled")
 
     def _build_settings_tab(self):
         ttk.Label(
@@ -2518,6 +2677,8 @@ class AiderPlusDesktop:
                 messagebox.showerror("Aider Plus startup failed", str(payload))
             elif kind == "future_done":
                 self._handle_future_done(payload)
+            elif kind == "terminal_output":
+                self._append_terminal_output(str(payload))
 
     def _drain_company_events(self):
         if not self.company:
@@ -2595,6 +2756,13 @@ class AiderPlusDesktop:
 
     def on_close(self):
         self._closing = True
+        for proc in list(self._terminal_procs):
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        if self.api_server is not None:
+            self.api_server.stop()
         if self.company:
             self.company.shutdown()
         self.root.destroy()

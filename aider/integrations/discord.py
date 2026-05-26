@@ -248,9 +248,22 @@ class DiscordAiderBot(ThinAdapter):
                 metadata={"repo_path": repo_path},
             )
 
-        # TODO(2026-06-30): replace coder-backed execute with orchestrator-backed
-        # execute once Discord sessions attach directly to Company runtime services.
         async def _execute(task, _metadata):
+            orchestrator = getattr(coder, "orchestrator", None)
+            if orchestrator is not None and hasattr(orchestrator, "submit"):
+                await orchestrator.submit(task)
+                project = getattr(orchestrator, "active_project", None)
+                deliverable = getattr(project, "engineering_result", None) if project else None
+                if deliverable is not None:
+                    return {
+                        "summary": str(
+                            getattr(deliverable, "summary", "")
+                            or getattr(deliverable, "payload", "")
+                            or ""
+                        ),
+                        "status": getattr(deliverable, "status", "success"),
+                    }
+                return {"summary": "", "status": "success"}
             return await asyncio.to_thread(coder.run, str(task.payload))
 
         req = CompanyRunRequest(

@@ -15,9 +15,7 @@ import json
 import logging
 import os
 import platform
-import pty
 import queue
-import select
 import subprocess
 import threading
 import tkinter as tk
@@ -69,6 +67,13 @@ from aider.workspace import TaskSessionPool, WorkspaceStore
 logger = logging.getLogger(__name__)
 _TASK_SESSION_POOL = TaskSessionPool(max_active=4)
 _COMPANY_SESSIONS_LOCK = threading.Lock()
+
+try:
+    import pty
+    import select
+except ImportError:  # pragma: no cover - platform dependent
+    pty = None
+    select = None
 
 AGENT_DISPLAY_NAMES = {
     "coo": "COO",
@@ -1448,6 +1453,12 @@ class AiderPlusDesktop:
             self._terminal_procs.discard(proc)
             self._ui_queue.put(("terminal_output", out))
             self._ui_queue.put(("terminal_output", f"\n[exit {proc.returncode}]\n"))
+            return
+        if pty is None or select is None:
+            self._ui_queue.put(
+                ("terminal_output", "\n[error] pseudo-terminal support unavailable on this platform.\n")
+            )
+            self._ui_queue.put(("terminal_output", "\n[exit 1]\n"))
             return
         master_fd, slave_fd = pty.openpty()
         proc = subprocess.Popen(

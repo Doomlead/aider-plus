@@ -47,6 +47,62 @@ pytest tests/memory tests/company/test_context_memory_fabric.py
 
 
 
+
+## Repository map (codebase-wide)
+
+This repository combines the product runtime, interfaces, automation tooling, docs,
+and validation harnesses. High-level layout:
+
+- `aider/` — primary Python package (CLI/runtime, Company orchestration, coders, memory, MCP, GUIs, integrations, website docs source).
+- `tests/` — unit/integration/regression coverage for classic Aider behavior plus Company/desktop/workspace/git/memory paths.
+- `benchmark/` — benchmark runners, plotting scripts, Docker helpers, SWE-bench harness files, and benchmark docs.
+- `requirements/` — layered dependency source files (`*.in`) and compiled lock-style requirement files (`*.txt`) for runtime, dev, browser, MCP, GitHub, and Playwright extras.
+- `scripts/` — operational utilities for docs/site generation, release/version history updates, metadata cleanup, benchmarks, and maintenance.
+- `docker/` — container image definitions for runnable environments.
+- Root docs/config (`README.md`, `CONTRIBUTING.md`, `HISTORY.md`, `pyproject.toml`, `pytest.ini`, `.flake8`, etc.) — packaging metadata, contribution guidance, and quality defaults.
+
+### Package-level breakdown (`aider/`)
+
+- **Entrypoints and CLI plumbing**
+  - `aider/main.py` — top-level CLI startup flow, mode routing, and command invocation.
+  - `aider/__main__.py` — module execution entrypoint (`python -m aider`).
+  - `aider/args.py`, `aider/args_formatter.py`, `aider/format_settings.py`, `aider/settings.py` — argument parsing/formatting and persisted configuration surfaces.
+- **Core pair-programming loop (upstream-compatible path)**
+  - `aider/coders/` — coder implementations and edit strategies.
+  - `aider/repo.py`, `aider/diffs.py`, `aider/linter.py`, `aider/run_cmd.py`, `aider/editor.py` — git-aware editing, diffing, lint/test execution, and editor integration.
+  - `aider/models.py`, `aider/llm.py`, `aider/sendchat.py`, `aider/openrouter.py` — model/provider registry and chat transport layers.
+- **Company Mode runtime**
+  - `aider/company/orchestrator.py` and `aider/company/coo.py` — assistant + orchestration brains for multi-department execution.
+  - `aider/company/departments/` — Product, UX, Delivery, Engineering, Reviewer, QA, and DevOps department implementations.
+  - `aider/company/events.py` and related schemas/validators — typed lifecycle event model, contracts, and safety checks.
+  - `aider/company/daemon/` and `aider/company/tracker/` — issue-driven automation, workspace isolation, retries, proof-of-work, and tracker state.
+  - `aider/company/templates.py`, `aider/company/warehouse.py` — warehouse/product registry and zero-to-MVP template bootstrap paths.
+- **Memory and skills**
+  - `aider/memory/` — memory fabric storage/indexing, retrieval/ranking, reinforcement, promotion/compaction, and recall packets.
+  - `aider/skills/` — skill-loading/retrieval helpers and scoped procedural guidance support.
+- **User interfaces and integrations**
+  - `aider/gui.py` / desktop modules (`desktop.py`, `desktop_api.py`, `workspace.py`) — browser + native UI surfaces and workspace APIs.
+  - `aider/integrations/` — adapters for external surfaces/services (eg. chat or platform connectors).
+  - `aider/mcp/` — MCP server/client integration points and tooling bridges.
+- **Documentation site sources**
+  - `aider/website/` — Jekyll-style site content, posts, docs pages, assets, and layouts used for published docs.
+
+### Test and quality layout
+
+- `tests/` includes:
+  - core CLI/coder/repo behavior checks,
+  - Company orchestration and workflow regression suites,
+  - memory-fabric tests (records, policy, promotion, context integration),
+  - desktop/browser/workspace/API behavioral tests,
+  - git-worktree and daemon-related guardrails.
+- `pytest.ini` and `.flake8` define default test/lint behavior; `requirements/requirements-dev.txt` pins toolchain dependencies for local CI-like runs.
+
+### Build, packaging, and distribution
+
+- `pyproject.toml` defines the package (`aider-plus`), Python support (`>=3.10,<3.15`), script entry points (`aider`, `aider-plus-mcp`), optional extras (`dev`, `browser`, `playwright`, `mcp`, `github`), and setuptools SCM versioning.
+- `MANIFEST.in` and package data settings control distributed non-code assets (queries, site/docs assets, skills/resources).
+- `docker/` and selected files in `scripts/` support reproducible build/docs environments.
+
 ## Architecture Overview
 
 New contributors should start with the [First Code Tour](docs/architecture/first-code-tour.md). It walks from `aider/main.py` through the Coder, `COO assistant`, `CompanyOrchestrator`, departments, shared memory/skills/EventBus services, daemon workspaces, templates, warehouse-backed product repos, and the DevOps release path.

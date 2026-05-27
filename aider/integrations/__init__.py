@@ -8,7 +8,13 @@ from .discord import (
     DiscordSessionManager,
     RepositoryPolicy,
 )
-from .slack import SlackAdapter, SlackAdapterConfig, WebhookAdapter
+from .slack import (
+    MattermostAdapter,
+    SlackAdapter,
+    SlackAdapterConfig,
+    TeamsAdapter,
+    WebhookAdapter,
+)
 
 __all__ = [
     "AdapterMessage",
@@ -20,5 +26,7 @@ __all__ = [
     "RepositoryPolicy",
     "SlackAdapter",
     "SlackAdapterConfig",
+    "TeamsAdapter",
+    "MattermostAdapter",
     "WebhookAdapter",
 ]

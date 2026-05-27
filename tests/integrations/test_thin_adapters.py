@@ -11,7 +11,12 @@ from aider.integrations.discord import (
     DiscordAiderBot,
     subscribe_discord_event_forwarder,
 )
-from aider.integrations.slack import SlackAdapter, WebhookAdapter
+from aider.integrations.slack import (
+    MattermostAdapter,
+    SlackAdapter,
+    TeamsAdapter,
+    WebhookAdapter,
+)
 
 
 def test_thin_adapter_normalizes_mapping_and_delegates_input():
@@ -126,6 +131,11 @@ def test_cli_adapter_flag_accepts_repeatable_thin_adapter_choices():
     from aider.args import get_parser
 
     parser = get_parser([], None)
-    args = parser.parse_args(["--adapter", "slack", "--adapter", "webhook"])
+    args = parser.parse_args(["--adapter", "slack", "--adapter", "webhook", "--adapter", "teams", "--adapter", "mattermost"])
 
-    assert args.adapter == ["slack", "webhook"]
+    assert args.adapter == ["slack", "webhook", "teams", "mattermost"]
+
+
+def test_teams_and_mattermost_adapters_override_surface_name():
+    assert TeamsAdapter().surface_name == "teams"
+    assert MattermostAdapter().surface_name == "mattermost"

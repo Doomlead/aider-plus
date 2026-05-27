@@ -78,4 +78,16 @@ class SlackAdapter(ThinAdapter):
         return format_runtime_event_message(event)[: self.config.max_message_chars]
 
 
+class TeamsAdapter(SlackAdapter):
+    """Thin Microsoft Teams-compatible adapter that reuses Slack payload shape."""
+
+    surface_name = "teams"
+
+
+class MattermostAdapter(SlackAdapter):
+    """Thin Mattermost-compatible adapter that reuses Slack payload shape."""
+
+    surface_name = "mattermost"
+
+
 WebhookAdapter = SlackAdapter

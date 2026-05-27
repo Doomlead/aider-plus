@@ -50,58 +50,68 @@ pytest tests/memory tests/company/test_context_memory_fabric.py
 
 ## Repository map (codebase-wide)
 
-This repository combines the product runtime, interfaces, automation tooling, docs,
-and validation harnesses. High-level layout:
+This repository includes the core `aider-plus` runtime, the multi-agent Company stack, website/docs assets, benchmark harnesses, test suites, and packaging/release tooling.
 
-- `aider/` — primary Python package (CLI/runtime, Company orchestration, coders, memory, MCP, GUIs, integrations, website docs source).
-- `tests/` — unit/integration/regression coverage for classic Aider behavior plus Company/desktop/workspace/git/memory paths.
-- `benchmark/` — benchmark runners, plotting scripts, Docker helpers, SWE-bench harness files, and benchmark docs.
-- `requirements/` — layered dependency source files (`*.in`) and compiled lock-style requirement files (`*.txt`) for runtime, dev, browser, MCP, GitHub, and Playwright extras.
-- `scripts/` — operational utilities for docs/site generation, release/version history updates, metadata cleanup, benchmarks, and maintenance.
-- `docker/` — container image definitions for runnable environments.
-- Root docs/config (`README.md`, `CONTRIBUTING.md`, `HISTORY.md`, `pyproject.toml`, `pytest.ini`, `.flake8`, etc.) — packaging metadata, contribution guidance, and quality defaults.
+### Top-level layout
 
-### Package-level breakdown (`aider/`)
+- `.github/` — issue templates and CI/release workflows used by GitHub Actions.
+- `aider/` — primary Python package (CLI entrypoints, coder loop, Company orchestration, memory fabric, MCP, integrations, GUI/desktop/workspace, docs site sources, resources, and query packs).
+- `benchmark/` — benchmark runners, analysis helpers, and SWE-bench support files.
+- `docker/` — container build definitions for development/runtime scenarios.
+- `docs/` — architecture + Company reference docs (including the first code tour and memory fabric architecture docs).
+- `requirements/` — dependency source/lock files split by feature area (`dev`, `browser`, `mcp`, `github`, `playwright`, etc.).
+- `scripts/` — maintenance + release helper scripts (history updates, docs generation, metadata normalization, benchmark tooling).
+- `tests/` — regression/unit/integration coverage for CLI, coders, Company orchestration, memory, MCP, integrations, daemon/workspace paths.
+- Root config/docs (`README.md`, `CONTRIBUTING.md`, `HISTORY.md`, `pyproject.toml`, `pytest.ini`, `.flake8`, `Dockerfile`, etc.) — packaging metadata, contribution and quality standards, and release notes.
 
-- **Entrypoints and CLI plumbing**
-  - `aider/main.py` — top-level CLI startup flow, mode routing, and command invocation.
-  - `aider/__main__.py` — module execution entrypoint (`python -m aider`).
-  - `aider/args.py`, `aider/args_formatter.py`, `aider/format_settings.py`, `aider/settings.py` — argument parsing/formatting and persisted configuration surfaces.
-- **Core pair-programming loop (upstream-compatible path)**
-  - `aider/coders/` — coder implementations and edit strategies.
-  - `aider/repo.py`, `aider/diffs.py`, `aider/linter.py`, `aider/run_cmd.py`, `aider/editor.py` — git-aware editing, diffing, lint/test execution, and editor integration.
-  - `aider/models.py`, `aider/llm.py`, `aider/sendchat.py`, `aider/openrouter.py` — model/provider registry and chat transport layers.
-- **Company Mode runtime**
-  - `aider/company/orchestrator.py` and `aider/company/coo.py` — assistant + orchestration brains for multi-department execution.
-  - `aider/company/departments/` — Product, UX, Delivery, Engineering, Reviewer, QA, and DevOps department implementations.
-  - `aider/company/events.py` and related schemas/validators — typed lifecycle event model, contracts, and safety checks.
-  - `aider/company/daemon/` and `aider/company/tracker/` — issue-driven automation, workspace isolation, retries, proof-of-work, and tracker state.
-  - `aider/company/templates.py`, `aider/company/warehouse.py` — warehouse/product registry and zero-to-MVP template bootstrap paths.
-- **Memory and skills**
-  - `aider/memory/` — memory fabric storage/indexing, retrieval/ranking, reinforcement, promotion/compaction, and recall packets.
-  - `aider/skills/` — skill-loading/retrieval helpers and scoped procedural guidance support.
-- **User interfaces and integrations**
-  - `aider/gui.py` / desktop modules (`desktop.py`, `desktop_api.py`, `workspace.py`) — browser + native UI surfaces and workspace APIs.
-  - `aider/integrations/` — adapters for external surfaces/services (eg. chat or platform connectors).
-  - `aider/mcp/` — MCP server/client integration points and tooling bridges.
-- **Documentation site sources**
-  - `aider/website/` — Jekyll-style site content, posts, docs pages, assets, and layouts used for published docs.
+### `aider/` package breakdown
 
-### Test and quality layout
+- **CLI + startup surfaces**
+  - `aider/main.py` — CLI startup flow and mode dispatch.
+  - `aider/__main__.py` / `aider/__init__.py` — module/package entrypoints and version export.
+  - `aider/args.py`, `aider/settings.py`, `aider/format_settings.py`, `aider/args_formatter.py` — argument schema, parsing, formatting, and persisted settings management.
 
-- `tests/` includes:
-  - core CLI/coder/repo behavior checks,
-  - Company orchestration and workflow regression suites,
-  - memory-fabric tests (records, policy, promotion, context integration),
-  - desktop/browser/workspace/API behavioral tests,
-  - git-worktree and daemon-related guardrails.
-- `pytest.ini` and `.flake8` define default test/lint behavior; `requirements/requirements-dev.txt` pins toolchain dependencies for local CI-like runs.
+- **Core coding loop (Aider-compatible path)**
+  - `aider/coders/` — coder strategies/modes and edit orchestration.
+  - `aider/repo.py`, `aider/diffs.py`, `aider/repomap.py`, `aider/linter.py`, `aider/run_cmd.py`, `aider/editor.py`, `aider/watch.py` — repo introspection, diffing, lint/test execution, command execution, editor/watch support.
+  - `aider/models.py`, `aider/llm.py`, `aider/sendchat.py`, `aider/openrouter.py`, `aider/history.py` — model/provider selection, message transport, and transcript handling.
 
-### Build, packaging, and distribution
+- **Company runtime**
+  - `aider/company/coo.py` — COO assistant behavior (routing, status/memory lookup, escalation logic).
+  - `aider/company/orchestrator.py` — canonical Company workflow execution path.
+  - `aider/company/departments/` — Product, UX, Delivery, Engineering, Reviewer, QA, and DevOps role implementations.
+  - `aider/company/events.py` + schemas/validators — typed lifecycle/event contracts and safety checks.
+  - `aider/company/daemon/` + `aider/company/tracker/` — issue-driven queue/workspace execution, retries, and proof-of-work state.
+  - `aider/company/templates.py`, `aider/company/warehouse.py` — template registry and warehouse-backed product repo management.
 
-- `pyproject.toml` defines the package (`aider-plus`), Python support (`>=3.10,<3.15`), script entry points (`aider`, `aider-plus-mcp`), optional extras (`dev`, `browser`, `playwright`, `mcp`, `github`), and setuptools SCM versioning.
-- `MANIFEST.in` and package data settings control distributed non-code assets (queries, site/docs assets, skills/resources).
-- `docker/` and selected files in `scripts/` support reproducible build/docs environments.
+- **Memory + skills + retrieval**
+  - `aider/memory/` — scoped storage, retrieval/ranking, reinforcement, promotion/compaction, recall packets, and health/repair helpers.
+  - `aider/skills/` — skill discovery/loading and role-scoped retrieval support.
+
+- **Interfaces + integrations**
+  - `aider/gui.py`, `aider/desktop.py`, `aider/desktop_api.py`, `aider/workspace.py` — browser/desktop/workspace surfaces.
+  - `aider/integrations/` — adapter layer for external chat/platform integrations.
+  - `aider/mcp/` — MCP server/client adapters and tool bridges.
+
+- **Static resources + site sources**
+  - `aider/resources/` — model metadata/settings plus packaged runtime assets.
+  - `aider/queries/` — tree-sitter query packs used for code navigation/tag extraction.
+  - `aider/website/` — source for published docs pages/posts plus static assets.
+
+### Test + quality surfaces
+
+- `tests/company/` — Company lifecycle, departments, daemon, tracker, workspace, and orchestration tests.
+- `tests/memory/` — records, recall policy, promotion/compaction, and retrieval behavior tests.
+- `tests/mcp/` — MCP integration and protocol-path tests.
+- `tests/integrations/` — external adapter/integration behavior tests.
+- Root-level `tests/test_*.py` files — classic Aider CLI/coder/repo/linting behavior guardrails.
+- `pytest.ini` + `.flake8` + `requirements/requirements-dev.txt` — default local quality/tooling setup aligned with CI expectations.
+
+### Packaging + distribution
+
+- `pyproject.toml` — package metadata (`aider-plus`), supported Python range (`>=3.10,<3.15`), script entrypoints (`aider`, `aider-plus-mcp`), optional extras, and setuptools-scm versioning.
+- `MANIFEST.in` — inclusion rules for packaged non-code assets.
+- `docker/` + selected scripts — reproducible runtime and maintenance workflows.
 
 ## Architecture Overview
 

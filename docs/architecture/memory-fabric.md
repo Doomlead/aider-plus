@@ -1,6 +1,6 @@
 # Memory Fabric Architecture Specification
 
-Status: milestone architecture specification only. This document describes the target design for the Neocortex-inspired memory fabric; it does not require runtime behavior changes in this phase.
+Status: living architecture and implementation tracker. The original specification milestone is complete, and several implementation milestones now have code in `aider/memory` and company integration points. Sections below distinguish **done**, **partial**, and **planned** work so readers can tell target design from current behavior.
 
 ## 1. Purpose and Design Goals
 
@@ -88,7 +88,7 @@ A lower-authority memory can be recalled as context, but it cannot override a hi
 
 ## 5. Canonical `MemoryRecord` Schema
 
-Canonical records live in a future `memory.records` collection while legacy fields continue to exist during migration. Records are append-friendly: updates create a new version or append reinforcement events rather than silently replacing provenance.
+Canonical records now live in the `memory.records` collection while legacy fields continue to exist during migration. Records are append-friendly: updates create a new version or append reinforcement events rather than silently replacing provenance.
 
 ### 5.1 Field definitions
 
@@ -455,24 +455,15 @@ Legacy fields are not deleted. Backfill creates canonical records that point to 
 
 ### 8.4 Migration milestone
 
-1. **milestone: specification**
-   - Write this architecture document and README link only.
-2. **milestone: schema scaffolding**
-   - Add dataclasses/types for `MemoryRecord`, `MemoryScope`, `Visibility`, and `SkillEvidence`.
-   - Add repository migration that creates empty `memory.records` without changing behavior.
-3. **milestone: write adapters**
-   - Add helper methods that write canonical records alongside existing audit/playbook/skill proposal writes.
-   - Add privacy/redaction checks before persistence.
-4. **milestone: recall integration**
-   - Extend ContextBuilder to query canonical records after legacy playbook/skill retrieval or in a feature-flagged path.
-   - Emit explanations for canonical records.
-5. **milestone: promotion integration**
-   - Update SelfImprovementService to cluster canonical evidence and create proposals with record links.
-   - Update CompanySkillManager approval metadata to include evidence record IDs.
-6. **milestone: reinforcement and retirement**
-   - Record skill outcomes, reinforce useful skills, and mark stale or harmful skills retired.
-7. **milestone: storage/index optimization**
-   - Add optional SQLite tables or vector indexes behind `MemoryRepository` only after behavior is covered by tests.
+| Milestone | Status | Current notes |
+| --- | --- | --- |
+| specification | **Done** | Architecture doc and README link exist. This document is now maintained as a living tracker rather than a one-time future plan. |
+| schema scaffolding | **Done** | `MemoryRecord`, `MemoryQuery`, scope parsing/validation, canonical visibility helpers, and schema migrations for `memory.records` exist. |
+| write adapters | **Partial** | `MemoryStore.append_record()`, canonical audit writes, legacy backfill retirement, and redaction helpers exist. Continue wiring any remaining legacy writers to canonical records as they are touched. |
+| recall integration | **Partial** | Context building now injects scoped recall packets, recall prepass candidates, explanations, telemetry, and canonical query paths while preserving legacy playbook/skill behavior. Remaining work is to make canonical recall the primary path everywhere. |
+| promotion integration | **Partial** | Evidence helpers, near-duplicate compaction, skill-learning tests, and outcome recording exist. Deeper proposal metadata/back-links should continue to be expanded with SelfImprovementService and CompanySkillManager changes. |
+| reinforcement and retirement | **Partial** | Usage/outcome counters, reinforcement scoring, stale decay, pruning, and compaction exist. Full skill retirement semantics and replacement links remain planned. |
+| storage/index optimization | **Partial** | Pluggable local indexes, SQLite repository storage, SQLite FTS index support, and index rebuild hooks exist. Optional vector/embedding backends remain planned. |
 
 ### 8.5 Rollback plan
 
@@ -481,7 +472,7 @@ Legacy fields are not deleted. Backfill creates canonical records that point to 
 - If canonical recall fails, ContextBuilder falls back to current playbook/skill behavior.
 - Schema migrations must be forward-only, but data loss is avoided by retaining legacy payloads.
 
-## 9. Test Plan by Future Phase
+## 9. Test Plan by Phase
 
 ### milestone: schema scaffolding
 
@@ -565,56 +556,71 @@ Legacy fields are not deleted. Backfill creates canonical records that point to 
 
 ## 11. High-Level File Plan
 
-No runtime files are changed in milestone. Future implementation milestone should add or extend the following files.
+This section tracks the current file map. “Exists” means a module/file is present in the tree; “partial” means the planned target is not yet fully implemented.
 
-### 11.1 New modules/classes
+### 11.1 Memory modules/classes
 
-| File | Planned contents |
-| --- | --- |
-| `aider/memory/fabric.py` | `MemoryFabric` high-level service for writes, recall, promotion hooks, and policy enforcement. |
-| `aider/memory/records.py` | `MemoryRecord`, `SkillEvidence`, `MemorySource`, `MemoryRanking`, `MemoryRetention`, `MemoryRedaction` dataclasses or typed dicts. |
-| `aider/memory/scopes.py` | `MemoryScope`, `Visibility`, parser/validator helpers, scope authorization checks. |
-| `aider/memory/policy.py` | Visibility rules, per-department recall order, promotion thresholds, retention policy. |
-| `aider/memory/ranking.py` | Hybrid ranker that combines TF-IDF, keyword, scope proximity, evidence confidence, recency, and usage. |
-| `aider/memory/explanations.py` | Explanation generation helpers for recalled records and skills. |
-| `aider/memory/promotion.py` | Evidence clustering and lifecycle state helpers shared by SelfImprovementService and CompanySkillManager. |
-| `aider/memory/redaction.py` | Secret/privacy classifiers and redaction metadata helpers. |
-| `aider/memory/indexes.py` | Optional in-memory/SQLite index maintenance for canonical records. |
+| File | Status | Current/planned contents |
+| --- | --- | --- |
+| `aider/memory/fabric.py` | **Exists, partial** | Provides `MemoryFabric` facade methods for outcome recording and proactive recall prepass; a single high-level `recall()`/write orchestration API remains planned. |
+| `aider/memory/records.py` | **Exists** | Provides `MemoryRecord`, `MemoryQuery`, schema versioning, canonical owner fields, validation, serialization, and record coercion helpers. Some extended typed blocks still live in metadata until needed. |
+| `aider/memory/scopes.py` | **Exists** | Provides `MemoryScope`, canonical scope constants, parser/validator helpers, and scope matching. Visibility is implemented separately in `aider/memory/visibility.py`. |
+| `aider/memory/visibility.py` | **Exists** | Provides canonical visibility normalization, legacy aliases, visibility authorization, and visible-record filtering. |
+| `aider/memory/policy.py` | **Exists, partial** | Provides ranking and retention policy dataclasses; broader per-department recall/promotion policy remains distributed across recall/context code. |
+| `aider/memory/ranking.py` | **Exists, partial** | Provides graph-neighbor and graph-boost helpers used by ranking. Full hybrid ranker consolidation remains planned. |
+| `aider/memory/explanations.py` | **Exists** | Provides explanation generation and explanation telemetry helpers for recalled records and skills. |
+| `aider/memory/evidence.py` | **Exists** | Provides evidence cluster/proposal helpers used by skill learning flows. |
+| `aider/memory/promotion.py` | **Exists, partial** | Provides outcome recording and near-duplicate compaction helpers. Full evidence-to-skill lifecycle ownership remains shared with company services. |
+| `aider/memory/redaction.py` | **Exists, partial** | Provides sensitive metadata detection and redaction metadata merge helpers. Deeper PII/tenant policy enforcement remains planned. |
+| `aider/memory/indexes.py` | **Exists, partial** | Provides index rebuild hooks after compaction. Local index adapters live in `aider/memory/index.py`; optional vector/embedding indexes remain planned. |
+| `aider/memory/store.py` | **Exists** | Provides canonical record append/query/update, reinforcement, outcome recording, metrics, pruning, compaction, repair, and legacy backfill compatibility behavior. |
 
-### 11.2 Existing files to extend later
+### 11.2 Existing integration files
 
-| File | Planned extension |
-| --- | --- |
-| `aider/memory/project.py` | Add convenience methods for canonical record collections while preserving `data`. |
-| `aider/memory/repository.py` | Add schema migration for `memory.records`, indexes, and backfill metadata. |
-| `aider/memory/retrieval.py` | Keep TF-IDF primitive; optionally expose reusable scoring data for canonical ranking. |
-| `aider/memory/conversation.py` | Add optional conversion from rolling messages to private `thread:` observations. |
-| `aider/company/context.py` | Use `MemoryFabric.recall()` for canonical records and include explanations in task context. |
-| `aider/company/skills.py` | Store approved skill evidence links, reinforcement, and retirement metadata. |
-| `aider/company/self_improvement.py` | Promote evidence clusters into proposals rather than reading only raw audit logs. |
-| `aider/company/state.py` | Provide stable project/user/channel/thread identifiers to the fabric. |
-| `aider/company/audit.py` | Emit provenance-friendly audit IDs suitable for `source.audit_event_ids`. |
+| File | Status | Current/planned extension |
+| --- | --- | --- |
+| `aider/memory/project.py` | **Exists** | Provides project memory defaults and the `memory_policy()` convenience accessor while preserving the raw `data` payload. |
+| `aider/memory/repository.py` | **Exists** | Provides forward-only migrations for `memory.records`, indexes, metrics, retention, and JSON/SQLite persistence backends. |
+| `aider/memory/retrieval.py` | **Exists** | Keeps the deterministic TF-IDF primitive used by local retrieval and ranking support. |
+| `aider/memory/conversation.py` | **Exists, planned extension** | Maintains the rolling message buffer; conversion to private `thread:` observations is still planned. |
+| `aider/company/context.py` | **Exists, partial** | Builds recall packets, proactive recall prepass entries, skill/playbook explanations, and telemetry while preserving legacy context behavior. |
+| `aider/company/skills.py` | **Exists, partial** | Skill evidence links, reinforcement, and retirement metadata should continue to be expanded as promotion semantics mature. |
+| `aider/company/self_improvement.py` | **Exists, partial** | Skill learning now has canonical evidence support, but deeper proposal lifecycle integration remains planned. |
+| `aider/company/state.py` | **Exists** | Provides project state integration and canonical project-scope record loading. |
+| `aider/company/audit.py` | **Exists** | Emits company audit events into canonical memory records with provenance-friendly IDs. |
 
-### 11.3 Planned tests
+### 11.3 Test coverage map
 
-| Test file | Coverage |
-| --- | --- |
-| `tests/memory/test_records.py` | Canonical schema validation and serialization. |
-| `tests/memory/test_scopes.py` | Scope parsing, visibility authorization, and conflict precedence. |
-| `tests/memory/test_migration.py` | Additive migration and legacy preservation. |
-| `tests/memory/test_recall_policy.py` | Department recall order, ranking, token caps, explanations. |
-| `tests/memory/test_promotion.py` | Evidence lifecycle, clustering, proposal creation, reinforcement, retirement. |
-| `tests/company/test_context_memory_fabric.py` | ContextBuilder integration with canonical recall and legacy fallback. |
-| `tests/company/test_skill_evidence.py` | CompanySkillManager and SelfImprovementService evidence links. |
+| Test file | Status | Coverage |
+| --- | --- | --- |
+| `tests/memory/test_records.py` | **Exists** | Canonical record querying, filtering, and precision behavior. |
+| `tests/memory/test_recall_policy.py` | **Exists** | Reinforcement-sensitive ranking, explanations, telemetry, graph boosts, and outcome trails. |
+| `tests/memory/test_promotion.py` | **Exists** | Evidence lifecycle helpers, clustering/compaction behavior, and promotion-adjacent record handling. |
+| `tests/company/test_context_memory_fabric.py` | **Exists** | ContextBuilder integration with recall packets, canonical recall, and legacy fallback behavior. |
+| `tests/company/test_memory_fabric.py` | **Exists** | Company-level memory fabric behavior and integration seams. |
+| `tests/company/test_memory_fabric_e2e.py` | **Exists** | End-to-end memory fabric behavior across company flows. |
+| `tests/company/test_memory_hardening.py` | **Exists** | Hardening behavior such as privacy/redaction/limits around memory operations. |
+| `tests/company/test_memory_index.py` | **Exists** | Local memory index adapter behavior. |
+| `tests/company/test_memory_skill_learning.py` | **Exists** | Skill-learning behavior backed by canonical memory evidence. |
+| `tests/memory/test_scopes.py` | **Planned** | Dedicated scope parsing and visibility authorization coverage; currently covered indirectly by record/recall tests. |
+| `tests/memory/test_migration.py` | **Planned** | Dedicated additive migration and legacy preservation coverage; currently covered indirectly by repository/store tests. |
+| `tests/company/test_skill_evidence.py` | **Planned** | Dedicated CompanySkillManager and SelfImprovementService evidence-link coverage; currently covered indirectly by memory skill-learning tests. |
 
-## 12. milestone Acceptance Criteria
+## 12. Milestone Acceptance Criteria
 
-milestone is complete when:
+The original specification milestone is complete:
 
 - This document exists at `docs/architecture/memory-fabric.md`.
 - `README.md` links to this document near the top.
-- No runtime behavior changes are included.
-- Future implementation work has enough structure to proceed in small, testable milestone.
+- Runtime behavior changes are tracked separately from the original specification milestone.
+- Implementation work is now proceeding in small, testable milestones.
+
+Remaining acceptance criteria for the broader rollout:
+
+- Canonical recall becomes the default path wherever legacy playbook/skill reads are still primary.
+- Promotion metadata consistently links records, proposals, approved skills, reinforcement, retirement, and replacements.
+- Redaction and visibility policy are enforced uniformly for all new writers and recall paths.
+- Optional vector/embedding backends stay behind local-first adapter interfaces and have parity tests against deterministic local indexes.
 
 
 ## Backend Adapters (milestone)

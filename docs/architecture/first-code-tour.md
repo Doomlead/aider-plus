@@ -48,7 +48,7 @@ Optional Mermaid view:
 flowchart TD
     User[User / CEO / Issue] --> Main[aider/main.py]
     Main --> Coder[Coder]
-    Main --> COO[NanobotCOO]
+    Main --> COO
     Coder --> Repo[Git-backed repo]
     COO --> Orchestrator[CompanyOrchestrator]
     Orchestrator --> Product[Product]
@@ -96,9 +96,9 @@ QA, DevOps, COO, and daemon layers coordinate *what should happen* and *what is
 safe to do next*; the Coder loop is still the low-level mechanism that modifies a
 repository.
 
-## 3. COO: `NanobotCOO` as the operations assistant
+## 3. COO: `COO` as the operations assistant
 
-`NanobotCOO` in `aider/company/coo.py` is the CEO-facing operations layer. It can
+`COO` in `aider/company/coo.py` is the CEO-facing operations layer. It can
 answer directly, ask clarifying questions, remember context, inspect state,
 inspect skills, summarize daemon status, route to departments, and escalate when
 confidence is low or a gate needs a person.

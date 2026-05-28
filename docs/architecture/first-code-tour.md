@@ -24,7 +24,7 @@ Coder <------------------------------------ normal Git repo edits
   |
   | company commands, GUI actions, daemon work, or COO delegation
   v
-NanobotCOO
+COO
   |  reads session history, project memory, warehouse memory, skills, daemon status
   |  decides: answer, clarify, remember, inspect, route, delegate, or escalate
   v

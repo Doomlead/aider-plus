@@ -78,6 +78,13 @@ BUILTIN_MCP_TOOLS: tuple[BuiltinMCPTool, ...] = (
         "read_only",
         "Return Company status without mutating state.",
     ),
+    BuiltinMCPTool("codegraph_status", "read_only", "Inspect the native code graph index."),
+    BuiltinMCPTool("codegraph_search", "read_only", "Search indexed code symbols."),
+    BuiltinMCPTool("codegraph_context", "read_only", "Build graph-aware code context for a query."),
+    BuiltinMCPTool("codegraph_callers", "read_only", "Find callers/referencers for a symbol or file."),
+    BuiltinMCPTool("codegraph_callees", "read_only", "Find callees/dependencies for a symbol or file."),
+    BuiltinMCPTool("codegraph_impact", "read_only", "Find files and routes impacted by a symbol or file."),
+    BuiltinMCPTool("codegraph_affected", "read_only", "Suggest affected tests for changed files."),
 )
 
 
@@ -133,6 +140,37 @@ class AiderPlusMCPServer:
 
     def get_company_status(self) -> dict[str, Any]:
         return self.list_status()
+
+    def _codegraph(self):
+        from aider.codegraph import CodeGraph
+
+        graph = CodeGraph(self.repo_path)
+        if graph.status().files == 0:
+            graph.sync()
+        return graph
+
+    def codegraph_status(self) -> dict[str, Any]:
+        return self._codegraph().status().__dict__
+
+    def codegraph_search(self, query: str, limit: int = 10) -> dict[str, Any]:
+        return {"results": self._codegraph().search(query, limit=limit)}
+
+    def codegraph_context(self, query: str, limit: int = 8) -> dict[str, Any]:
+        return self._codegraph().context(query, limit=limit)
+
+    def codegraph_callers(self, target: str, limit: int = 25) -> dict[str, Any]:
+        return {"results": self._codegraph().callers(target, limit=limit)}
+
+    def codegraph_callees(self, target: str, limit: int = 25) -> dict[str, Any]:
+        return {"results": self._codegraph().callees(target, limit=limit)}
+
+    def codegraph_impact(self, target: str, depth: int = 2) -> dict[str, Any]:
+        return self._codegraph().impact(target, depth=depth)
+
+    def codegraph_affected(
+        self, changed_files: list[str] | None = None, depth: int = 2
+    ) -> dict[str, Any]:
+        return self._codegraph().affected_tests(changed_files, depth=depth)
 
     def list_context_memory(self) -> dict[str, Any]:
         data = self.project_memory.data

@@ -626,6 +626,11 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
             print(str(exc))
             return 1
 
+    if command_argv and command_argv[0] == "graph":
+        from aider.codegraph.cli import handle_graph_cli
+
+        return handle_graph_cli(command_argv)
+
     if command_argv and command_argv[0] == "mcp":
         if len(command_argv) >= 2 and command_argv[1] == "tools":
             from aider.mcp import list_builtin_mcp_tools

@@ -36,6 +36,7 @@ class QADepartment(Department):
             "project.name",
             "project.phase",
             "project.prd",
+            "codegraph.affected",
         ]
 
     async def process(self, task: CompanyTask) -> Deliverable:

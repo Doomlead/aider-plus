@@ -4,8 +4,8 @@ Aider Plus is a Git-native product studio built on top of Aider. It keeps the
 core Aider workflow—real repositories, diffs, branches, tests, commits, and
 reviewable changes—then adds Company Mode, an operations assistant,
 warehouse-backed product creation, browser and desktop control surfaces, local
-memory, skills, MCP tooling, Discord/headless adapters, and an issue-driven
-Company daemon.
+memory, skills, a native code-intelligence graph, MCP tooling,
+Discord/headless adapters, and an issue-driven Company daemon.
 
 **Memory Fabric Architecture:** The memory fabric architecture is documented in [docs/architecture/memory-fabric.md](docs/architecture/memory-fabric.md). It defines scoped memory, visibility rules, evidence-backed records, skill promotion, recall policy, migration strategy, and operational hardening guidance.
 
@@ -74,6 +74,7 @@ This repository includes the core `aider-plus` runtime, the multi-agent Company 
 - **Core coding loop (Aider-compatible path)**
   - `aider/coders/` — coder strategies/modes and edit orchestration.
   - `aider/repo.py`, `aider/diffs.py`, `aider/repomap.py`, `aider/linter.py`, `aider/run_cmd.py`, `aider/editor.py`, `aider/watch.py` — repo introspection, diffing, lint/test execution, command execution, editor/watch support.
+  - `aider/codegraph/` — native code-intelligence index, query engine, CLI, and polling watcher for symbol search, callers/callees, impact analysis, affected-test suggestions, route awareness, and graph-aware context.
   - `aider/models.py`, `aider/llm.py`, `aider/sendchat.py`, `aider/openrouter.py`, `aider/history.py` — model/provider selection, message transport, and transcript handling.
 
 - **Company runtime**
@@ -233,6 +234,7 @@ aider company templates
 - **Browser and desktop GUIs:** shared Company dashboards, direct chat, per-agent tabs, settings, approvals, audit views, memory views, Delivery summaries, daemon status/proof panels, and guide pages.
 - **Headless and chat-adapter operation:** `--headless`/`--bot-mode` supports scripted tasks, queues, CI, services, Discord, and future chat adapters.
 - **Durable local memory and procedural skills:** local memory, playbook extraction, role-scoped `SKILL.md` retrieval, skill usage tracking, structured memory evidence clustering, richer source-backed skill proposals, and approval-gated skill promotion, plus pluggable local memory indexes (`local_tfidf` default, optional `sqlite_fts`) with optional embedding hooks.
+- **Native code-intelligence graph:** a persistent SQLite symbol graph with full-text symbol search, callers/callees, impact analysis, affected-test suggestions, graph-aware context building, incremental sync/watch support, and framework route awareness for web/API projects.
 - **MCP integration:** department loops can use Model Context Protocol tools through approval-aware adapters and manager configuration.
 - **Company daemon:** an issue workflow daemon can pull eligible issues, prepare per-issue workspaces, run Company prompts, write proof-of-work artifacts, update tracker state, attach PRs, and require human review.
 
@@ -406,6 +408,33 @@ aider warehouse status [--warehouse PATH]
 
 Initialize a warehouse, list registered products, print a product path, or show
 registry/product/memory status.
+
+
+### Code-intelligence graph commands
+
+```bash
+aider graph [--repo PATH] init
+aider graph [--repo PATH] index [--force]
+aider graph [--repo PATH] sync
+aider graph [--repo PATH] status
+aider graph [--repo PATH] search QUERY [--limit N]
+aider graph [--repo PATH] context QUERY [--limit N]
+aider graph [--repo PATH] callers TARGET [--limit N]
+aider graph [--repo PATH] callees TARGET [--limit N]
+aider graph [--repo PATH] impact TARGET [--depth N]
+aider graph [--repo PATH] affected [FILES ...] [--depth N]
+aider graph [--repo PATH] node NAME
+aider graph [--repo PATH] watch [--once] [--interval SECONDS]
+```
+
+The graph commands maintain a local SQLite-backed code index for the selected
+repository. Use `index` for a full scan, `sync` for incremental refreshes,
+`status` to see indexed/stale counts, `search` and `node` for symbol lookup,
+`callers`/`callees` for dependency tracing, `impact` for changed-area risk
+analysis, `affected` for targeted test suggestions, `context` for
+query-focused code context, and `watch` for lightweight polling-based refreshes.
+Route extraction recognizes common web/API declarations so impact results can
+include affected endpoints and pages.
 
 ### GUI and automation flags
 
@@ -707,7 +736,7 @@ Aider Plus includes an optional MCP layer under `aider/mcp/`:
 - approval handlers so sensitive MCP requests appear in the same approval
   surfaces as Company gates;
 - built-in approval-aware tools for skills, skill proposals, daemon runs,
-  institutional knowledge, and Company status.
+  institutional knowledge, Company status, and read-only code-intelligence queries.
 
 Inspect the built-in MCP surface with:
 
@@ -717,7 +746,9 @@ aider mcp tools
 
 Built-in read-only tools include `list_skills`, `get_skill`,
 `list_pending_skill_proposals`, `get_recent_daemon_runs`,
-`get_knowledge_overview`, `search_knowledge`, and `get_company_status`. Built-in
+`get_knowledge_overview`, `search_knowledge`, `get_company_status`, and
+read-only code-intelligence tools for index status, symbol search, context,
+callers/callees, impact analysis, and affected-test suggestions. Built-in
 mutating tools such as `approve_skill_proposal` and `trigger_daemon_run` are
 registered as `requires_approval` and must route through Company approval gates
 before execution.
@@ -899,6 +930,7 @@ Important files:
 - `aider/company/self_improvement.py` — skill proposal generation from successful patterns.
 - `aider/company/surface_messages.py` — shared lifecycle/status/approval/audit message formatting.
 - `aider/memory/` — conversation memory, project memory, retrieval, consolidation, pattern extraction, and lightweight relation-graph ranking signals (`co_occurs_with`, `handoff_from`/`handoff_to`, `derived_from`).
+- `aider/codegraph/` — persistent SQLite-backed code-intelligence graph, CLI handlers, and incremental watcher.
 - `aider/mcp/` — MCP configuration, manager, adapters, and server helpers.
 - `aider/gui.py` — Streamlit browser GUI.
 - `aider/desktop.py` — Tkinter desktop GUI.

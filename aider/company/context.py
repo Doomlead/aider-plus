@@ -89,6 +89,11 @@ class ContextBuilder:
                 self._explanation_telemetry(playbook_explanations)
             )
 
+        # --- Native code intelligence graph (bounded, read-only context) ---
+        codegraph_context = self._requested_codegraph(requirements, task)
+        if codegraph_context:
+            context["codegraph"] = codegraph_context
+
         # --- Procedural skills (retrieval-filtered) ---
         skills = self._get_relevant_skills(task, requirements)
         if skills:
@@ -107,6 +112,50 @@ class ContextBuilder:
             manager.record_skill_usage(skills, role=task.target)
 
         return context
+
+    def _requested_codegraph(self, requirements: list[str], task: CompanyTask) -> dict:
+        wants = {req for req in requirements if req.startswith("codegraph.")}
+        if not wants and "codegraph.*" not in requirements:
+            return {}
+        try:
+            from aider.codegraph import CodeGraph
+
+            graph = CodeGraph(self.state.memory.repo_path)
+            status = graph.status()
+            if status.files == 0 or status.stale_files:
+                graph.sync()
+            query = self._task_query(task)
+            data: dict[str, Any] = {"status": graph.status().__dict__}
+            if "codegraph.*" in requirements or "codegraph.context" in wants:
+                data["context"] = graph.context(query, limit=6)
+            if "codegraph.*" in requirements or "codegraph.impact" in wants:
+                target = self._first_task_file(task) or query[:80]
+                data["impact"] = graph.impact(target, depth=1) if target else {}
+            if "codegraph.*" in requirements or "codegraph.affected" in wants:
+                data["affected_tests"] = graph.affected_tests(
+                    self._task_files(task), depth=2
+                )
+            return data
+        except Exception as err:
+            return {"error": str(err)}
+
+    @staticmethod
+    def _task_files(task: CompanyTask) -> list[str]:
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        context = task.context if isinstance(task.context, dict) else {}
+        files = (
+            payload.get("files")
+            or payload.get("changed_files")
+            or context.get("files")
+            or []
+        )
+        if isinstance(files, str):
+            return [files]
+        return [str(item) for item in files if item]
+
+    def _first_task_file(self, task: CompanyTask) -> str:
+        files = self._task_files(task)
+        return files[0] if files else ""
 
     def _build_recall_packet(self, task: CompanyTask) -> dict:
         """Build the scoped memory recall packet injected into department context."""

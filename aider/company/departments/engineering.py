@@ -31,6 +31,8 @@ class EngineeringDepartment(Department):
             "playbook.ux_preferences",
             "skills.shared",
             "skills.engineering",
+            "codegraph.context",
+            "codegraph.impact",
         ]
 
     def __init__(

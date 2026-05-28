@@ -161,13 +161,13 @@ Aider Plus supports Python versions 3.10, 3.11, 3.12, 3.13, and 3.14 (`>=3.10,<3
 
 The project follows the [PEP 8](https://www.python.org/dev/peps/pep-0008/) style guide for Python code, with a maximum line length of 100 characters. Additionally, the project uses [isort](https://pycqa.github.io/isort/) and [Black](https://black.readthedocs.io/en/stable/) for sorting imports and code formatting, respectively. Please install the pre-commit hooks to automatically format your code before committing changes.
 
-### No Type Hints
+### Type Hints
 
-The project does not use type hints.
+Aider Plus is not a fully typed codebase, but some current modules use modern Python type syntax for dataclasses, command contracts, and internal runtime structures. New contributions may add type hints when they make public contracts or complex data flow clearer, especially in Company, memory, MCP, and adapter code. Avoid broad type-only churn in unrelated files, and do not treat untyped legacy modules as requiring annotation before a focused bug fix can land.
 
 ### Testing
 
-The project uses [pytest](https://docs.pytest.org/en/latest/) for running unit tests. The test files are located in the `aider/tests` directory and follow the naming convention `test_*.py`.
+The project uses [pytest](https://docs.pytest.org/en/latest/) for running unit tests. Test files live in the top-level `tests/` directory and follow the naming convention `test_*.py`.
 
 #### Running Tests
 
@@ -199,9 +199,9 @@ The `.github/workflows/docker-build-test.yml` workflow is used to build a Docker
 
 #### Writing Tests
 
-When contributing new features or making changes to existing code, ensure that you write appropriate tests to maintain code coverage. Follow the existing patterns and naming conventions used in the `aider/tests` directory.
+When contributing new features or making changes to existing code, ensure that you write appropriate tests to maintain code coverage. Follow the existing patterns and naming conventions used in the top-level `tests/` directory.
 
-If you need to mock or create test data, consider adding it to the test files or creating separate fixtures or utility functions within the `aider/tests` directory.
+If you need to mock or create test data, consider adding it to the test files or creating separate fixtures or utility functions within the top-level `tests/` directory.
 
 #### Test Requirements
 

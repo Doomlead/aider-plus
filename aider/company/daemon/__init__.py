@@ -20,6 +20,7 @@ from aider.company.tracker import (
     TrackerError,
     TrackerIssue,
     create_tracker_adapter,
+    format_proof_summary,
 )
 from aider.company.warehouse import default_warehouse_path
 from aider.company.workflow import CompanyWorkflow, WorkflowError
@@ -169,6 +170,7 @@ class CompanyDaemon:
     def run_once(self, *, dry_run: bool = False) -> list[ProofOfWork]:
         """Process at most max_concurrent_agents currently eligible issues."""
 
+        self.cleanup_workspaces()
         issues = self.tracker.list_candidate_issues(self.workflow.tracker.labels)
         active_workspaces = self._active_workspace_count()
         available_slots = max(
@@ -206,9 +208,15 @@ class CompanyDaemon:
         recent_proofs = self._recent_proofs(limit=5)
         configured = self.workflow.path.exists()
         running = bool(active_runs)
-        memory_health = MemoryStore(self.orchestrator.state.memory).get_metrics() if self.orchestrator is not None else {}
+        memory_health = (
+            MemoryStore(self.orchestrator.state.memory).get_metrics()
+            if self.orchestrator is not None
+            else {}
+        )
         memory_score = float(memory_health.get("memory_health_score", 0.0) or 0.0)
-        memory_badge = "🟢" if memory_score >= 80 else ("🟡" if memory_score >= 60 else "🔴")
+        memory_badge = (
+            "🟢" if memory_score >= 80 else ("🟡" if memory_score >= 60 else "🔴")
+        )
         return {
             "workflow": str(self.workflow.path),
             "workflow_exists": configured,
@@ -240,6 +248,9 @@ class CompanyDaemon:
             "safety": {
                 "max_concurrent_workspaces": self.workflow.agent.max_concurrent_agents,
                 "hook_timeout_seconds": self.workflow.hooks.timeout_seconds,
+                "cleanup_completed": self.workflow.workspace.cleanup_completed,
+                "max_retained_runs": self.workflow.workspace.max_retained_runs,
+                "max_age_days": self.workflow.workspace.max_age_days,
             },
             "runs": runs,
             "security": self._current_security_status(),
@@ -449,6 +460,63 @@ class CompanyDaemon:
             return dict(security)
         return {"status": "not_scanned", "severity": "info", "finding_count": 0}
 
+    def cleanup_workspaces(self) -> dict[str, Any]:
+        """Prune old terminal workspaces when workflow cleanup is enabled."""
+
+        result: dict[str, Any] = {
+            "enabled": self.workflow.workspace.cleanup_completed,
+            "removed": [],
+        }
+        if not self.workflow.workspace.cleanup_completed:
+            return result
+        root = self.workspace_manager.root.resolve()
+        if not root.exists():
+            return result
+        now = datetime.now(timezone.utc)
+        terminal_runs = []
+        for state_path in root.glob("*/.aider/company/run-state.json"):
+            try:
+                state = RunState.from_dict(
+                    json.loads(state_path.read_text(encoding="utf-8"))
+                )
+            except Exception:
+                continue
+            if state.status not in {"done", "failed"}:
+                continue
+            workspace_path = Path(state.workspace).expanduser().resolve()
+            if not _safe_workspace_for_removal(root, workspace_path, state_path):
+                continue
+            updated_at = _parse_utc(state.updated_at) or now
+            terminal_runs.append((updated_at, workspace_path, state))
+
+        max_age = timedelta(days=self.workflow.workspace.max_age_days)
+        old_paths = {
+            workspace_path
+            for updated_at, workspace_path, _state in terminal_runs
+            if now - updated_at >= max_age
+        }
+        terminal_runs.sort(key=lambda item: item[0], reverse=True)
+        retained = max(0, self.workflow.workspace.max_retained_runs)
+        overflow_paths = {
+            workspace_path
+            for _updated_at, workspace_path, _state in terminal_runs[retained:]
+        }
+        for workspace_path in sorted(old_paths | overflow_paths):
+            env = dict(os.environ)
+            env.update(
+                {
+                    "AIDER_COMPANY_WORKSPACE": str(workspace_path),
+                    "AIDER_COMPANY_WORKFLOW": str(self.workflow.path),
+                }
+            )
+            _check_hook(
+                self.workflow.run_hook("before_remove", cwd=workspace_path, env=env),
+                "before_remove",
+            )
+            shutil.rmtree(workspace_path)
+            result["removed"].append(str(workspace_path))
+        return result
+
     def _load_run_states(self) -> list[dict[str, Any]]:
         runs: list[dict[str, Any]] = []
         if self.workspace_manager.root.exists():
@@ -559,7 +627,11 @@ class CompanyDaemon:
                     "last_error": None,
                 }
             )
-            state.status = "human_review" if proof.human_review_required else "done"
+            state.status = (
+                "human_review"
+                if proof.human_review_required or proof.partial_success
+                else "done"
+            )
             state.proof_path = str(workspace.proof_path)
             state.pr_url = proof.pr_url
             state.last_proof_link = proof.markdown_path or str(workspace.markdown_path)
@@ -782,6 +854,17 @@ class CompanyDaemon:
         return env
 
 
+def _safe_workspace_for_removal(
+    root: Path, workspace_path: Path, state_path: Path
+) -> bool:
+    try:
+        workspace_path.relative_to(root)
+    except ValueError:
+        return False
+    expected_state = workspace_path / ".aider" / "company" / "run-state.json"
+    return expected_state.resolve() == state_path.resolve() and expected_state.exists()
+
+
 def build_tracker(workflow: CompanyWorkflow) -> TrackerAdapter:
     try:
         return create_tracker_adapter(workflow.tracker)
@@ -882,20 +965,11 @@ def _last_proof_link(
 
 
 def _format_tracker_comment(proof: ProofOfWork) -> str:
-    checks = (
-        ", ".join(str(check.get("command", check)) for check in proof.checks) or "none"
-    )
     return (
         "Aider Plus Company daemon completed a run.\n\n"
-        f"Summary: {proof.summary}\n"
         f"Workspace: {proof.workspace}\n"
         f"Proof of work: {Path(proof.workspace) / '.aider' / 'company' / 'proof-of-work.json'}\n"
-        f"Proof report: {Path(proof.workspace) / '.aider' / 'company' / 'proof-of-work.md'}\n"
-        f"Checks: {checks}\n"
-        f"Partial success: {proof.partial_success}\n"
-        f"Completed stages: {', '.join(proof.completed_stages) or 'none'}\n"
-        f"Failed stages: {', '.join(proof.failed_stages) or 'none'}\n"
-        f"Human review required: {proof.human_review_required}"
+        + format_proof_summary(proof, proof.pr_url)
     )
 
 

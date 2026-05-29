@@ -621,6 +621,8 @@ Remaining acceptance criteria for the broader rollout:
 - Promotion metadata consistently links records, proposals, approved skills, reinforcement, retirement, and replacements.
 - Redaction and visibility policy are enforced uniformly for all new writers and recall paths.
 - Optional vector/embedding backends stay behind local-first adapter interfaces and have parity tests against deterministic local indexes.
+- Semantic compaction summarizes older related clusters and carries redaction metadata forward.
+- PII/secret classification and tenant policy checks are enforced for new memory writes.
 
 
 ## Backend Adapters (milestone)
@@ -629,12 +631,14 @@ Memory retrieval now supports pluggable local indexes behind adapter interfaces:
 
 - `MemoryIndex`: rank/rebuild/add contract used by `MemoryStore`.
 - `MemoryBackendAdapter`: adapter identity hook for backend-specific implementations.
-- `MemoryEmbeddingProvider`: optional embedding provider contract for future semantic retrieval.
+- `MemoryEmbeddingProvider`: optional embedding provider contract for semantic retrieval.
+- `DeterministicHashEmbeddingProvider`: dependency-free local embedding provider used for deterministic vector tests and offline deployments.
 
 Current local-first backends:
 
 - `LocalTFIDFIndex` (default): deterministic TF-IDF ranking with no external dependencies.
 - `SQLiteFTSIndex` (optional): local SQLite FTS5 ranking; falls back safely when unavailable.
+- `LocalVectorIndex` (optional): in-memory vector ranking through `MemoryEmbeddingProvider`; defaults to deterministic hashed embeddings and keeps all data local.
 
 Configuration examples:
 
@@ -650,7 +654,14 @@ company:
   enable_embeddings: false
 ```
 
-Embeddings remain optional and disabled by default to preserve deterministic local behavior without adding required external services.
+```yaml
+company:
+  memory_backend: local_vector
+  enable_embeddings: true
+  embedding_provider: deterministic_hash
+```
+
+Embeddings remain optional and disabled by default for existing deployments. When enabled with `local_vector` and the deterministic hash provider, retrieval remains local, reproducible, and free of external services; model-backed providers can be added behind the same `MemoryEmbeddingProvider` contract.
 
 
 Performance notes:
@@ -658,11 +669,21 @@ Performance notes:
 - `LocalTFIDFIndex` is best for smaller/local record sets and fully deterministic runs. It has near-zero setup cost but ranking recomputes per-query vectors in-memory.
 - `SQLiteFTSIndex` is a better fit as record counts grow (for example, many thousands of records) or when repeated queries dominate runtime. It pays an indexing/storage cost up front and then uses FTS ranking.
 - If SQLite FTS initialization or query execution fails, runtime degrades to `LocalTFIDFIndex` automatically so recall remains available.
+- `LocalVectorIndex` rebuilds and incrementally adds embeddings through the store/index boundary, so compaction or repository migrations can rebuild vectors without changing recall callers.
+
+## Compaction, Evidence, and Privacy Hardening
+
+Recent hardening work closes several earlier future-work gaps:
+
+- Semantic compaction now groups older records by token-overlap clusters rather than exact prefixes only, writes a `*_cluster_summary` record with key terms, and archives originals non-destructively with provenance links.
+- Cross-project promotion candidates expose an `evidence_score` and an `allows_cross_project_promotion()` gate that rewards repeated successes, distinct tasks, distinct projects, distinct departments, and prior successful use while penalizing failures.
+- Memory writes classify content for common PII and secret patterns. Non-secret PII is redacted by default, metadata records the classifier findings, and stricter `TenantMemoryPolicy` settings can reject sensitive writes entirely.
+- Summary redaction metadata now carries PII and secret type aggregates from compacted source records so downstream recall can enforce visibility and policy decisions.
 
 ## Current Limitations & Future Work
 
-- Full vector embedding support is still behind the repository/index boundary; the current local-first path relies on deterministic filtering plus lightweight text ranking.
-- Decay currently adjusts salience/reinforcement signals only; it does not yet perform semantic compaction or automatic summarization of older memory clusters.
-- Cross-project promotion is intentionally conservative and still requires stronger evidence scoring before broad department or shared recall.
+- Vector embedding support is available behind the repository/index boundary through `LocalVectorIndex` and `MemoryEmbeddingProvider`; production model-backed providers remain optional adapters rather than required dependencies.
+- Decay still adjusts salience/reinforcement signals, and semantic compaction now summarizes older related clusters when the compaction helper runs. Fully automatic background scheduling remains future orchestration work.
+- Cross-project promotion remains conservative, but promotion candidates now include stronger evidence scoring and an explicit multi-project gate before broad shared recall.
 - Legacy read paths remain for older visibility aliases and `channel_pair:` scopes, but new writes should use canonical visibility values and `channel:<A>:<B>` channel scopes.
-- Privacy hardening is scoped to visibility checks and metadata redaction hooks; deeper PII detection and tenant-level policy enforcement remain future work.
+- Privacy hardening now includes visibility checks, metadata redaction hooks, PII/secret classifiers, and tenant policy enforcement for new writes. Future work can expand classifier coverage and connect policy decisions to every legacy writer.

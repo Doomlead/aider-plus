@@ -71,7 +71,7 @@ def test_onboarding_flow_prompts_department_models(tmp_path):
     )
     onboarding = CompanyOnboarding(
         root=tmp_path,
-        defaults={"warehouse_path": tmp_path / "warehouse"},
+        defaults={"warehouse_path": tmp_path / "warehouse", "advanced": True},
         input_func=lambda _prompt: next(answers),
         output_func=lambda _msg: None,
     )
@@ -131,3 +131,42 @@ def test_company_init_cli_parses_and_runs_non_interactive(
     assert Path(state["first_product_path"]).name == "cli-dashboard"
     assert Path(state["first_product_path"]).joinpath(".git").exists()
     assert (tmp_path / ".env.example").exists()
+
+
+def test_minimal_onboarding_uses_env_defaults_and_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_REPO", "env/demo")
+    monkeypatch.setenv("AIDER_MODEL", "gpt-5.5")
+    monkeypatch.setenv("AIDER_MCP_CONFIG", ".aider/mcp.json")
+    answers = iter(["", "", "", "n"])
+    prompts = []
+    output = []
+
+    def input_func(prompt):
+        prompts.append(prompt)
+        return next(answers)
+
+    onboarding = CompanyOnboarding(
+        root=tmp_path,
+        defaults={"warehouse_path": tmp_path / "warehouse"},
+        input_func=input_func,
+        output_func=output.append,
+    )
+
+    result = onboarding.run_onboarding_flow()
+
+    assert len(prompts) == 4
+    assert any("Step 1 of 5" in msg for msg in output)
+    assert any("Step 5 of 5" in msg for msg in output)
+    state = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+    assert state["onboarding_mode"] == "minimal"
+    assert state["github_repo"] == "env/demo"
+    assert state["mcp_enabled"] is True
+    assert state["model_preferences"]["product"] == {"model": "gpt-5.5", "cache": True}
+    assert state["model_preferences"]["devops"] == {"model": "gpt-5.5", "cache": True}
+
+
+def test_company_init_cli_accepts_advanced_flag():
+    command, aider_args = parse_company_cli(["company", "init", "--advanced"])
+
+    assert aider_args == []
+    assert command.advanced is True

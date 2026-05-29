@@ -67,6 +67,7 @@ class CompanyCLICommand:
     yes: bool = False
     first_product_idea: str | None = None
     first_product_name: str | None = None
+    advanced: bool = False
 
 
 class CompanyCLIError(ValueError):
@@ -74,7 +75,7 @@ class CompanyCLIError(ValueError):
 
 
 USAGE = """Usage:
-  aider company init [--warehouse PATH] [--template TEMPLATE] [--github-repo OWNER/REPO] [--github-token TOKEN] [--model MODEL] [--enable-mcp|--skip-mcp] [--product-idea IDEA] [--product-name NAME] [--yes]
+  aider company init [--advanced] [--warehouse PATH] [--template TEMPLATE] [--github-repo OWNER/REPO] [--github-token TOKEN] [--model MODEL] [--enable-mcp|--skip-mcp] [--product-idea IDEA] [--product-name NAME] [--yes]
   aider company setup [same options as init]
   aider company templates
   aider company create <idea> [--template TEMPLATE|auto|custom] [--template-strict] [--explain-template-choice] [--name PROJECT_NAME] [--dry-plan] [-- AIDER_ARGS...]
@@ -138,7 +139,10 @@ def parse_company_cli(
                 "`aider company memory` supports `status`, `repair`, or `backfill`.\n"
                 + USAGE
             )
-        return CompanyCLICommand(action=f"memory-{rest[0]}", yes="--yes" in rest), aider_args
+        return (
+            CompanyCLICommand(action=f"memory-{rest[0]}", yes="--yes" in rest),
+            aider_args,
+        )
 
     if action not in {"create", "new"}:
         raise CompanyCLIError(f"Unknown company command: {action}\n{USAGE}")
@@ -280,6 +284,7 @@ def _parse_company_onboarding(action: str, args: Sequence[str]) -> CompanyCLICom
     yes: bool = False
     first_product_idea: str | None = None
     first_product_name: str | None = None
+    advanced = False
     rest = list(args)
     index = 0
     while index < len(rest):
@@ -329,6 +334,8 @@ def _parse_company_onboarding(action: str, args: Sequence[str]) -> CompanyCLICom
             first_product_name = rest[index]
         elif token == "--yes":
             yes = True
+        elif token == "--advanced":
+            advanced = True
         else:
             raise CompanyCLIError(
                 f"Unknown company {action} option: {token}.\n" + USAGE
@@ -351,6 +358,7 @@ def _parse_company_onboarding(action: str, args: Sequence[str]) -> CompanyCLICom
         yes=yes,
         first_product_idea=first_product_idea,
         first_product_name=first_product_name,
+        advanced=advanced,
     )
 
 
@@ -495,7 +503,9 @@ def render_company_plan(command: CompanyCLICommand) -> str:
     """Render the execution prompt for a parsed create command."""
 
     avoided_mismatches = tuple(
-        reason for reason in command.template_selection_reasons if "custom" in reason.lower() or "mismatch" in reason.lower()
+        reason
+        for reason in command.template_selection_reasons
+        if "custom" in reason.lower() or "mismatch" in reason.lower()
     )
     return render_zero_to_mvp_prompt(
         idea=command.idea,
@@ -560,10 +570,14 @@ def handle_company_onboarding_cli(command: CompanyCLICommand) -> int:
     defaults: dict[str, object] = {
         "warehouse_path": command.warehouse_path or default_warehouse_path(),
         "template": command.template,
-        "github_repo": command.repo or "",
-        "github_token": command.github_token or "",
-        "mcp_enabled": bool(command.mcp_enabled),
+        "advanced": command.advanced,
     }
+    if command.repo is not None:
+        defaults["github_repo"] = command.repo
+    if command.github_token is not None:
+        defaults["github_token"] = command.github_token
+    if command.mcp_enabled is not None:
+        defaults["mcp_enabled"] = command.mcp_enabled
     if command.model:
         defaults["model"] = command.model
     if command.first_product_idea:
@@ -766,10 +780,16 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
         if orchestrator is not None and hasattr(orchestrator, "submit"):
             await orchestrator.submit(task)
             project = getattr(orchestrator, "active_project", None)
-            deliverable = getattr(project, "engineering_result", None) if project else None
+            deliverable = (
+                getattr(project, "engineering_result", None) if project else None
+            )
             summary = ""
             if deliverable is not None:
-                summary = str(getattr(deliverable, "summary", "") or getattr(deliverable, "payload", "") or "")
+                summary = str(
+                    getattr(deliverable, "summary", "")
+                    or getattr(deliverable, "payload", "")
+                    or ""
+                )
             return {"summary": summary, "status": "success"}
 
         exhausted_before = int(getattr(coder, "num_exhausted_context_windows", 0) or 0)
@@ -845,7 +865,9 @@ def run_company_cli_with_coder(command: CompanyCLICommand, coder) -> int:
     if command.template_selection_note:
         import re
 
-        match = re.search(r"confidence\s+([0-9]+(?:\.[0-9]+)?)", command.template_selection_note)
+        match = re.search(
+            r"confidence\s+([0-9]+(?:\.[0-9]+)?)", command.template_selection_note
+        )
         if match:
             try:
                 confidence = float(match.group(1))

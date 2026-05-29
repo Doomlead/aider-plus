@@ -32,10 +32,17 @@ optional GitHub Issues daemon settings, records preferred models and prompt
 caching choices, validates available provider API keys, optionally enables MCP,
 writes a tailored `.env.example`, and writes `AIDER_WORKFLOW.md`.
 
-For non-interactive setup:
+For the simplest first run, use the minimal onboarding preset. It asks for a warehouse, template, and one model, shows `Step N of M` progress, and detects defaults from environment variables such as `AIDER_MODEL`, provider API keys, `GITHUB_REPO`, and `AIDER_MCP_CONFIG`:
+
+```bash
+aider company init --warehouse ./AiderPlusWarehouse --template nextjs-saas --model gpt-5.5
+```
+
+For non-interactive or full setup, add `--advanced` to configure GitHub issue tracking, MCP, and per-department model overrides:
 
 ```bash
 aider company init \
+  --advanced \
   --warehouse ./AiderPlusWarehouse \
   --template nextjs-saas \
   --github-repo owner/repo \

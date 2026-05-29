@@ -741,3 +741,44 @@ def test_github_status_transitions_use_review_and_failed_labels():
         "bug",
         "company:failed",
     }
+
+
+def test_proof_markdown_surfaces_devops_preview_and_rollback_metadata():
+    from aider.company.schemas import ProofOfWork
+
+    proof = ProofOfWork(
+        issue="AP-ROLLBACK",
+        title="Show release metadata",
+        workspace="/tmp/ap-rollback",
+        summary="Release proof generated.",
+        devops_status={
+            "status": "success",
+            "metadata": {
+                "deployment_result": {
+                    "dry_run_preview": {
+                        "human_summary": "Deploy app:v1 to aws/production; would execute 1 provider command.",
+                        "approval_gate": "Approval is required before executing aws/production.",
+                        "steps": ["Collect approval", "Capture command logs"],
+                    },
+                    "rollback_metadata": {
+                        "provider": "aws",
+                        "environment": "production",
+                        "command": "aws deploy create-deployment --revision app:v0",
+                        "owner": "Release Captain",
+                        "previous_artifact": "app:v0",
+                        "current_artifact": "app:v1",
+                        "validation_steps": ["Run smoke tests"],
+                    },
+                }
+            },
+        },
+    )
+
+    markdown = proof.to_markdown()
+
+    assert "### DevOps Dry-run Preview" in markdown
+    assert "Deploy app:v1 to aws/production" in markdown
+    assert "Approval is required before executing aws/production" in markdown
+    assert "### DevOps Rollback Metadata" in markdown
+    assert "Owner: Release Captain" in markdown
+    assert "Previous artifact: app:v0" in markdown

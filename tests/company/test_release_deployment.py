@@ -520,6 +520,50 @@ def test_production_provider_deploy_blocks_before_command_without_approval(tmp_p
     assert commands == ["python -m build"]
 
 
+def test_aws_s3_dry_run_preview_is_human_readable_and_safety_gated(tmp_path):
+    department = make_department(tmp_path)
+    commands = []
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        department._validate_command(command, high_risk_allowed=high_risk_allowed)
+        commands.append(command)
+        return f"$ {command}\nexit_code=0\nbuild only"
+
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(
+        tmp_path,
+        deployment_commands=[],
+        deployment_target={
+            "provider": "aws",
+            "environment": "production",
+            "config": {"s3_bucket": "release-seam-prod", "source": "dist"},
+        },
+        previous_artifact="s3://release-seam-prod/previous",
+        rollback_owner="Release Captain",
+        rollback_validation_steps=["Check CloudFront health", "Run smoke tests"],
+        devops_dry_run=True,
+    )
+
+    deliverable = run(department.process(task))
+
+    assert deliverable.status == "success"
+    assert commands == ["python -m build"]
+    deployment = deliverable.payload["deployment_result"]
+    preview = deployment["dry_run_preview"]
+    assert preview["commands"] == ["aws s3 sync dist s3://release-seam-prod --delete"]
+    assert preview["will_execute"] is False
+    assert (
+        preview["approval_gate"]
+        == "Approval is required before executing aws/production."
+    )
+    assert "Deploy release-seam:v3.2.1 to aws/production" in preview["human_summary"]
+    assert "Collect approval before any provider side effects" in " ".join(
+        preview["steps"]
+    )
+    assert preview["rollback_summary"].startswith("Rollback owner: Release Captain")
+    assert preview["rollback"]["previous_artifact"] == "s3://release-seam-prod/previous"
+
+
 def test_deployment_dry_run_preview_skips_provider_commands_without_approval(tmp_path):
     department = make_department(tmp_path)
     commands = []

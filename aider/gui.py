@@ -750,6 +750,16 @@ class DesktopCompanySession:
                 deployment_result.get("rollback_command")
                 or deploy_payload.get("rollback_command")
             ),
+            "rollback_metadata": (
+                deployment_result.get("rollback_metadata")
+                or deploy_payload.get("rollback_metadata")
+                or {}
+            ),
+            "dry_run_preview": (
+                deployment_result.get("dry_run_preview")
+                or deploy_payload.get("dry_run_preview")
+                or {}
+            ),
             "logs_summary": (
                 deploy_payload.get("build_logs_summary")
                 or build_artifact.get("build_logs_summary")
@@ -884,6 +894,10 @@ class DesktopCompanySession:
             "last_deployment_deployed_at": last_build.get("deployed_at"),
             "last_deployment_notes": last_build.get("deployment_notes"),
             "last_deployment_rollback_command": last_build.get("rollback_command"),
+            "last_deployment_rollback_metadata": last_build.get(
+                "rollback_metadata", {}
+            ),
+            "last_deployment_dry_run_preview": last_build.get("dry_run_preview", {}),
             "active_warehouse_products": active_products,
             "mcp_status": (
                 f"enabled ({len(getattr(mcp_config, 'servers', {}) or {})} servers)"
@@ -1788,13 +1802,53 @@ class GUI:
             )
             if overview.get("last_deployment_notes"):
                 st.write(f"**Deployment notes:** {overview['last_deployment_notes']}")
+            dry_run_preview = overview.get("last_deployment_dry_run_preview") or {}
+            if dry_run_preview:
+                with st.expander("Dry-run preview", expanded=False):
+                    if dry_run_preview.get("human_summary"):
+                        st.write(dry_run_preview["human_summary"])
+                    st.write(
+                        "**Approval gate:** "
+                        f"{dry_run_preview.get('approval_gate') or 'not recorded'}"
+                    )
+                    steps = dry_run_preview.get("steps") or []
+                    if steps:
+                        st.write("**Planned operator steps:**")
+                        for step in steps[:8]:
+                            st.write(f"- {step}")
+                    commands = dry_run_preview.get("commands") or []
+                    if commands:
+                        st.write("**Provider commands:**")
+                        st.code(
+                            "\n".join(str(command) for command in commands),
+                            language="bash",
+                        )
             rollback_command = overview.get("last_deployment_rollback_command")
-            if rollback_command:
+            rollback_metadata = overview.get("last_deployment_rollback_metadata") or {}
+            if rollback_command or rollback_metadata:
                 with st.expander("Rollback", expanded=False):
                     st.warning(
-                        "Review this safe rollback command and run it only through an approved shell gate."
+                        "Review rollback metadata and run commands only through an approved shell gate."
                     )
-                    st.code(str(rollback_command), language="bash")
+                    if rollback_command:
+                        st.code(str(rollback_command), language="bash")
+                    if rollback_metadata:
+                        st.write(
+                            "**Owner:** "
+                            f"{rollback_metadata.get('owner') or 'DevOps'} · "
+                            "**Previous artifact:** "
+                            f"{rollback_metadata.get('previous_artifact') or 'not recorded'}"
+                        )
+                        validation_steps = (
+                            rollback_metadata.get("validation_steps") or []
+                        )
+                        if validation_steps:
+                            st.write("**Validation steps:**")
+                            for step in validation_steps[:8]:
+                                st.write(f"- {step}")
+                        if rollback_metadata.get("delivery_plan"):
+                            st.write("**Delivery rollback plan:**")
+                            st.write(rollback_metadata["delivery_plan"])
             else:
                 st.write("**Rollback:** no safe rollback command recorded")
             st.write(f"**Last build artifact:** {overview['last_build_artifact']}")

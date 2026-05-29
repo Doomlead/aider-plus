@@ -108,8 +108,8 @@ aider company templates
 - **DevOps** — the release execution layer. It validates Delivery handoffs, runs
   approved build/package/deploy steps across local, Vercel, Railway, Fly.io,
   AWS, Docker Compose, Netlify, Render, Cloudflare Pages, Kubernetes, and Helm
-  targets, captures logs, and records deployment, dry-run preview, and rollback
-  metadata.
+  targets, captures logs, and records deployment, human-readable dry-run
+  previews, and rollback metadata.
 - **Skills vs. playbooks** — skills are role-scoped `SKILL.md` procedures
   retrieved for a task; playbooks are reusable lessons extracted from prior
   successful work.
@@ -234,7 +234,9 @@ pytest tests/memory tests/company/test_context_memory_fabric.py
 
 Run `tests/company/test_release_deployment.py` when changing Delivery → DevOps
 handoffs, build detection, deployment provider commands, high-risk approval
-gates, artifact metadata, or rollback handling.
+gates, artifact metadata, dry-run preview text, or rollback handling. Run
+`tests/company/test_symphony_daemon.py` when those fields appear in daemon
+proof-of-work output.
 
 ## Model/provider updates in this fork
 

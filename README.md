@@ -143,7 +143,8 @@ aider company templates
 - **MCP and adapters:** MCP configuration plus Discord/headless/GUI surfaces that
   reuse the same Company runtime contracts.
 - **Issue-driven daemon:** tracker-backed workspaces, retries, proof-of-work,
-  security scans, hooks, and release metadata for unattended or queued work.
+  security scans, hooks, release metadata, and orchestrator-owned department
+  sequencing for unattended or queued work.
 
 ## Repository map
 

@@ -162,16 +162,22 @@ The high-level product path is:
 2. **UX** converts requirements into flows, screens, states, accessibility notes,
    and schema-gated design specs.
 3. **Delivery** tracks milestones, blockers, readiness, and release handoff
-   quality.
+   quality, including code graph impact risk when available.
 4. **Engineering** plans and implements changes through Aider's code-editing
    loop.
-5. **Reviewer** checks implementation quality and can feed bounded comments back
-   into Engineering.
-6. **QA** plans/runs validation and reports confidence, failures, and regression
-   risks.
-7. **Delivery** validates release readiness after QA.
+5. **Reviewer** checks implementation quality, incorporates code graph impact
+   analysis, and can feed bounded comments back into Engineering.
+6. **QA** plans/runs validation, prioritizes code graph affected-test
+   suggestions, and reports confidence, failures, and regression risks.
+7. **Delivery** validates release readiness after QA and carries impacted files
+   and routes into release risk tracking.
 8. **DevOps** executes the approved build/package/tag/deploy path and records
    release metadata.
+
+The shared code graph lives in `aider/codegraph/`; it persists symbol, edge,
+and route data in SQLite and now recognizes Python/FastAPI-style decorators,
+Express/Rails/NestJS/Django declarations, and file-system routes for Next.js,
+Nuxt, and SvelteKit.
 
 ## 6. Skills, memory, playbooks, audit, and EventBus
 

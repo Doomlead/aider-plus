@@ -43,6 +43,7 @@ class DeliveryDepartment(Department):
             "project.name",
             "project.phase",
             "project.prd",
+            "codegraph.impact",
         ]
 
     async def process(self, task: CompanyTask) -> Deliverable:
@@ -421,6 +422,32 @@ class DeliveryDepartment(Department):
                     mitigation="Capture manual verification notes or add targeted tests before deployment.",
                 )
             )
+        codegraph_impact = self._codegraph_impact_summary(context)
+        if codegraph_impact["files"]:
+            broad_impact = len(codegraph_impact["files"]) > 8 or bool(
+                codegraph_impact["routes"]
+            )
+            risks.append(
+                RiskRegister(
+                    risk_id="RISK-CODEGRAPH-IMPACT",
+                    description=(
+                        "Code graph impact analysis found "
+                        f"{len(codegraph_impact['files'])} impacted file(s)"
+                        + (
+                            f" and {len(codegraph_impact['routes'])} route(s)."
+                            if codegraph_impact["routes"]
+                            else "."
+                        )
+                    ),
+                    severity="medium" if broad_impact else "low",
+                    probability="medium" if broad_impact else "low",
+                    impact="high" if codegraph_impact["routes"] else "medium",
+                    mitigation=(
+                        "Use impacted files/routes to scope QA, release notes, and rollback validation."
+                    ),
+                    status="monitoring",
+                )
+            )
         if context.get("design_spec_validation_errors"):
             risks.append(
                 RiskRegister(
@@ -445,6 +472,29 @@ class DeliveryDepartment(Department):
                 )
             )
         return risks
+
+    @staticmethod
+    def _codegraph_impact_summary(context: dict) -> dict[str, list[str]]:
+        codegraph = context.get("codegraph") if isinstance(context, dict) else {}
+        impact = codegraph.get("impact") if isinstance(codegraph, dict) else {}
+        files = impact.get("files") if isinstance(impact, dict) else []
+        routes = impact.get("routes") if isinstance(impact, dict) else []
+        impacted_files = []
+        for item in files or []:
+            if isinstance(item, dict) and item.get("path"):
+                impacted_files.append(str(item["path"]))
+            elif item:
+                impacted_files.append(str(item))
+        impacted_routes = []
+        for route in routes or []:
+            if isinstance(route, dict) and route.get("route"):
+                impacted_routes.append(str(route["route"]))
+            elif route:
+                impacted_routes.append(str(route))
+        return {
+            "files": sorted(dict.fromkeys(impacted_files)),
+            "routes": sorted(dict.fromkeys(impacted_routes)),
+        }
 
     def handover_to_devops(
         self, plan: ProjectPlan, task: CompanyTask

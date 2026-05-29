@@ -43,10 +43,14 @@ class QADepartment(Department):
         from aider.company.schemas import QAFeedback  # local import avoids circular
 
         engineering_output = (
-            task.payload.get("engineering_result", {}) if isinstance(task.payload, dict) else {}
+            task.payload.get("engineering_result", {})
+            if isinstance(task.payload, dict)
+            else {}
         )
         engineering_metadata = (
-            task.payload.get("engineering_metadata", {}) if isinstance(task.payload, dict) else {}
+            task.payload.get("engineering_metadata", {})
+            if isinstance(task.payload, dict)
+            else {}
         )
         if isinstance(engineering_output, dict):
             files_changed = engineering_output.get("metadata", {}).get("files", [])
@@ -64,7 +68,7 @@ class QADepartment(Department):
             if isinstance(prior_fb, dict):
                 prior_revision = int(prior_fb.get("revision_number", 0))
 
-        test_files = [f for f in files if self._is_test_file(f)]
+        test_files = self._targeted_test_files(files, task.context)
 
         if test_files:
             quoted_files = " ".join(shlex.quote(f) for f in test_files)
@@ -84,17 +88,21 @@ class QADepartment(Department):
                 failed_tests=failed_tests,
                 failure_output=test_results,
                 files_covered=test_files,
-                recommended_fixes=self._recommended_fixes_from_failures(failed_tests, test_results),
+                recommended_fixes=self._recommended_fixes_from_failures(
+                    failed_tests, test_results
+                ),
                 revision_number=prior_revision + 1,
                 prd_excerpt=str(prd_content)[:500],
             )
 
         deliverable_metadata = {
             "handoff_to": "engineering" if test_passed is False else "ceo",
-            "blocking": test_passed is not False,  # only block for release if pass/unknown
+            "blocking": test_passed
+            is not False,  # only block for release if pass/unknown
             "gate_name": "release_approval",
             "test_coverage": "executed" if test_files else "manual_required",
             "test_executed": True,
+            "targeted_by_codegraph": self._codegraph_affected_tests(task.context),
             "context": dict(task.context) if isinstance(task.context, dict) else {},
         }
         if qa_feedback is not None:
@@ -118,6 +126,7 @@ class QADepartment(Department):
                 "files_changed": files,
                 "prd_excerpt": str(prd_content)[:1000],
                 "recommended_checks": self._recommended_checks(test_files),
+                "targeted_by_codegraph": self._codegraph_affected_tests(task.context),
                 "qa_feedback": qa_feedback.to_dict() if qa_feedback else None,
             },
             status="failure" if test_passed is False else "success",
@@ -136,6 +145,30 @@ class QADepartment(Department):
         returncode, output = await asyncio.to_thread(run_cmd, command, False, None, cwd)
         prefix = f"$ {command}\nexit_code={returncode}\n"
         return prefix + output
+
+    def _targeted_test_files(
+        self, changed_files: list[str], context: dict | None
+    ) -> list[str]:
+        tests = [f for f in changed_files if self._is_test_file(f)]
+        tests.extend(self._codegraph_affected_tests(context))
+        return sorted(dict.fromkeys(tests))
+
+    @staticmethod
+    def _codegraph_affected_tests(context: dict | None) -> list[str]:
+        if not isinstance(context, dict):
+            return []
+        codegraph = (
+            context.get("codegraph")
+            if isinstance(context.get("codegraph"), dict)
+            else {}
+        )
+        affected = (
+            codegraph.get("affected_tests") if isinstance(codegraph, dict) else {}
+        )
+        tests = affected.get("affected_tests") if isinstance(affected, dict) else []
+        if isinstance(tests, str):
+            return [tests]
+        return [str(test) for test in tests or [] if test]
 
     @staticmethod
     def _is_test_file(path: str) -> bool:
@@ -174,7 +207,9 @@ class QADepartment(Department):
         return failed
 
     @staticmethod
-    def _recommended_fixes_from_failures(failed_tests: list[str], output: str) -> list[str]:
+    def _recommended_fixes_from_failures(
+        failed_tests: list[str], output: str
+    ) -> list[str]:
         """
         Derive actionable Engineering recommendations from the failure list and output.
         """

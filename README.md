@@ -136,7 +136,10 @@ aider company templates
   reinforcement outcomes, health checks, skill evidence, and self-improvement
   proposal flows.
 - **Code-intelligence graph:** symbol search, callers/callees, impact analysis,
-  affected-test suggestions, route awareness, and graph-aware context.
+  affected-test suggestions, route awareness, and graph-aware context. Company
+  QA uses graph-suggested affected tests, Reviewer and Delivery consume impact
+  analysis for review/release risk, and route detection covers decorator routes
+  plus Next.js, Nuxt, SvelteKit, Django, Rails, Express, and NestJS patterns.
 - **MCP and adapters:** MCP configuration plus Discord/headless/GUI surfaces that
   reuse the same Company runtime contracts.
 - **Issue-driven daemon:** tracker-backed workspaces, retries, proof-of-work,
@@ -168,7 +171,7 @@ aider company templates
 | Memory/skill retrieval | `aider/memory/` | `aider/company/skills.py`, `aider/company/self_improvement.py` | `tests/memory/`, `tests/company/test_memory_*.py` |
 | MCP tooling | `aider/mcp/` | `docs/company/mcp.md` | `tests/mcp/test_mcp_integration.py` |
 | Browser/desktop/chat surfaces | `aider/gui.py`, `aider/desktop.py` | `aider/integrations/discord.py`, `aider/company/events.py` | `tests/test_desktop_*.py`, `tests/company/test_discord_lifecycle.py` |
-| Code graph | `aider/codegraph/` | `aider/company/context.py` | `tests/codegraph/test_codegraph.py` |
+| Code graph | `aider/codegraph/` | `aider/company/context.py`, `aider/company/departments/qa.py`, `aider/company/departments/engineering.py`, `aider/company/departments/delivery.py` | `tests/codegraph/test_codegraph.py`, `tests/company/test_codegraph_integrations.py` |
 
 ## Contributor paths
 

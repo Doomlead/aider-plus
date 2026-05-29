@@ -6,6 +6,8 @@ from collections.abc import Awaitable, Collection
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from aider.company.schemas import CompanyTask
+
 DEFAULT_COMPANY_DEPARTMENT_SEQUENCE: tuple[tuple[str, str], ...] = (
     ("product", "raw_prompt"),
     ("ux", "prd"),
@@ -14,8 +16,6 @@ DEFAULT_COMPANY_DEPARTMENT_SEQUENCE: tuple[tuple[str, str], ...] = (
     ("delivery", "test_report"),
     ("devops", "deploy_request"),
 )
-
-from aider.company.schemas import CompanyTask
 
 RunExecutor = Callable[[CompanyTask, dict[str, Any]], Awaitable[dict[str, Any]]]
 DepartmentExecutor = Callable[[CompanyTask, dict[str, Any]], Awaitable[Any]]
@@ -117,7 +117,9 @@ async def run_company_department_sequence(
     origin = initial_origin
     payload = initial_payload
     registered = (
-        {d.lower() for d in registered_departments} if registered_departments else None
+        {d.lower() for d in registered_departments}
+        if registered_departments is not None
+        else None
     )
 
     for step_index, (department, artifact_type) in enumerate(sequence, start=1):

@@ -9,7 +9,7 @@ from aider.company.runtime import (
     select_company_department_sequence,
     select_company_entry_target,
 )
-from aider.company.schemas import CompanyEvent, CompanyTask, Deliverable, EventMessage
+from aider.company.schemas import CompanyTask, Deliverable, EventMessage
 from aider.company.tracker import TrackerIssue
 from aider.integrations.discord import DiscordAiderBot, DiscordSessionKey
 from aider.company.cli import run_company_cli_with_coder, CompanyCLICommand
@@ -66,6 +66,13 @@ def test_event_parity_cli_daemon_discord(monkeypatch, tmp_path):
 
     class OrchestratorStub:
         departments = {"engineering": object()}
+
+        def department_sequence_stage_count(self, **kwargs):
+            return len(select_company_department_sequence(**kwargs))
+
+        async def run_department_sequence(self, **kwargs):
+            kwargs.setdefault("registered_departments", self.departments.keys())
+            return await run_company_department_sequence(**kwargs)
 
         async def _emit(self, msg: EventMessage):
             events.append(msg.payload.get("name"))
@@ -192,3 +199,26 @@ def test_entry_target_selection_is_runtime_owned():
     assert (
         select_company_entry_target(phase="development", has_prd=False) == "engineering"
     )
+
+
+def test_department_sequence_executor_skips_all_when_registry_is_empty():
+    async def _execute(task, metadata):  # pragma: no cover - should not execute
+        raise AssertionError("no department should run when registry is empty")
+
+    result = asyncio.run(
+        run_company_department_sequence(
+            surface="daemon",
+            session_id="daemon:I3",
+            task_id_prefix="I3",
+            initial_origin="daemon",
+            initial_payload="prompt",
+            context={},
+            execute_department=_execute,
+            selected_departments=("engineering", "qa"),
+            registered_departments=set(),
+        )
+    )
+
+    assert result.deliverables == []
+    assert result.skipped_departments == ["engineering", "qa"]
+    assert result.total_stages == 2

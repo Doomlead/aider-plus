@@ -17,6 +17,9 @@ approval, MCP, QA, and proof-of-work patterns as the execution model.
 - **Lifecycle hooks** for setup, smoke checks, artifact collection, and cleanup.
 - **Proof-of-work JSON** for every run at
   `.aider/company/proof-of-work.json` inside the run workspace.
+- **Centralized department sequencing** through `CompanyOrchestrator` and the
+  shared Company runtime contract; the daemon owns workspace/progress/proof
+  collection, but it does not define or duplicate department ordering rules.
 - **Status output** that can feed the COO/dashboard observability surface.
 
 ## Workflow file
@@ -74,6 +77,21 @@ The prompt body supports these placeholders:
 - `{{ issue.title }}`
 - `{{ issue.description }}`
 - `{{ issue.url }}`
+
+## Sequencing ownership
+
+The daemon is a surface over Company Mode, not a separate workflow engine. During
+a built-in runner pass it asks `CompanyOrchestrator` for the canonical department
+stage count and executes the selected department sequence through the
+orchestrator/runtime path. That path applies `run_company_task()` and the shared
+Company runtime sequence selection so CLI, chat, GUI, COO, and daemon entrypoints
+converge on the same workflow contract.
+
+Daemon-specific code remains responsible for issue claiming, workspace setup,
+hook execution, progress events, tracker comments, and proof-of-work aggregation.
+If a department is not registered for the current process, the runtime reports it
+as skipped and the daemon records that in the run risks instead of inventing a
+local fallback order.
 
 ## Local JSON tracker
 

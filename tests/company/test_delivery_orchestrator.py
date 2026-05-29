@@ -87,3 +87,38 @@ def test_orchestrator_blocks_devops_when_delivery_handoff_not_ready(tmp_path):
     assert ready is False
     assert orchestrator.active_project.phase == "delivery"
     assert events[-1].payload["critical_blockers"] == ["qa_report"]
+
+def test_orchestrator_owns_runtime_department_sequence_execution(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    orchestrator = CompanyOrchestrator(memory)
+    orchestrator.register(CaptureDepartment("engineering", memory))
+    orchestrator.register(CaptureDepartment("qa", memory))
+    seen = []
+
+    async def execute_department(task: CompanyTask, metadata):
+        seen.append((task.target, metadata["surface"], task.context["workspace"]))
+        return await orchestrator.departments[task.target].process(task)
+
+    result = asyncio.run(
+        orchestrator.run_department_sequence(
+            surface="daemon",
+            session_id="daemon:DEL-1",
+            task_id_prefix="DEL-1",
+            initial_origin="daemon",
+            initial_payload="prompt",
+            context={"workspace": str(tmp_path)},
+            execute_department=execute_department,
+            selected_departments=("engineering", "qa", "delivery"),
+        )
+    )
+
+    assert [deliverable.department for deliverable in result.deliverables] == [
+        "engineering",
+        "qa",
+    ]
+    assert result.skipped_departments == ["delivery"]
+    assert result.total_stages == 3
+    assert seen == [
+        ("engineering", "daemon", str(tmp_path)),
+        ("qa", "daemon", str(tmp_path)),
+    ]

@@ -404,6 +404,81 @@ def test_builtin_runner_partial_success_continues_and_emits_progress(tmp_path):
     assert progress[-1].payload["status"] == "partial_success"
 
 
+def test_builtin_runner_delegates_department_sequence_to_orchestrator(tmp_path):
+    import asyncio
+
+    from aider.company.coo import NanobotCOO
+    from aider.company.daemon.runner import (
+        CompanyDaemonRunner,
+        CompanyDaemonRunnerOptions,
+    )
+    from aider.company.department import Department
+    from aider.company.orchestrator import CompanyOrchestrator
+    from aider.company.schemas import CompanyTask, Deliverable
+    from aider.company.tracker import TrackerIssue
+    from aider.memory import ProjectMemory
+
+    class EngineeringDepartment(Department):
+        name = "engineering"
+
+        async def process(self, task: CompanyTask) -> Deliverable:
+            Path(task.context["workspace"]).joinpath("sequenced.txt").write_text(
+                "orchestrated", encoding="utf-8"
+            )
+            return Deliverable(
+                task_id=task.task_id,
+                department=self.name,
+                artifact_type=task.artifact_type,
+                payload="done",
+                status="success",
+                metadata={"context": task.context},
+            )
+
+    memory = ProjectMemory(str(tmp_path / "memory"))
+    orchestrator = CompanyOrchestrator(memory)
+    orchestrator.register(EngineeringDepartment(memory))
+    original_count = orchestrator.department_sequence_stage_count
+    original_run = orchestrator.run_department_sequence
+    calls = []
+
+    def count_wrapper(**kwargs):
+        calls.append(("count", kwargs))
+        return original_count(**kwargs)
+
+    async def run_wrapper(**kwargs):
+        calls.append(("run", kwargs))
+        return await original_run(**kwargs)
+
+    orchestrator.department_sequence_stage_count = count_wrapper
+    orchestrator.run_department_sequence = run_wrapper
+    coo = NanobotCOO(orchestrator=orchestrator)
+    runner = CompanyDaemonRunner(
+        orchestrator,
+        coo,
+        timeout_seconds=5,
+        options=CompanyDaemonRunnerOptions(departments=("engineering",)),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    RunWorkspaceManager._ensure_git_repo(workspace)
+
+    result = asyncio.run(
+        runner.execute(
+            "Implement delegated sequencing",
+            workspace,
+            TrackerIssue(identifier="AP-SEQ", title="Delegate sequencing"),
+        )
+    )
+
+    assert not hasattr(runner, "_selected_sequence")
+    assert [name for name, _kwargs in calls] == ["count", "run"]
+    assert calls[0][1]["selected_departments"] == ("engineering",)
+    assert calls[1][1]["surface"] == "daemon"
+    assert result["completed_stages"] == ["engineering"]
+    assert result["human_review_required"] is False
+    assert "sequenced.txt" in result["changed_files"]
+
+
 def test_company_daemon_cli_parses_runner_options(tmp_path):
     workflow_path = write_workflow(
         tmp_path, tmp_path / "issues.json", tmp_path / "runs"

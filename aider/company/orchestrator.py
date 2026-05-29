@@ -6,7 +6,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Collection, Dict, List, Optional, Union
 
 from aider.memory import ProjectMemory
 from aider.memory import communication as communication_memory
@@ -19,6 +19,12 @@ from aider.company.events import EventBus, event_from_legacy_message, global_eve
 from aider.company.lifecycle import LifecycleEngine
 from aider.company.playbook import PlaybookManager
 from aider.company.self_improvement import SelfImprovementService
+from aider.company.runtime import (
+    CompanySequenceResult,
+    DepartmentExecutor,
+    run_company_department_sequence,
+    select_company_department_sequence,
+)
 from aider.company.skills import CompanySkillManager
 from aider.company.project import Project
 from aider.company.state import CompanyStateManager
@@ -150,6 +156,82 @@ class CompanyOrchestrator:
                 agent_loop.model = dept_config.preferred_model
             elif loop_config is not None and hasattr(loop_config, "model"):
                 loop_config.model = dept_config.preferred_model
+
+    def select_department_sequence(
+        self,
+        *,
+        selected_departments: tuple[str, ...] = (),
+        max_iterations: int | None = None,
+    ) -> tuple[tuple[str, str], ...]:
+        """Return the canonical runtime-owned department sequence for this run.
+
+        Surfaces such as the daemon should ask the orchestrator for sequencing
+        metadata instead of importing or duplicating runtime sequencing rules.
+        """
+
+        return select_company_department_sequence(
+            selected_departments=selected_departments,
+            max_iterations=max_iterations,
+        )
+
+    def department_sequence_stage_count(
+        self,
+        *,
+        selected_departments: tuple[str, ...] = (),
+        max_iterations: int | None = None,
+    ) -> int:
+        """Return the number of stages in the canonical department sequence."""
+
+        return len(
+            self.select_department_sequence(
+                selected_departments=selected_departments,
+                max_iterations=max_iterations,
+            )
+        )
+
+    async def run_department_sequence(
+        self,
+        *,
+        surface: str,
+        session_id: str,
+        task_id_prefix: str,
+        initial_origin: str,
+        initial_payload: Any,
+        context: dict[str, Any] | None,
+        execute_department: DepartmentExecutor,
+        selected_departments: tuple[str, ...] = (),
+        max_iterations: int | None = None,
+        registered_departments: Collection[str] | None = None,
+        on_stage_start=None,
+        on_stage_success=None,
+        on_stage_error=None,
+    ) -> CompanySequenceResult:
+        """Run the canonical Company department sequence through the runtime.
+
+        This keeps sequencing decisions centralized under the orchestrator/runtime
+        contract while callers retain ownership of surface-specific progress and
+        proof-of-work aggregation.
+        """
+
+        return await run_company_department_sequence(
+            surface=surface,
+            session_id=session_id,
+            task_id_prefix=task_id_prefix,
+            initial_origin=initial_origin,
+            initial_payload=initial_payload,
+            context=context,
+            execute_department=execute_department,
+            selected_departments=selected_departments,
+            max_iterations=max_iterations,
+            registered_departments=(
+                self.departments.keys()
+                if registered_departments is None
+                else registered_departments
+            ),
+            on_stage_start=on_stage_start,
+            on_stage_success=on_stage_success,
+            on_stage_error=on_stage_error,
+        )
 
     def create_task(self, coro, label: Optional[str] = None) -> asyncio.Task:
         """Create and track an orchestrator-owned background task."""

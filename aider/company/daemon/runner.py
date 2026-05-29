@@ -10,11 +10,7 @@ from typing import Any
 
 from aider.company.coo import NanobotCOO
 from aider.company.orchestrator import CompanyOrchestrator
-from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
-from aider.company.runtime import (
-    run_company_department_sequence,
-    select_company_department_sequence,
-)
+from aider.company.schemas import CompanyEvent, EventMessage
 from aider.company.tracker import TrackerIssue
 
 
@@ -90,20 +86,24 @@ class CompanyDaemonRunner:
         devops_status: dict[str, Any] = {}
         risk_notes: list[str] = []
 
-        sequence = self._selected_sequence()
+        selected_departments = self.options.normalized_departments()
+        total_stages = self.orchestrator.department_sequence_stage_count(
+            selected_departments=selected_departments,
+            max_iterations=self.options.max_iterations,
+        )
         await self._emit_progress(
             issue,
             stage="start",
             status="running",
             completed_stages=completed_stages,
             failed_stages=failed_stages,
-            total_stages=len(sequence),
+            total_stages=total_stages,
         )
 
         departments = self.orchestrator.departments
         if self.options.dry_run:
             risk_notes.append("Runner dry-run requested; no departments were executed.")
-        elif departments and sequence:
+        elif departments:
             context: dict[str, Any] = {
                 "issue_id": issue.identifier,
                 "issue_title": issue.title,
@@ -192,7 +192,7 @@ class CompanyDaemonRunner:
                         total_stages=total_stages,
                     )
 
-            sequence_result = await run_company_department_sequence(
+            sequence_result = await self.orchestrator.run_department_sequence(
                 surface="daemon",
                 session_id=f"daemon:{issue.identifier}",
                 task_id_prefix=issue.identifier,
@@ -200,9 +200,8 @@ class CompanyDaemonRunner:
                 initial_payload=prompt,
                 context=context,
                 execute_department=_execute_department,
-                selected_departments=self.options.normalized_departments(),
+                selected_departments=selected_departments,
                 max_iterations=self.options.max_iterations,
-                registered_departments=departments.keys(),
                 on_stage_start=_stage_start,
                 on_stage_success=_stage_success,
                 on_stage_error=_stage_error,
@@ -212,12 +211,12 @@ class CompanyDaemonRunner:
                 risk_notes.append(
                     f"Skipped {department}; department is not registered."
                 )
+            if sequence_result.total_stages == 0:
+                risk_notes.append("No departments selected for this daemon runner pass.")
         elif not departments:
             risk_notes.append(
                 "No Company departments were registered; built-in runner rendered the prompt and captured workspace state."
             )
-        else:
-            risk_notes.append("No departments selected for this daemon runner pass.")
 
         changed_files = sorted(set(_git_changed_files(workspace)))
         diff = _git_diff(workspace)
@@ -251,7 +250,7 @@ class CompanyDaemonRunner:
             status=final_status,
             completed_stages=completed_stages,
             failed_stages=failed_stages,
-            total_stages=len(sequence),
+            total_stages=total_stages,
         )
         reinforcement_summary = {}
         try:
@@ -285,12 +284,6 @@ class CompanyDaemonRunner:
             "human_review_required": human_review_required,
             "reinforcement": reinforcement_summary,
         }
-
-    def _selected_sequence(self) -> tuple[tuple[str, str], ...]:
-        return select_company_department_sequence(
-            selected_departments=self.options.normalized_departments(),
-            max_iterations=self.options.max_iterations,
-        )
 
     def _record_progress(
         self,

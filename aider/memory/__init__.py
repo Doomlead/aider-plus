@@ -12,9 +12,18 @@ from .dream import consolidate_conversation
 from .evidence import SkillEvidenceCluster, collect_evidence_for_project
 from .project import ProjectMemory
 from .policy import RankingPolicy
+from .redaction import TenantMemoryPolicy, classify_text
 from .fabric import MemoryFabric
 from .records import MemoryQuery, MemoryRecord
-from .index import LocalTFIDFIndex, MemoryBackendAdapter, MemoryEmbeddingProvider, MemoryIndex, SQLiteFTSIndex
+from .index import (
+    DeterministicHashEmbeddingProvider,
+    LocalTFIDFIndex,
+    LocalVectorIndex,
+    MemoryBackendAdapter,
+    MemoryEmbeddingProvider,
+    MemoryIndex,
+    SQLiteFTSIndex,
+)
 from .store import MemoryStore
 from .repository import JsonMemoryRepository, MemoryRepository, SQLiteMemoryRepository
 from .retrieval import MemoryRetriever
@@ -38,12 +47,16 @@ __all__ = [
     "MemoryIndex",
     "MemoryBackendAdapter",
     "MemoryEmbeddingProvider",
+    "DeterministicHashEmbeddingProvider",
     "LocalTFIDFIndex",
+    "LocalVectorIndex",
     "SQLiteFTSIndex",
     "Message",
     "ProjectMemory",
     "SQLiteMemoryRepository",
     "RankingPolicy",
+    "TenantMemoryPolicy",
+    "classify_text",
     "MemoryFabric",
     "collect_evidence_for_project",
     "consolidate_conversation",

@@ -40,12 +40,53 @@ class SkillEvidenceCluster:
         return sorted(task_ids)
 
     @property
-    def confidence(self) -> float:
-        successful = self.outcome == "success"
-        base = 0.55 if successful else 0.4
-        return min(
-            0.95, base + (0.08 * len(self.records)) + (0.04 * len(self.procedure_steps))
+    def evidence_score(self) -> float:
+        """Score whether evidence is strong enough for shared/cross-project use."""
+
+        if self.outcome != "success":
+            return 0.0
+        task_count = len(self.source_tasks)
+        project_count = len(
+            {
+                str(record.project_id or record.metadata.get("project_id") or "")
+                for record in self.records
+                if (record.project_id or record.metadata.get("project_id"))
+            }
         )
+        department_count = len(
+            {
+                str(
+                    record.department
+                    or record.metadata.get("department")
+                    or self.department
+                )
+                for record in self.records
+            }
+        )
+        successful_uses = sum(
+            int(record.successful_uses or 0) for record in self.records
+        )
+        failed_uses = sum(int(record.failed_uses or 0) for record in self.records)
+        score = 0.35
+        score += min(0.2, 0.04 * len(self.records))
+        score += min(0.15, 0.05 * task_count)
+        score += min(0.15, 0.05 * project_count)
+        score += min(0.1, 0.03 * department_count)
+        score += min(0.1, 0.02 * successful_uses)
+        score -= min(0.25, 0.05 * failed_uses)
+        return round(max(0.0, min(0.99, score)), 4)
+
+    @property
+    def confidence(self) -> float:
+        return self.evidence_score
+
+    def allows_cross_project_promotion(self, *, threshold: float = 0.72) -> bool:
+        project_ids = {
+            str(record.project_id or record.metadata.get("project_id") or "")
+            for record in self.records
+            if (record.project_id or record.metadata.get("project_id"))
+        }
+        return len(project_ids) >= 2 and self.evidence_score >= threshold
 
 
 def collect_evidence_for_project(

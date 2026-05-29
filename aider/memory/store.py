@@ -8,6 +8,7 @@ from .index import LocalTFIDFIndex, MemoryIndex
 from .metrics import summarize_memory_metrics
 from .project import ProjectMemory
 from .records import MemoryQuery, MemoryRecord, ensure_record, utc_now_iso
+from .redaction import TenantMemoryPolicy, classify_text, enforce_tenant_policy
 from .scopes import scope_matches
 from .visibility import filter_visible, validate_visibility
 
@@ -15,14 +16,21 @@ from .visibility import filter_visible, validate_visibility
 class MemoryStore:
     """Thin service wrapper over ``ProjectMemory`` for local-first records."""
 
-    def __init__(self, project_memory: ProjectMemory, index: MemoryIndex | None = None):
+    def __init__(
+        self,
+        project_memory: ProjectMemory,
+        index: MemoryIndex | None = None,
+        tenant_policy: TenantMemoryPolicy | None = None,
+    ):
         self.project_memory = project_memory
+        self.tenant_policy = tenant_policy or TenantMemoryPolicy()
         self.project_memory._ensure_schema()
         self.index = index or LocalTFIDFIndex()
         self.rebuild_index()
 
     def append_record(self, record: MemoryRecord | Dict[str, Any]) -> MemoryRecord:
         memory_record = ensure_record(record)
+        self._classify_and_enforce(memory_record)
         memory_record.validate(allow_legacy_visibility=False)
         memory = self._memory_namespace()
         records = memory.setdefault("records", [])
@@ -396,6 +404,26 @@ class MemoryStore:
         backup_path.write_text(
             json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8"
         )
+
+    def _classify_and_enforce(self, record: MemoryRecord) -> None:
+        classification = classify_text(record.content, self.tenant_policy)
+        metadata = dict(record.metadata or {})
+        if classification.contains_sensitive_data or classification.policy_violations:
+            for key, value in classification.to_metadata().items():
+                if key in {
+                    "contains_pii",
+                    "contains_secret",
+                    "contains_sensitive_data",
+                }:
+                    metadata[key] = bool(metadata.get(key) or value)
+                elif value and key not in metadata:
+                    metadata[key] = value
+        if classification.redacted_text and not self.tenant_policy.allow_sensitive_data:
+            record.content = classification.redacted_text
+            metadata["redacted"] = True
+            metadata["redaction_source"] = "memory_classifier"
+        enforce_tenant_policy(metadata=metadata, policy=self.tenant_policy)
+        record.metadata = metadata
 
     def _increment_metric(self, key: str, amount: int = 1) -> None:
         observability = self.project_memory.data.setdefault("observability", {})

@@ -33,10 +33,33 @@ DevOps changes should preserve these behaviors:
   possible;
 - capture command output, artifact metadata, deployment provider results, and
   rollback instructions;
+- prepare a dry-run preview before provider execution, including planned
+  commands, approval requirements, log capture destinations, and rollback
+  recovery data;
 - record release status in audit/proof-of-work surfaces;
 - route high-risk actions through approval gates;
 - keep partial-success and retry evidence visible to the daemon, COO, and GUI
   status surfaces.
+
+## Supported deployment providers
+
+DevOps can run local manifest recording plus provider commands for Vercel,
+Railway, Fly.io, AWS, Docker Compose, Netlify, Render, Cloudflare Pages,
+Kubernetes, and Helm when the provider is enabled in
+`devops_deployment_providers`. Provider commands are treated as high-risk and
+must pass the appropriate approval gates before execution; production provider
+deploys are blocked before command execution when approval metadata is missing.
+
+Every deployment result records rollback metadata alongside the legacy rollback
+command/url fields. The metadata captures the provider/environment, current and
+previous artifacts, owner, Delivery rollback plan presence, validation steps,
+and generation timestamp so dashboards and operators have enough context to
+preview or execute recovery safely.
+
+Set `devops_dry_run` or `dry_run` on a DevOps task to build the artifact and
+return a deployment preview without running provider commands. The preview shows
+the commands that would run, whether approval is required/granted, where logs
+would be captured/uploaded, and which rollback metadata would be attached.
 
 ## Focused tests
 

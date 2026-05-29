@@ -386,7 +386,9 @@ def test_devops_critical_environment_requires_environment_approval(tmp_path):
     deliverable = asyncio.run(department.process(task))
 
     assert deliverable.status == "failure"
-    assert "High-risk DevOps command requires approval" in deliverable.payload["error"]
+    assert (
+        "Production DevOps deployment requires approval" in deliverable.payload["error"]
+    )
 
 
 def test_devops_mocked_vercel_deploy_end_to_end_records_observability(tmp_path):

@@ -674,6 +674,8 @@ class DeploymentResult:
     target: Optional[DeploymentTarget] = None
     logs_url: Optional[str] = None
     rollback_command: Optional[str] = None
+    rollback_metadata: dict[str, Any] = field(default_factory=dict)
+    dry_run_preview: dict[str, Any] = field(default_factory=dict)
     deployment_notes: str = ""
     deployed_at: Optional[str] = None
     deployment_logs: str = ""
@@ -692,6 +694,8 @@ class DeploymentResult:
             "logs_url": self.logs_url,
             "rollback_url": self.rollback_url,
             "rollback_command": self.rollback_command,
+            "rollback_metadata": dict(self.rollback_metadata),
+            "dry_run_preview": dict(self.dry_run_preview),
             "deployment_notes": self.deployment_notes,
             "deployed_at": self.deployed_at,
             "build_artifact": self.build_artifact.to_dict(),
@@ -729,6 +733,8 @@ class DeploymentResult:
                 if d.get("rollback_command") is not None
                 else None
             ),
+            rollback_metadata=dict(d.get("rollback_metadata", {}) or {}),
+            dry_run_preview=dict(d.get("dry_run_preview", {}) or {}),
             deployment_notes=str(d.get("deployment_notes", "")),
             deployed_at=(
                 str(d.get("deployed_at")) if d.get("deployed_at") is not None else None

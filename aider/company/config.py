@@ -52,6 +52,11 @@ class AgentConfig:
             "fly",
             "aws",
             "docker-compose",
+            "netlify",
+            "render",
+            "cloudflare-pages",
+            "kubernetes",
+            "helm",
         ]
     )
     devops_artifact_upload_target: str = ""

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional
 
 from .index import LocalTFIDFIndex, MemoryIndex
+from .indexes import build_canonical_indexes
 from .metrics import summarize_memory_metrics
 from .project import ProjectMemory
 from .records import MemoryQuery, MemoryRecord, ensure_record, utc_now_iso
@@ -35,6 +36,7 @@ class MemoryStore:
         memory = self._memory_namespace()
         records = memory.setdefault("records", [])
         records.append(memory_record.to_dict())
+        self._refresh_canonical_indexes(memory)
         self.project_memory.update({"memory": memory})
         self.project_memory.persist()
         self.add_to_index(memory_record)
@@ -60,6 +62,15 @@ class MemoryStore:
         self.index.rebuild(
             [MemoryRecord.from_dict(item) for item in self._record_dicts()]
         )
+
+    def rebuild_canonical_indexes(self) -> dict[str, Any]:
+        """Rebuild persisted record lookup indexes from authoritative records."""
+
+        memory = self._memory_namespace()
+        indexes = self._refresh_canonical_indexes(memory)
+        self.project_memory.update({"memory": memory})
+        self.project_memory.persist()
+        return indexes
 
     def add_to_index(self, record: MemoryRecord) -> None:
         self.index.add(record)
@@ -87,7 +98,9 @@ class MemoryStore:
                 metadata.get("reinforcement_signal") or 0
             ) + int(delta)
             item["metadata"] = metadata
-            self.project_memory.update({"memory": self._memory_namespace()})
+            memory = self._memory_namespace()
+            self._refresh_canonical_indexes(memory)
+            self.project_memory.update({"memory": memory})
             self.project_memory.persist()
             return dict(item)
         return None
@@ -128,7 +141,9 @@ class MemoryStore:
             metadata["outcome_trail"] = trail[-50:]
             record.metadata = metadata
             item.update(record.to_dict())
-            self.project_memory.update({"memory": self._memory_namespace()})
+            memory = self._memory_namespace()
+            self._refresh_canonical_indexes(memory)
+            self.project_memory.update({"memory": memory})
             self.project_memory.persist()
             return dict(item)
         return None
@@ -141,7 +156,9 @@ class MemoryStore:
             if item_id != record_id:
                 continue
             item["metadata"] = dict(metadata or {})
-            self.project_memory.update({"memory": self._memory_namespace()})
+            memory = self._memory_namespace()
+            self._refresh_canonical_indexes(memory)
+            self.project_memory.update({"memory": memory})
             self.project_memory.persist()
             return dict(item)
         return None
@@ -203,6 +220,7 @@ class MemoryStore:
         if pruned:
             memory = self._memory_namespace()
             memory["records"] = kept
+            self._refresh_canonical_indexes(memory)
             self.project_memory.update({"memory": memory})
             self.project_memory.persist()
             self.rebuild_index()
@@ -232,6 +250,7 @@ class MemoryStore:
             )
             memory = self._memory_namespace()
             memory["records"] = trimmed
+            self._refresh_canonical_indexes(memory)
             self.project_memory.update({"memory": memory})
             self.project_memory.persist()
             self.rebuild_index()
@@ -321,6 +340,7 @@ class MemoryStore:
             repaired["corrupt_records_backed_up"] = len(corrupt)
         if changed:
             memory["records"] = valid
+            self._refresh_canonical_indexes(memory)
             self.project_memory.update({"memory": memory})
             self.project_memory.persist()
             self.rebuild_index()
@@ -377,6 +397,7 @@ class MemoryStore:
         if removed:
             memory = self._memory_namespace()
             memory["records"] = kept
+            self._refresh_canonical_indexes(memory)
             self.project_memory.update({"memory": memory})
             self.project_memory.persist()
             self.rebuild_index()
@@ -449,6 +470,7 @@ class MemoryStore:
         memory.setdefault("threads", [])
         memory.setdefault("migration_log", [])
         memory.setdefault("corrupt_backup", [])
+        memory.setdefault("indexes", {})
         if not isinstance(memory["records"], list):
             memory["records"] = []
         if not isinstance(memory["threads"], list):
@@ -457,7 +479,17 @@ class MemoryStore:
             memory["migration_log"] = []
         if not isinstance(memory["corrupt_backup"], list):
             memory["corrupt_backup"] = []
+        if not isinstance(memory["indexes"], dict):
+            memory["indexes"] = {}
+        if not memory["indexes"] and memory["records"]:
+            self._refresh_canonical_indexes(memory)
         return memory
+
+    def _refresh_canonical_indexes(self, memory: Dict[str, Any]) -> dict[str, Any]:
+        indexes = build_canonical_indexes(memory.get("records", []))
+        memory["indexes"] = indexes
+        memory.setdefault("migration_log", [])
+        return indexes
 
     def _record_dicts(self) -> Iterable[Dict[str, Any]]:
         for item in self._memory_namespace().get("records", []):
@@ -483,7 +515,29 @@ class MemoryStore:
             ]
         if query.kind:
             filtered = [record for record in filtered if record.kind == query.kind]
+        if getattr(query, "department", None):
+            filtered = [
+                record for record in filtered if record.department == query.department
+            ]
+        if getattr(query, "skill", None):
+            filtered = [
+                record for record in filtered if _record_skill(record) == query.skill
+            ]
         if query.tags:
             required = set(query.tags)
             filtered = [record for record in filtered if required.issubset(record.tags)]
         return filtered
+
+
+def _record_skill(record: MemoryRecord) -> str | None:
+    if str(record.scope).startswith("skill:"):
+        return str(record.scope).split(":", 1)[1]
+    for source in (record.skill_evidence, record.metadata):
+        if not isinstance(source, dict):
+            continue
+        value = (
+            source.get("skill") or source.get("skill_id") or source.get("skill_name")
+        )
+        if value:
+            return str(value)
+    return None

@@ -64,12 +64,12 @@ def test_migration_v4_to_v5_safe_backup(tmp_path):
     migrator = ProjectMemoryMigrator(ProjectMemory.DEFAULTS)
     data = {"schema_version": 4, "memory": {"records": [], "threads": []}}
     migrated = migrator.migrate(data)
-    assert migrated["schema_version"] == 7
+    assert migrated["schema_version"] == 8
     assert "memory_metrics" in migrated["observability"]
     assert migrated["memory"]["migration_log"][0]["from_version"] == 4
     assert migrated["memory"]["migration_log"][0]["to_version"] == 5
-    assert migrated["memory"]["migration_log"][-1]["from_version"] == 6
-    assert migrated["memory"]["migration_log"][-1]["to_version"] == 7
+    assert migrated["memory"]["migration_log"][-1]["from_version"] == 7
+    assert migrated["memory"]["migration_log"][-1]["to_version"] == 8
     assert migrated["memory"]["migration_log"][-1]["records_processed"] == 0
 
 
@@ -108,9 +108,10 @@ def test_migration_v6_normalizes_legacy_visibility_and_channel_pair(tmp_path):
     assert record["metadata"] == {"custom": True}
     assert migrated["migration"]["v5_visibility_records_normalized"] >= 1
     assert migrated["migration"]["v6_legacy_rewrites"] == 0
-    assert len(migrated["memory"]["migration_log"]) == 3
+    assert len(migrated["memory"]["migration_log"]) == 4
+    assert migrated["memory"]["indexes"]["scope"]["channel"] == ["r1"]
     remigrated = migrator.migrate(migrated)
-    assert len(remigrated["memory"]["migration_log"]) == 3
+    assert len(remigrated["memory"]["migration_log"]) == 4
 
 
 def test_migration_v5_quarantines_invalid_records_after_validation(tmp_path, caplog):
@@ -147,6 +148,53 @@ def test_migration_v5_quarantines_invalid_records_after_validation(tmp_path, cap
     assert migrated["migration"]["v5_corrupt_records_quarantined"] == 1
     assert migrated["memory"]["corrupt_backup"][-1]["records"][0]["id"] == "bad"
     assert "Quarantining corrupt v5 memory record" in caplog.text
+
+
+def test_canonical_indexes_cover_scope_kind_department_and_skill(tmp_path):
+    store = MemoryStore(ProjectMemory(str(tmp_path)))
+    qa = store.append_record(
+        MemoryRecord(
+            content="qa release checklist",
+            kind="playbook",
+            scope="department:qa",
+            department="qa",
+            skill_evidence={"skill": "qa/release-check"},
+        )
+    )
+    engineering = store.append_record(
+        MemoryRecord(
+            content="engineering deployment checklist",
+            kind="playbook",
+            scope="skill:engineering/deploy",
+            department="engineering",
+        )
+    )
+
+    indexes = store.project_memory.data["memory"]["indexes"]
+
+    assert indexes["record_count"] == 2
+    assert indexes["scope"]["department:qa"] == [qa.id]
+    assert indexes["scope"]["skill:engineering/deploy"] == [engineering.id]
+    assert indexes["kind"]["playbook"] == sorted([qa.id, engineering.id])
+    assert indexes["department"]["qa"] == [qa.id]
+    assert indexes["skill"]["qa/release-check"] == [qa.id]
+    assert indexes["skill"]["engineering/deploy"] == [engineering.id]
+    assert [r.id for r in store.query_records(department="qa")] == [qa.id]
+    assert [r.id for r in store.query_records(skill="engineering/deploy")] == [
+        engineering.id
+    ]
+
+
+def test_rebuild_canonical_indexes_restores_missing_index_namespace(tmp_path):
+    memory = ProjectMemory(str(tmp_path))
+    store = MemoryStore(memory)
+    record = store.append_record(MemoryRecord(content="canonical", kind="note"))
+    memory.data["memory"]["indexes"] = {}
+
+    rebuilt = store.rebuild_canonical_indexes()
+
+    assert rebuilt["kind"]["note"] == [record.id]
+    assert memory.data["memory"]["indexes"]["record_count"] == 1
 
 
 def test_backfill_legacy_records_is_retired_and_noops(tmp_path):

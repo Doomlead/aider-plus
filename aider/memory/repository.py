@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 logger = logging.getLogger(__name__)
 
 
@@ -59,6 +59,9 @@ class ProjectMemoryMigrator:
         if version < 7:
             migrated = self._migrate_to_v7(migrated)
             version = 7
+        if version < 8:
+            migrated = self._migrate_to_v8(migrated)
+            version = 8
 
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         self._ensure_defaults(migrated)
@@ -217,7 +220,6 @@ class ProjectMemoryMigrator:
         )
         return data
 
-
     def _migrate_to_v7(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Add compaction marker namespace and metrics-safe defaults."""
 
@@ -234,6 +236,28 @@ class ProjectMemoryMigrator:
             }
         )
         return data
+
+    def _migrate_to_v8(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Materialize canonical record lookup indexes and migration metadata."""
+
+        from .indexes import build_canonical_indexes
+
+        memory = self._ensure_memory_namespace(data)
+        records = memory.get("records", [])
+        memory["indexes"] = build_canonical_indexes(
+            records if isinstance(records, list) else []
+        )
+        memory.setdefault("migration_log", []).append(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "from_version": 7,
+                "to_version": 8,
+                "records_processed": len(records) if isinstance(records, list) else 0,
+                "indexes_initialized": sorted(["scope", "kind", "department", "skill"]),
+            }
+        )
+        return data
+
     def _normalize_memory_records_for_v5(self, data: Dict[str, Any]) -> int:
         """Rewrite legacy aliases, validate records, and quarantine corrupt rows."""
 
@@ -333,6 +357,8 @@ class ProjectMemoryMigrator:
             memory["corrupt_backup"] = []
         if not isinstance(memory.get("compaction_markers"), list):
             memory["compaction_markers"] = []
+        if not isinstance(memory.get("indexes"), dict):
+            memory["indexes"] = {}
         return memory
 
     def _append_corrupt_backup(
@@ -362,6 +388,10 @@ class ProjectMemoryMigrator:
             memory["migration_log"] = []
         if not isinstance(memory.get("corrupt_backup"), list):
             memory["corrupt_backup"] = []
+        if not isinstance(memory.get("compaction_markers"), list):
+            memory["compaction_markers"] = []
+        if not isinstance(memory.get("indexes"), dict):
+            memory["indexes"] = {}
         observability = data.get("observability")
         if not isinstance(observability, dict):
             observability = {}

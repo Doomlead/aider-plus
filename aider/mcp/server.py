@@ -20,6 +20,11 @@ class BuiltinMCPTool:
     name: str
     permission_level: str
     description: str
+    approval_reason: str = "Read-only inspection; no shared approval gate is required."
+
+    @property
+    def requires_approval(self) -> bool:
+        return self.permission_level == "requires_approval"
 
 
 BUILTIN_MCP_TOOLS: tuple[BuiltinMCPTool, ...] = (
@@ -36,14 +41,19 @@ BUILTIN_MCP_TOOLS: tuple[BuiltinMCPTool, ...] = (
         "resolve_approval",
         "requires_approval",
         "Resolve an existing human approval gate.",
+        "Changes approval state, so it must route through shared human approvals.",
     ),
     BuiltinMCPTool(
-        "submit_headless_task", "requires_approval", "Submit a headless Aider task."
+        "submit_headless_task",
+        "requires_approval",
+        "Submit a headless Aider task.",
+        "Starts work that can modify the repository or external systems.",
     ),
     BuiltinMCPTool(
         "submit_company_task",
         "requires_approval",
         "Submit work into the Company orchestrator.",
+        "Delegates new Company work and must be visible to governance/audit trails.",
     ),
     BuiltinMCPTool("list_skills", "read_only", "List approved procedural skills."),
     BuiltinMCPTool("get_skill", "read_only", "Read one approved skill by name."),
@@ -56,6 +66,7 @@ BUILTIN_MCP_TOOLS: tuple[BuiltinMCPTool, ...] = (
         "approve_skill_proposal",
         "requires_approval",
         "Open/route approval for a pending skill proposal.",
+        "Approves institutional knowledge changes, so a human gate is required.",
     ),
     BuiltinMCPTool(
         "get_recent_daemon_runs", "read_only", "Inspect recent Company daemon runs."
@@ -64,6 +75,7 @@ BUILTIN_MCP_TOOLS: tuple[BuiltinMCPTool, ...] = (
         "trigger_daemon_run",
         "requires_approval",
         "Request a daemon run for an issue id.",
+        "Triggers autonomous work that may write code, comments, or status updates.",
     ),
     BuiltinMCPTool(
         "get_knowledge_overview",
@@ -78,18 +90,45 @@ BUILTIN_MCP_TOOLS: tuple[BuiltinMCPTool, ...] = (
         "read_only",
         "Return Company status without mutating state.",
     ),
-    BuiltinMCPTool("codegraph_status", "read_only", "Inspect the native code graph index."),
+    BuiltinMCPTool(
+        "codegraph_status", "read_only", "Inspect the native code graph index."
+    ),
     BuiltinMCPTool("codegraph_search", "read_only", "Search indexed code symbols."),
-    BuiltinMCPTool("codegraph_context", "read_only", "Build graph-aware code context for a query."),
-    BuiltinMCPTool("codegraph_callers", "read_only", "Find callers/referencers for a symbol or file."),
-    BuiltinMCPTool("codegraph_callees", "read_only", "Find callees/dependencies for a symbol or file."),
-    BuiltinMCPTool("codegraph_impact", "read_only", "Find files and routes impacted by a symbol or file."),
-    BuiltinMCPTool("codegraph_affected", "read_only", "Suggest affected tests for changed files."),
+    BuiltinMCPTool(
+        "codegraph_context", "read_only", "Build graph-aware code context for a query."
+    ),
+    BuiltinMCPTool(
+        "codegraph_callers",
+        "read_only",
+        "Find callers/referencers for a symbol or file.",
+    ),
+    BuiltinMCPTool(
+        "codegraph_callees",
+        "read_only",
+        "Find callees/dependencies for a symbol or file.",
+    ),
+    BuiltinMCPTool(
+        "codegraph_impact",
+        "read_only",
+        "Find files and routes impacted by a symbol or file.",
+    ),
+    BuiltinMCPTool(
+        "codegraph_affected", "read_only", "Suggest affected tests for changed files."
+    ),
 )
 
 
 def list_builtin_mcp_tools() -> list[dict[str, str]]:
-    return [tool.__dict__.copy() for tool in BUILTIN_MCP_TOOLS]
+    return [
+        {
+            "name": tool.name,
+            "permission_level": tool.permission_level,
+            "description": tool.description,
+            "approval_reason": tool.approval_reason,
+            "requires_approval": str(tool.requires_approval).lower(),
+        }
+        for tool in BUILTIN_MCP_TOOLS
+    ]
 
 
 @dataclass
@@ -257,7 +296,13 @@ class AiderPlusMCPServer:
         )
         decision = await self._request_human_approval(task)
         if not decision.get("approved"):
-            return {"status": "rejected", "proposal_id": id, "feedback": feedback}
+            return {
+                "status": "rejected",
+                "proposal_id": id,
+                "feedback": feedback,
+                "audit_message": self._denied_audit_message(task, decision),
+                "denial_reason": decision.get("reason"),
+            }
         if self.orchestrator is not None and hasattr(self.orchestrator, "state"):
             from aider.company.knowledge import KnowledgeManager
 
@@ -282,7 +327,12 @@ class AiderPlusMCPServer:
         )
         decision = await self._request_human_approval(task)
         if not decision.get("approved"):
-            return {"status": "rejected", "issue_id": issue_id}
+            return {
+                "status": "rejected",
+                "issue_id": issue_id,
+                "audit_message": self._denied_audit_message(task, decision),
+                "denial_reason": decision.get("reason"),
+            }
         daemon = (
             getattr(self.orchestrator, "daemon", None) if self.orchestrator else None
         )
@@ -342,6 +392,18 @@ class AiderPlusMCPServer:
         }
 
     async def submit_headless_task(self, prompt: str) -> dict[str, Any]:
+        approval_task = self._approval_task(
+            f"headless-task-{uuid.uuid4().hex[:8]}",
+            "headless_task_approval",
+            {"prompt": prompt},
+        )
+        decision = await self._request_human_approval(approval_task)
+        if not decision.get("approved"):
+            return {
+                "status": "rejected",
+                "audit_message": self._denied_audit_message(approval_task, decision),
+                "denial_reason": decision.get("reason"),
+            }
         if self.headless_handler is None:
             raise RuntimeError("No headless task handler is configured")
         result = self.headless_handler(prompt)
@@ -356,6 +418,18 @@ class AiderPlusMCPServer:
         target: str = "engineering",
         artifact_type: str = "raw_prompt",
     ) -> dict[str, Any]:
+        approval_task = self._approval_task(
+            f"company-task-{uuid.uuid4().hex[:8]}",
+            "company_task_approval",
+            {"prompt": prompt, "target": target, "artifact_type": artifact_type},
+        )
+        decision = await self._request_human_approval(approval_task)
+        if not decision.get("approved"):
+            return {
+                "status": "rejected",
+                "audit_message": self._denied_audit_message(approval_task, decision),
+                "denial_reason": decision.get("reason"),
+            }
         task = CompanyTask(
             task_id=f"mcp-{uuid.uuid4().hex[:12]}",
             origin="mcp",
@@ -446,8 +520,27 @@ class AiderPlusMCPServer:
                     :1500
                 ],
                 "handoff_to": "engineering",
+                "approval_reason": self._approval_reason(gate_name),
             },
         )
+
+    def _approval_reason(self, gate_name: str) -> str:
+        if gate_name == "skill_proposal_approval":
+            return (
+                "Approves institutional knowledge changes, so a human gate is required."
+            )
+        if gate_name == "daemon_run_approval":
+            return "Triggers autonomous work that may write code, comments, or status updates."
+        if gate_name == "headless_task_approval":
+            return "Starts a headless Aider task that can modify the repository."
+        if gate_name == "company_task_approval":
+            return "Submits new Company work and must be visible to governance/audit trails."
+        return "Mutates Company or repository state and must use shared approvals."
+
+    def _denied_audit_message(self, task: CompanyTask, decision: dict[str, Any]) -> str:
+        reason = decision.get("reason") or "No denial reason provided."
+        gate = (task.context or {}).get("gate_name", task.artifact_type)
+        return f"Denied MCP operation {task.task_id} ({gate}): {reason}"
 
     async def _request_human_approval(self, task: CompanyTask) -> dict[str, Any]:
         approvals = (

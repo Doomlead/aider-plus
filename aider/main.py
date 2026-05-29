@@ -641,6 +641,7 @@ def main(argv=None, input=None, output=None, force_git_root=None, return_coder=F
                     f"- {tool['name']} [{tool['permission_level']}] "
                     f"{tool['description']}"
                 )
+                print(f"  why: {tool['approval_reason']}")
             return 0
         print("Usage: aider mcp tools")
         return 1

@@ -5,6 +5,7 @@ import pytest
 
 from aider.agent.loop import AiderAgentLoop
 from aider.agent.tools import ToolPermissionError, ToolRegistry
+from aider.company.schemas import ApprovalDecision
 from aider.mcp import (
     AiderPlusMCPServer,
     AiderPlusMCPServerConfig,
@@ -35,8 +36,10 @@ class FakeDepartment:
 
 
 class FakeManager(MCPClientManager):
-    def __init__(self, config=None, approval_handler=None):
-        super().__init__(config, approval_handler=approval_handler)
+    def __init__(self, config=None, approval_handler=None, approval_manager=None):
+        super().__init__(
+            config, approval_handler=approval_handler, approval_manager=approval_manager
+        )
         self.server = MCPServerConfig(name="github", allowed_tools=["list_issues"])
         self.tool = MCPToolRef(
             server_name="github",
@@ -130,6 +133,62 @@ def test_mcp_manager_runs_approval_handler_for_gated_tools():
     assert approvals[0]["aider_tool"] == "mcp__github__list_issues"
 
 
+def test_mcp_manager_skips_approval_handler_for_read_only_tools():
+    approvals = []
+
+    async def approve(request):
+        approvals.append(request)
+        return False
+
+    manager = FakeManager(MCPConfig(enabled=True), approval_handler=approve)
+    manager.tool.policy = MCPToolPolicy(read_only=True, requires_approval=False)
+
+    result = asyncio.run(manager.call_tool("github", "list_issues", {"state": "open"}))
+
+    assert result["arguments"] == {"state": "open"}
+    assert approvals == []
+
+
+def test_mcp_manager_denial_includes_audit_ready_reason():
+    async def deny(request):
+        return {"approved": False, "reason": "Needs maintenance window."}
+
+    manager = FakeManager(MCPConfig(enabled=True), approval_handler=deny)
+    manager.tool.policy = MCPToolPolicy(requires_approval=True)
+
+    with pytest.raises(PermissionError, match="Denied MCP operation") as excinfo:
+        asyncio.run(manager.call_tool("github", "list_issues", {"state": "closed"}))
+
+    message = str(excinfo.value)
+    assert "mcp__github__list_issues" in message
+    assert "Needs maintenance window" in message
+
+
+def test_mcp_manager_approval_manager_request_explains_why_tool_is_gated():
+    class FakeApprovalManager:
+        def __init__(self):
+            self.tasks = []
+
+        async def create_request(self, task):
+            self.tasks.append(task)
+            return ApprovalDecision(approved=True)
+
+        def close_request(self, task_id):
+            self.closed = task_id
+
+    approvals = FakeApprovalManager()
+    manager = FakeManager(MCPConfig(enabled=True), approval_manager=approvals)
+    manager.tool.policy = MCPToolPolicy(requires_approval=True)
+
+    asyncio.run(manager.call_tool("github", "list_issues", {"state": "closed"}))
+
+    assert (
+        approvals.tasks[0]
+        .context["approval_reason"]
+        .startswith("mcp__github__list_issues on MCP server github is marked")
+    )
+
+
 def test_non_aider_tool_calls_keep_original_arguments():
     assert AiderAgentLoop._tool_call_arguments(
         "mcp__github__list_issues", {"state": "open"}, 2
@@ -167,6 +226,45 @@ def test_safe_mcp_server_exposes_status_memory_and_approval_resolution(tmp_path)
     assert memory.data["pending_approvals"][0]["status"] == "approved"
 
 
+def test_builtin_mcp_tool_listing_explains_approval_reasons():
+    from aider.mcp.server import list_builtin_mcp_tools
+
+    tools = {tool["name"]: tool for tool in list_builtin_mcp_tools()}
+
+    assert tools["list_skills"]["permission_level"] == "read_only"
+    assert "no shared approval gate" in tools["list_skills"]["approval_reason"]
+    assert tools["trigger_daemon_run"]["permission_level"] == "requires_approval"
+    assert "autonomous work" in tools["trigger_daemon_run"]["approval_reason"]
+
+
+def test_safe_mcp_server_denied_mutating_tool_returns_audit_message(tmp_path):
+    class DenyingApprovals:
+        async def create_request(self, task):
+            self.task = task
+            return ApprovalDecision(approved=False, reason="Freeze window active.")
+
+        def close_request(self, task_id):
+            self.closed = task_id
+
+    class Orchestrator:
+        approvals = DenyingApprovals()
+
+    server = AiderPlusMCPServer(
+        AiderPlusMCPServerConfig(repo_path=str(tmp_path)), orchestrator=Orchestrator()
+    )
+
+    result = asyncio.run(server.trigger_daemon_run("AP-9"))
+
+    assert result["status"] == "rejected"
+    assert result["denial_reason"] == "Freeze window active."
+    assert "Denied MCP operation" in result["audit_message"]
+    assert "daemon_run_approval" in result["audit_message"]
+    assert (
+        Orchestrator.approvals.task.context["approval_reason"]
+        == "Triggers autonomous work that may write code, comments, or status updates."
+    )
+
+
 def test_safe_mcp_server_submits_company_tasks(tmp_path):
     submitted = []
 
@@ -174,13 +272,30 @@ def test_safe_mcp_server_submits_company_tasks(tmp_path):
         submitted.append(task)
         return {"ok": True}
 
+    class ApprovingApprovals:
+        async def create_request(self, task):
+            self.task = task
+            return ApprovalDecision(approved=True)
+
+        def close_request(self, task_id):
+            self.closed = task_id
+
+    class Orchestrator:
+        approvals = ApprovingApprovals()
+
     server = AiderPlusMCPServer(
-        AiderPlusMCPServerConfig(repo_path=str(tmp_path)), company_handler=handler
+        AiderPlusMCPServerConfig(repo_path=str(tmp_path)),
+        orchestrator=Orchestrator(),
+        company_handler=handler,
     )
 
     result = asyncio.run(server.submit_company_task("build it", target="product"))
 
     assert result["status"] == "submitted"
+    assert (
+        Orchestrator.approvals.task.context["approval_reason"]
+        == "Submits new Company work and must be visible to governance/audit trails."
+    )
     assert submitted[0].origin == "mcp"
     assert submitted[0].target == "product"
     assert submitted[0].payload == "build it"

@@ -246,6 +246,7 @@ class MCPClientManager:
             "aider_tool": tool.aider_name,
             "arguments": arguments,
             "read_only": tool.policy.read_only,
+            "approval_reason": self._approval_reason(server, tool),
         }
         if self.approval_manager is not None:
             task = CompanyTask(
@@ -260,13 +261,16 @@ class MCPClientManager:
                     "approver_role": "ceo",
                     "artifact_preview": str(request)[:1500],
                     "handoff_to": "engineering",
+                    "approval_reason": request["approval_reason"],
                 },
             )
             decision = await self.approval_manager.create_request(task)
             if hasattr(self.approval_manager, "close_request"):
                 self.approval_manager.close_request(task.task_id)
             if not bool(getattr(decision, "approved", decision)):
-                raise PermissionError(f"MCP tool call rejected: {tool.aider_name}")
+                raise PermissionError(
+                    self._denied_message(tool, getattr(decision, "reason", None))
+                )
             return
         if self.approval_handler is None:
             raise PermissionError(
@@ -275,8 +279,32 @@ class MCPClientManager:
         approved = self.approval_handler(request)
         if inspect.isawaitable(approved):
             approved = await approved
-        if not approved:
-            raise PermissionError(f"MCP tool call rejected: {tool.aider_name}")
+        approved_bool, reason = self._approval_result(approved)
+        if not approved_bool:
+            raise PermissionError(self._denied_message(tool, reason))
+
+    @staticmethod
+    def _approval_result(result: Any) -> tuple[bool, str | None]:
+        if isinstance(result, dict):
+            return bool(result.get("approved")), result.get("reason")
+        return bool(getattr(result, "approved", result)), getattr(
+            result, "reason", None
+        )
+
+    @staticmethod
+    def _approval_reason(server: MCPServerConfig, tool: MCPToolRef) -> str:
+        if tool.policy.read_only and not tool.policy.requires_approval:
+            return "Read-only inspection; no shared approval gate is required."
+        return (
+            f"{tool.aider_name} on MCP server {server.name} is marked "
+            "requires_approval in MCP policy; it can mutate state, trigger work, "
+            "approve changes, or affect external systems."
+        )
+
+    @staticmethod
+    def _denied_message(tool: MCPToolRef, reason: str | None = None) -> str:
+        detail = reason or "No denial reason provided."
+        return f"Denied MCP operation {tool.aider_name}: {detail}"
 
     @staticmethod
     def _serialize_result(result: Any) -> Any:

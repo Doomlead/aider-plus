@@ -273,12 +273,13 @@ QA confidence + evidence
   instead of inventing parallel status protocols. Late joiners use
   `get_recent_events()` or `replay_to_subscriber()` for retained activity, then
   render through `surface_messages.py` so lifecycle, daemon, deployment,
-  approvals, Discord, Streamlit, Tkinter, and CLI `--watch` views share severity
-  icons, compact/detailed modes, and progress visualizations.
+  approvals, Discord, Slack-compatible, Matrix, Streamlit, Tkinter, and CLI
+  `--watch` views share severity icons, status badges, compact/detailed modes,
+  and progress visualizations.
 - **Repo-native output.** The end product is a real Git repo with diffs, commits,
   tests, local artifacts, and reviewable release notes.
-- **Thin adapters.** CLI, browser, desktop, Discord, daemon, MCP, and future API
-  adapters should normalize input/output and delegate core behavior to the COO,
+- **Thin adapters.** CLI, browser, desktop, Discord, Slack-compatible, Matrix, daemon, MCP, and
+  future API adapters should normalize input/output and delegate core behavior to the COO,
   orchestrator, departments, and daemon runner.
 
 ## Where to go next

@@ -12,6 +12,24 @@ if TYPE_CHECKING:
     from aider.memory import ProjectMemory
 
 SEVERITY_ICONS = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}
+STATUS_ICONS = {
+    "queued": "🕓",
+    "pending": "🕓",
+    "running": "🏃",
+    "in_progress": "🏃",
+    "success": "✅",
+    "done": "✅",
+    "completed": "✅",
+    "complete": "✅",
+    "passed": "✅",
+    "failed": "❌",
+    "failure": "❌",
+    "error": "❌",
+    "blocked": "🚧",
+    "warning": "⚠️",
+    "needs_review": "⚠️",
+    "partial_success": "⚠️",
+}
 SEVERITY_COLORS = {
     "info": "blue",
     "success": "green",
@@ -39,8 +57,26 @@ ANSI_COLORS = {
 ANSI_RESET = "\033[0m"
 
 
+def _status_value(payload: dict) -> str:
+    return str(payload.get("status") or "").strip().lower()
+
+
+def status_label(status: object) -> str:
+    """Return a consistent human label for status values across surfaces."""
+
+    return str(status or "unknown").strip().replace("_", " ").title()
+
+
+def format_status_badge(status: object) -> str:
+    """Render a compact status badge shared by CLI, GUI, and chat adapters."""
+
+    value = str(status or "unknown").strip().lower()
+    icon = STATUS_ICONS.get(value, SEVERITY_ICONS["info"])
+    return f"{icon} {status_label(value)}"
+
+
 def _display_status(payload: dict) -> str:
-    status = str(payload.get("status") or "").strip().lower()
+    status = _status_value(payload)
     if status in {"success", "done", "completed", "complete", "passed"}:
         return "success"
     if status in {"failed", "failure", "error", "blocked"}:
@@ -53,6 +89,9 @@ def _display_status(payload: dict) -> str:
 def event_icon(event: RuntimeCompanyEvent) -> str:
     status_severity = _display_status(event.payload or {})
     severity = status_severity if status_severity != "info" else event.severity
+    status = _status_value(event.payload or {})
+    if status in STATUS_ICONS:
+        return STATUS_ICONS[status]
     if severity in {"success", "warning", "error"}:
         return SEVERITY_ICONS[severity]
     return EVENT_TYPE_ICONS.get(event.event_type, "🔄")
@@ -84,13 +123,21 @@ def _detail_lines(event: RuntimeCompanyEvent) -> list[str]:
         details.append(f"Severity: `{event.severity}`")
     for label, key in (
         ("Department", department),
-        ("Status", payload.get("status")),
+        (
+            "Status",
+            format_status_badge(payload.get("status"))
+            if payload.get("status")
+            else None,
+        ),
         ("Stage", payload.get("stage")),
         ("Environment", payload.get("environment")),
         ("Gate", payload.get("gate_name")),
     ):
         if key:
-            details.append(f"{label}: `{key}`")
+            if label == "Status":
+                details.append(f"{label}: {key}")
+            else:
+                details.append(f"{label}: `{key}`")
     completed = payload.get("completed_count")
     total = payload.get("total_stages")
     if completed is not None and total is not None:
@@ -131,7 +178,8 @@ def format_event_rich(
     if compact:
         status = payload.get("status")
         stage = payload.get("stage")
-        suffix = " · ".join(str(part) for part in (stage, status) if part)
+        rendered_status = format_status_badge(status) if status else None
+        suffix = " · ".join(str(part) for part in (stage, rendered_status) if part)
         message = f"{heading} — `{subject}`" + (f" ({suffix})" if suffix else "")
     else:
         message = "\n".join([heading, f"Task: `{subject}`", *_detail_lines(event)])
@@ -341,6 +389,7 @@ __all__ = [
     "CompanyEvent",
     "EventMessage",
     "format_approval_required_message",
+    "format_status_badge",
     "format_lifecycle_event_message",
     "format_lifecycle_event_rich",
     "format_daemon_progress",

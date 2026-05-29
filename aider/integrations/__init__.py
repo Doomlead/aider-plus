@@ -8,6 +8,7 @@ from .discord import (
     DiscordSessionManager,
     RepositoryPolicy,
 )
+from .matrix import MatrixAdapter, MatrixAdapterConfig
 from .slack import (
     MattermostAdapter,
     SlackAdapter,
@@ -28,5 +29,7 @@ __all__ = [
     "SlackAdapterConfig",
     "TeamsAdapter",
     "MattermostAdapter",
+    "MatrixAdapter",
+    "MatrixAdapterConfig",
     "WebhookAdapter",
 ]

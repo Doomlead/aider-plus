@@ -14,6 +14,7 @@ from aider.company.surface_messages import (
     format_daemon_progress,
     format_deployment_event,
     format_runtime_event_message,
+    format_status_badge,
 )
 
 
@@ -237,8 +238,10 @@ def test_rich_formatters_support_success_warning_error_and_compact_modes():
 
     assert "⚠️" in format_daemon_progress(progress)
     assert "Progress: 3/5" in format_daemon_progress(progress)
+    assert "Status: ⚠️ Partial Success" in format_daemon_progress(progress)
     assert "✅" in format_deployment_event(deployment)
     assert "https://example.test" in format_deployment_event(deployment)
+    assert format_status_badge("running") == "🏃 Running"
     assert "❌" in format_runtime_event_message(failure, compact=True)
     assert "AP-12" in format_runtime_event_message(failure, compact=True)
     assert "\033[" in format_runtime_event_message(failure, ansi=True)

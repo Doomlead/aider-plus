@@ -61,3 +61,40 @@ def test_mcp_exposes_codegraph_tools(tmp_path):
 
     server = AiderPlusMCPServer(AiderPlusMCPServerConfig(repo_path=str(tmp_path)))
     assert server.codegraph_search("greet")["results"]
+
+
+def test_codegraph_detects_framework_file_and_decorator_routes(tmp_path):
+    write(
+        tmp_path / "urls.py",
+        "from django.urls import path\nurlpatterns = [path('teams/<int:pk>/', view)]\n",
+    )
+    write(
+        tmp_path / "controller.ts", "@Get('accounts/:id')\nfindOne() { return true }\n"
+    )
+    write(
+        tmp_path / "app" / "dashboard" / "page.tsx",
+        "export default function Page() { return null }\n",
+    )
+    write(
+        tmp_path / "src" / "routes" / "settings" / "+page.svelte", "<h1>Settings</h1>\n"
+    )
+
+    graph = CodeGraph(tmp_path)
+    graph.index(force=True)
+
+    routes = graph.routes_for_files(
+        [
+            "urls.py",
+            "controller.ts",
+            "app/dashboard/page.tsx",
+            "src/routes/settings/+page.svelte",
+        ]
+    )
+    route_pairs = {
+        (route["framework"], route["method"], route["route"]) for route in routes
+    }
+
+    assert ("django", None, "/teams/<int:pk>/") in route_pairs
+    assert ("nestjs", "GET", "accounts/:id") in route_pairs
+    assert ("nextjs", "GET", "/dashboard") in route_pairs
+    assert ("sveltekit", "GET", "/settings") in route_pairs

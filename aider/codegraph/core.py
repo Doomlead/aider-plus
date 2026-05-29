@@ -46,6 +46,8 @@ CODE_SUFFIXES = {
     ".scala",
     ".ex",
     ".exs",
+    ".vue",
+    ".svelte",
 }
 TEST_PAT = re.compile(
     r"(^|/)(tests?|spec)(/|$)|(^|/).*(_test|_spec|\.test|\.spec)\.", re.I
@@ -58,13 +60,28 @@ ROUTE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
     (
+        "django",
+        re.compile(r"\b(?:path|re_path)\(\s*(?:r)?['\"]([^'\"]+)['\"]"),
+    ),
+    (
         "javascript",
         re.compile(
-            r"(?:app|router)\.(get|post|put|patch|delete|use)\(\s*['\"]([^'\"]+)['\"]"
+            r"(?:app|router)\.(get|post|put|patch|delete|use|all)\(\s*['\"]([^'\"]+)['\"]"
         ),
     ),
-    ("nextjs", re.compile(r"^(?:app|pages)/(.+?)(?:/page)?\.(?:js|jsx|ts|tsx)$")),
+    (
+        "nestjs",
+        re.compile(r"@(Get|Post|Put|Patch|Delete|All)\(\s*['\"]([^'\"]*)['\"]?\s*\)"),
+    ),
     ("rails", re.compile(r"\b(get|post|put|patch|delete)\s+['\"]([^'\"]+)['\"]")),
+)
+FILE_ROUTE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "nextjs",
+        re.compile(r"^(?:app|pages)/(.+?)(?:/(?:page|route))?\.(?:js|jsx|ts|tsx)$"),
+    ),
+    ("nuxt", re.compile(r"^pages/(.+?)\.(?:vue|js|ts)$")),
+    ("sveltekit", re.compile(r"^src/routes/(.+?)/?\+page\.(?:svelte|js|ts)$")),
 )
 
 
@@ -462,26 +479,36 @@ class CodeGraph:
                 match = pattern.search(line)
                 if not match:
                     continue
-                if framework == "nextjs":
-                    continue
-                method, route = (
-                    (match.group(1), match.group(2))
-                    if len(match.groups()) >= 2
-                    else (None, match.group(1))
-                )
+                method, route = self._route_match(framework, match)
                 conn.execute(
                     "INSERT OR IGNORE INTO routes(framework, method, route, file_path, line) VALUES(?,?,?,?,?)",
                     (framework, method, route, rel, lineno),
                 )
-        match = ROUTE_PATTERNS[2][1].match(rel)
-        if match:
-            route = "/" + match.group(1).replace("/index", "").replace(
-                "[", ":"
-            ).replace("]", "")
+        for framework, pattern in FILE_ROUTE_PATTERNS:
+            match = pattern.match(rel)
+            if not match:
+                continue
+            route = self._file_route(match.group(1))
             conn.execute(
                 "INSERT OR IGNORE INTO routes(framework, method, route, file_path, line) VALUES(?,?,?,?,?)",
-                ("nextjs", "GET", route, rel, 1),
+                (framework, "GET", route, rel, 1),
             )
+
+    @staticmethod
+    def _route_match(framework: str, match: re.Match[str]) -> tuple[str | None, str]:
+        if framework == "django":
+            return None, "/" + match.group(1).lstrip("/")
+        if len(match.groups()) >= 2:
+            method = match.group(1).upper() if framework == "nestjs" else match.group(1)
+            return method, match.group(2) or "/"
+        return None, match.group(1)
+
+    @staticmethod
+    def _file_route(route: str) -> str:
+        route = route.replace("/index", "").replace("index", "")
+        route = re.sub(r"\[(?:\.\.\.)?([^\]]+)\]", r":\1", route)
+        route = re.sub(r"\(([^)]+)\)/?", "", route)
+        return "/" + route.strip("/")
 
     def _edge_query(
         self, name_or_file: str, *, incoming: bool, limit: int

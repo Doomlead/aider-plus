@@ -1216,6 +1216,24 @@ Be specific and actionable."""
         if context.get("skill_guidance"):
             positives.append("Current procedural skill guidance was included in the review.")
 
+        codegraph_impact = self._codegraph_impact_summary(context)
+        if codegraph_impact["files"]:
+            positives.append(
+                "Code graph impact analysis covered "
+                f"{len(codegraph_impact['files'])} impacted file(s)."
+            )
+            if codegraph_impact["routes"]:
+                positives.append(
+                    "Impacted route(s): " + ", ".join(codegraph_impact["routes"][:5])
+                )
+            concerns.append(
+                "Code graph review scope: validate affected files "
+                + ", ".join(codegraph_impact["files"][:8])
+                + " before QA handoff."
+            )
+        elif context.get("codegraph"):
+            concerns.append("Code graph context was present but no impacted files were resolved.")
+
         if previous_deliverable.status == "failure":
             priority_issues.append(
                 {
@@ -1246,6 +1264,32 @@ Be specific and actionable."""
             "priority_issues": priority_issues,
             "changed_files": changed_files,
             "checks": checks,
+        }
+
+    @staticmethod
+    def _codegraph_impact_summary(context: dict) -> dict[str, list[str]]:
+        codegraph = context.get("codegraph") if isinstance(context, dict) else {}
+        impact = codegraph.get("impact") if isinstance(codegraph, dict) else {}
+        files = impact.get("files") if isinstance(impact, dict) else []
+        routes = impact.get("routes") if isinstance(impact, dict) else []
+        impacted_files = []
+        for item in files or []:
+            if isinstance(item, dict) and item.get("path"):
+                impacted_files.append(str(item["path"]))
+            elif item:
+                impacted_files.append(str(item))
+        impacted_routes = []
+        for route in routes or []:
+            if isinstance(route, dict):
+                label = route.get("route")
+                method = route.get("method")
+                if label:
+                    impacted_routes.append(f"{method or '*'} {label}")
+            elif route:
+                impacted_routes.append(str(route))
+        return {
+            "files": sorted(dict.fromkeys(impacted_files)),
+            "routes": sorted(dict.fromkeys(impacted_routes)),
         }
 
     async def _changed_files(self, metadata: dict) -> list[str]:

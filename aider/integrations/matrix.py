@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from aider.company.events import CompanyEvent, EventBus
+from aider.company.runtime import RunExecutor
 from aider.company.surface_messages import format_runtime_event_message
 from aider.integrations.adapters import (
     AdapterMessage,
@@ -43,12 +44,14 @@ class MatrixAdapter(ThinAdapter):
         event_bus: EventBus | None = None,
         forward: EventForwarder | None = None,
         input_handler: InputHandler | None = None,
+        runtime_executor: RunExecutor | None = None,
     ):
         super().__init__(
             event_bus=event_bus,
             forward=forward,
             input_handler=input_handler,
             event_formatter=self.format_event,
+            runtime_executor=runtime_executor,
         )
         self.config = config or MatrixAdapterConfig()
 
@@ -65,7 +68,9 @@ class MatrixAdapter(ThinAdapter):
         room_id = payload.get("room_id") or payload.get("room")
         event_id = payload.get("event_id") or payload.get("event")
         thread_id = payload.get("thread_id") or event_id
-        text = payload.get("body") or payload.get("formatted_body") or payload.get("text")
+        text = (
+            payload.get("body") or payload.get("formatted_body") or payload.get("text")
+        )
 
         return super().normalize_message(
             payload,

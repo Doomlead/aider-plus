@@ -147,8 +147,9 @@ aider company templates
   QA uses graph-suggested affected tests, Reviewer and Delivery consume impact
   analysis for review/release risk, and route detection covers decorator routes
   plus Next.js, Nuxt, SvelteKit, Django, Rails, Express, and NestJS patterns.
-- **MCP and adapters:** MCP configuration plus Discord/headless/GUI surfaces that
-  reuse the same Company runtime contracts.
+- **MCP and adapters:** MCP configuration plus Discord, Slack-compatible,
+  Matrix, headless/bot, and GUI surfaces that reuse the same Company runtime
+  contracts and shared surface-message rendering.
 - **Issue-driven daemon:** tracker-backed workspaces, retries, proof-of-work,
   security scans, hooks, release metadata, and orchestrator-owned department
   sequencing for unattended or queued work.
@@ -178,7 +179,7 @@ aider company templates
 | DevOps release handoff | `aider/company/departments/devops.py` | `aider/company/schemas/`, `aider/company/orchestrator.py` | `tests/company/test_release_deployment.py`, `tests/company/test_devops_department.py` |
 | Memory/skill retrieval | `aider/memory/` | `aider/company/skills.py`, `aider/company/self_improvement.py` | `tests/memory/`, `tests/company/test_memory_*.py` |
 | MCP tooling | `aider/mcp/` | `docs/company/mcp.md` | `tests/mcp/test_mcp_integration.py` |
-| Browser/desktop/chat surfaces | `aider/gui.py`, `aider/desktop.py` | `aider/integrations/discord.py`, `aider/company/events.py` | `tests/test_desktop_*.py`, `tests/company/test_discord_lifecycle.py` |
+| Browser/desktop/chat surfaces | `aider/gui.py`, `aider/desktop.py` | `aider/integrations/discord.py`, `aider/integrations/slack.py`, `aider/integrations/matrix.py`, `aider/company/events.py`, `aider/company/surface_messages.py` | `tests/test_desktop_*.py`, `tests/company/test_discord_lifecycle.py`, `tests/integrations/test_thin_adapters.py` |
 | Code graph | `aider/codegraph/` | `aider/company/context.py`, `aider/company/departments/qa.py`, `aider/company/departments/engineering.py`, `aider/company/departments/delivery.py` | `tests/codegraph/test_codegraph.py`, `tests/company/test_codegraph_integrations.py` |
 
 ## Contributor paths

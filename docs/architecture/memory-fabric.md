@@ -1,6 +1,6 @@
 # Memory Fabric Architecture Specification
 
-Status: living architecture and implementation tracker. The original specification milestone is complete, and several implementation milestones now have code in `aider/memory` and company integration points. Sections below distinguish **done**, **partial**, and **planned** work so readers can tell target design from current behavior.
+Status: living architecture and implementation tracker. Canonical memory records, schema migrations, persisted lookup indexes, metrics, redaction, compaction, and legacy compatibility paths now have runtime coverage in `aider/memory` and company integration points. Sections below distinguish **done**, **partial**, and **planned** work so readers can tell target design from current behavior.
 
 ## 1. Purpose and Design Goals
 
@@ -418,28 +418,30 @@ All of these remain readable and writable through the existing `ProjectMemory.da
 
 ### 8.2 Additive canonical collection
 
-The next schema version should add:
+The current schema includes a canonical `memory` namespace. `records` remain the source of truth; `indexes` are rebuildable lookup maps materialized by migrations and refreshed by `MemoryStore` writes/repairs/compaction.
 
 ```json
 {
   "memory": {
     "records": [],
-    "clusters": [],
+    "threads": [],
+    "compaction_markers": [],
+    "corrupt_backup": [],
     "indexes": {
-      "by_scope": {},
-      "by_kind": {},
-      "by_department": {},
-      "by_related_skill": {}
+      "schema_version": 1,
+      "generated_at": "<iso timestamp>",
+      "record_count": 0,
+      "scope": {},
+      "kind": {},
+      "department": {},
+      "skill": {}
     },
-    "migration": {
-      "legacy_backfill_completed_at": null,
-      "legacy_backfill_version": 0
-    }
+    "migration_log": []
   }
 }
 ```
 
-Legacy fields are not deleted. Backfill creates canonical records that point to legacy source paths, for example `source.legacy_path="playbook.deployment_gotchas[3]"`.
+Legacy fields are not deleted. Historical backfill is retired as a no-op because current audit/playbook/skill-learning writers dual-write or consume canonical records directly; migrations still normalize older records in place, quarantine corrupt rows, and keep legacy top-level payloads readable for compatibility.
 
 ### 8.3 Backfill mapping
 
@@ -458,19 +460,19 @@ Legacy fields are not deleted. Backfill creates canonical records that point to 
 | Milestone | Status | Current notes |
 | --- | --- | --- |
 | specification | **Done** | Architecture doc and README link exist. This document is now maintained as a living tracker rather than a one-time future plan. |
-| schema scaffolding | **Done** | `MemoryRecord`, `MemoryQuery`, scope parsing/validation, canonical visibility helpers, and schema migrations for `memory.records` exist. |
-| write adapters | **Partial** | `MemoryStore.append_record()`, canonical audit writes, legacy backfill retirement, and redaction helpers exist. Continue wiring any remaining legacy writers to canonical records as they are touched. |
+| schema scaffolding | **Done** | `MemoryRecord`, `MemoryQuery`, scope parsing/validation, canonical visibility helpers, department/skill query filters, and schema migrations for `memory.records` exist. |
+| write adapters | **Partial** | `MemoryStore.append_record()`, canonical audit/playbook writes, legacy backfill retirement, index refresh, and redaction helpers exist. Continue wiring any remaining legacy writers to canonical records as they are touched. |
 | recall integration | **Partial** | Context building now injects scoped recall packets, recall prepass candidates, explanations, telemetry, and canonical query paths while preserving legacy playbook/skill behavior. Remaining work is to make canonical recall the primary path everywhere. |
 | promotion integration | **Partial** | Evidence helpers, near-duplicate compaction, skill-learning tests, and outcome recording exist. Deeper proposal metadata/back-links should continue to be expanded with SelfImprovementService and CompanySkillManager changes. |
 | reinforcement and retirement | **Partial** | Usage/outcome counters, reinforcement scoring, stale decay, pruning, and compaction exist. Full skill retirement semantics and replacement links remain planned. |
-| storage/index optimization | **Partial** | Pluggable local indexes, SQLite repository storage, SQLite FTS index support, and index rebuild hooks exist. Optional vector/embedding backends remain planned. |
+| storage/index optimization | **Done for local-first canonical indexes; partial for optional backends** | Schema v8 materializes persisted lookup indexes by scope, kind, department, and skill; `MemoryStore` refreshes them on writes, repair, pruning, compaction, and explicit rebuilds. Pluggable local rankers, SQLite repository storage, SQLite FTS index support, and local vector adapters exist; production model-backed embedding providers remain optional future adapters. |
 
 ### 8.5 Rollback plan
 
-- Keep legacy fields as source of truth until canonical read paths are stable.
-- Make canonical backfill idempotent using `source.legacy_path` and content digests.
+- Keep legacy top-level fields intact for compatibility, but treat `memory.records` as authoritative for new canonical writes.
+- Keep `MemoryStore.backfill_legacy_records()` as an idempotent retired no-op so older callers remain safe.
 - If canonical recall fails, ContextBuilder falls back to current playbook/skill behavior.
-- Schema migrations must be forward-only, but data loss is avoided by retaining legacy payloads.
+- Schema migrations must be forward-only, but data loss is avoided by retaining legacy payloads, quarantining corrupt records, and recording migration metadata in `memory.migration_log`.
 
 ## 9. Test Plan by Phase
 
@@ -572,7 +574,7 @@ This section tracks the current file map. “Exists” means a module/file is pr
 | `aider/memory/evidence.py` | **Exists** | Provides evidence cluster/proposal helpers used by skill learning flows. |
 | `aider/memory/promotion.py` | **Exists, partial** | Provides outcome recording and near-duplicate compaction helpers. Full evidence-to-skill lifecycle ownership remains shared with company services. |
 | `aider/memory/redaction.py` | **Exists, partial** | Provides sensitive metadata detection and redaction metadata merge helpers. Deeper PII/tenant policy enforcement remains planned. |
-| `aider/memory/indexes.py` | **Exists, partial** | Provides index rebuild hooks after compaction. Local index adapters live in `aider/memory/index.py`; optional vector/embedding indexes remain planned. |
+| `aider/memory/indexes.py` | **Exists** | Builds persisted canonical lookup indexes by scope, kind, department, and skill, and provides index rebuild hooks after compaction. Local ranking adapters live in `aider/memory/index.py`; production model-backed embedding providers remain optional. |
 | `aider/memory/store.py` | **Exists** | Provides canonical record append/query/update, reinforcement, outcome recording, metrics, pruning, compaction, repair, and legacy backfill compatibility behavior. |
 
 ### 11.2 Existing integration files
@@ -621,8 +623,8 @@ Remaining acceptance criteria for the broader rollout:
 - Promotion metadata consistently links records, proposals, approved skills, reinforcement, retirement, and replacements.
 - Redaction and visibility policy are enforced uniformly for all new writers and recall paths.
 - Optional vector/embedding backends stay behind local-first adapter interfaces and have parity tests against deterministic local indexes.
-- Semantic compaction summarizes older related clusters and carries redaction metadata forward.
-- PII/secret classification and tenant policy checks are enforced for new memory writes.
+- Semantic compaction continues to summarize older related clusters and carry redaction metadata forward.
+- PII/secret classification and tenant policy checks remain enforced for new memory writes.
 
 
 ## Backend Adapters (milestone)
@@ -685,5 +687,5 @@ Recent hardening work closes several earlier future-work gaps:
 - Vector embedding support is available behind the repository/index boundary through `LocalVectorIndex` and `MemoryEmbeddingProvider`; production model-backed providers remain optional adapters rather than required dependencies.
 - Decay still adjusts salience/reinforcement signals, and semantic compaction now summarizes older related clusters when the compaction helper runs. Fully automatic background scheduling remains future orchestration work.
 - Cross-project promotion remains conservative, but promotion candidates now include stronger evidence scoring and an explicit multi-project gate before broad shared recall.
-- Legacy read paths remain for older visibility aliases and `channel_pair:` scopes, but new writes should use canonical visibility values and `channel:<A>:<B>` channel scopes.
+- Legacy compatibility remains through forward migrations, legacy visibility/scope normalization, ContextBuilder fallback behavior, and the retired no-op backfill API; new writes must use canonical visibility values and `channel:<A>:<B>` channel scopes.
 - Privacy hardening now includes visibility checks, metadata redaction hooks, PII/secret classifiers, and tenant policy enforcement for new writes. Future work can expand classifier coverage and connect policy decisions to every legacy writer.

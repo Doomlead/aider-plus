@@ -28,7 +28,7 @@ def test_memory_schema_migration_preserves_existing_project_data(tmp_path):
     project_memory = ProjectMemory(str(tmp_path))
     data = project_memory.load()
 
-    assert data["schema_version"] == 7
+    assert data["schema_version"] == 8
     assert data["audit_log"] == [{"event_type": "kept"}]
     assert data["playbook"]["coding_standards"] == ["preserve me"]
     assert data["skill_proposals"] == [{"proposal_id": "skill-1"}]

@@ -17,6 +17,8 @@ class ProjectMemory:
             "threads": [],
             "migration_log": [],
             "corrupt_backup": [],
+            "compaction_markers": [],
+            "indexes": {},
             "policy": {
                 "reinforcement_weight": 0.3,
                 "recency_weight": 0.2,

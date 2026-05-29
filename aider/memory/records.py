@@ -228,6 +228,8 @@ class MemoryQuery:
     requester: Optional[str] = None
     visibility: Optional[str] = None
     kind: Optional[str] = None
+    department: Optional[str] = None
+    skill: Optional[str] = None
     tags: tuple[str, ...] = ()
     limit: Optional[int] = None
 

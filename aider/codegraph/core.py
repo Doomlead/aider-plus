@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sqlite3
 import subprocess
 import time
@@ -352,19 +353,100 @@ class CodeGraph:
     ) -> dict[str, Any]:
         changed = list(changed_files or self._git_changed_files())
         impacted: dict[str, dict[str, Any]] = {}
+        graph_tests: set[str] = set()
         for path in changed:
             for item in self.impact(path, depth=depth)["files"]:
                 impacted[item["path"]] = item
-        tests = sorted(
-            path
-            for path, item in impacted.items()
-            if item.get("is_test") or self._is_test_path(path)
-        )
+                if item.get("is_test") or self._is_test_path(item["path"]):
+                    graph_tests.add(item["path"])
+
+        inferred_tests = self._infer_test_paths(changed, impacted.keys())
+        tests = sorted(dict.fromkeys([*sorted(graph_tests), *inferred_tests]))
+        confidence = "high" if graph_tests else "medium" if inferred_tests else "low"
         return {
             "changed_files": changed,
             "affected_tests": tests,
+            "graph_matched_tests": sorted(graph_tests),
+            "inferred_test_suggestions": inferred_tests,
+            "suggested_commands": self._test_commands(tests),
+            "confidence": confidence,
+            "routes": self.routes_for_files([*changed, *impacted.keys()]),
             "impacted_files": sorted(impacted),
+            "untested_impacted_files": sorted(
+                path
+                for path in impacted
+                if not self._is_test_path(path)
+                and not self._has_nearby_test(path, tests)
+            ),
         }
+
+    def _infer_test_paths(
+        self, changed_files: Iterable[str], impacted_files: Iterable[str]
+    ) -> list[str]:
+        """Find existing tests related by naming/path conventions.
+
+        Graph edges are strongest, but many repos do not import production code from
+        tests directly. This fallback keeps suggestions useful by matching indexed
+        test files against changed/impacted module stems and path tokens.
+        """
+        candidate_files = {str(path) for path in changed_files if path}
+        candidate_files.update(str(path) for path in impacted_files if path)
+        with self._connect() as conn:
+            indexed_tests = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT path FROM files WHERE is_test=1 ORDER BY path"
+                ).fetchall()
+            ]
+        if not candidate_files or not indexed_tests:
+            return []
+
+        needles: set[str] = set()
+        for file_path in candidate_files:
+            path = Path(file_path)
+            stem = re.sub(r"(?:\.test|\.spec|_test|_spec)$", "", path.stem)
+            if stem and stem not in {"index", "__init__"}:
+                needles.add(stem.lower())
+            parts = [part.lower() for part in path.with_suffix("").parts]
+            needles.update(part for part in parts if part not in {"src", "app", "lib"})
+
+        suggestions = []
+        for test_path in indexed_tests:
+            normalized = test_path.lower().replace("-", "_")
+            if any(needle.replace("-", "_") in normalized for needle in needles):
+                suggestions.append(test_path)
+        return sorted(dict.fromkeys(suggestions))
+
+    @staticmethod
+    def _test_commands(tests: Iterable[str]) -> list[str]:
+        tests = [str(test) for test in tests if test]
+        if not tests:
+            return []
+        commands: list[str] = []
+        py_tests = [test for test in tests if test.endswith(".py")]
+        js_tests = [
+            test
+            for test in tests
+            if test.endswith((".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte"))
+        ]
+        if py_tests:
+            commands.append(
+                "pytest "
+                + " ".join(shlex.quote(test) for test in py_tests)
+                + " -v --tb=short"
+            )
+        if js_tests:
+            commands.append(
+                "npm test -- " + " ".join(shlex.quote(test) for test in js_tests)
+            )
+        return commands
+
+    @staticmethod
+    def _has_nearby_test(path: str, tests: Iterable[str]) -> bool:
+        stem = Path(path).stem.lower().replace("-", "_")
+        if stem in {"index", "__init__", ""}:
+            return False
+        return any(stem in Path(test).stem.lower().replace("-", "_") for test in tests)
 
     def context(self, query: str, *, limit: int = 8) -> dict[str, Any]:
         hits = self.search(query, limit=limit)

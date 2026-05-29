@@ -95,6 +95,7 @@ class QADepartment(Department):
                 prd_excerpt=str(prd_content)[:500],
             )
 
+        route_aware_plan = self._route_aware_qa_plan(task.context)
         deliverable_metadata = {
             "handoff_to": "engineering" if test_passed is False else "ceo",
             "blocking": test_passed
@@ -103,6 +104,10 @@ class QADepartment(Department):
             "test_coverage": "executed" if test_files else "manual_required",
             "test_executed": True,
             "targeted_by_codegraph": self._codegraph_affected_tests(task.context),
+            "codegraph_suggested_commands": self._codegraph_suggested_commands(
+                task.context
+            ),
+            "route_aware_plan": route_aware_plan,
             "context": dict(task.context) if isinstance(task.context, dict) else {},
         }
         if qa_feedback is not None:
@@ -125,8 +130,14 @@ class QADepartment(Department):
                 "files_covered": files,
                 "files_changed": files,
                 "prd_excerpt": str(prd_content)[:1000],
-                "recommended_checks": self._recommended_checks(test_files),
+                "recommended_checks": self._recommended_checks(
+                    test_files, route_aware_plan
+                ),
                 "targeted_by_codegraph": self._codegraph_affected_tests(task.context),
+                "codegraph_suggested_commands": self._codegraph_suggested_commands(
+                    task.context
+                ),
+                "route_aware_plan": route_aware_plan,
                 "qa_feedback": qa_feedback.to_dict() if qa_feedback else None,
             },
             status="failure" if test_passed is False else "success",
@@ -155,16 +166,7 @@ class QADepartment(Department):
 
     @staticmethod
     def _codegraph_affected_tests(context: dict | None) -> list[str]:
-        if not isinstance(context, dict):
-            return []
-        codegraph = (
-            context.get("codegraph")
-            if isinstance(context.get("codegraph"), dict)
-            else {}
-        )
-        affected = (
-            codegraph.get("affected_tests") if isinstance(codegraph, dict) else {}
-        )
+        affected = QADepartment._codegraph_affected_payload(context)
         tests = affected.get("affected_tests") if isinstance(affected, dict) else []
         if isinstance(tests, str):
             return [tests]
@@ -180,7 +182,9 @@ class QADepartment(Department):
         )
 
     @staticmethod
-    def _recommended_checks(test_files: list[str]) -> list[str]:
+    def _recommended_checks(
+        test_files: list[str], route_aware_plan: list[dict] | None = None
+    ) -> list[str]:
         checks = [
             "Run linting and formatting checks",
             "Run type checks where configured",
@@ -188,7 +192,128 @@ class QADepartment(Department):
         ]
         if not test_files:
             checks.insert(0, "Run the project test suite")
+        for route_plan in route_aware_plan or []:
+            route = route_plan.get("route")
+            framework = route_plan.get("framework")
+            checks.append(
+                f"Verify impacted {framework} route {route} for happy path, auth/error boundaries, and navigation/API contract regressions"
+            )
         return checks
+
+    @staticmethod
+    def _codegraph_suggested_commands(context: dict | None) -> list[str]:
+        affected = QADepartment._codegraph_affected_payload(context)
+        commands = (
+            affected.get("suggested_commands") if isinstance(affected, dict) else []
+        )
+        if isinstance(commands, str):
+            return [commands]
+        return [str(command) for command in commands or [] if command]
+
+    @staticmethod
+    def _route_aware_qa_plan(context: dict | None) -> list[dict]:
+        routes = QADepartment._codegraph_routes(context)
+        plan = []
+        for route in routes:
+            framework = str(route.get("framework") or "route")
+            checks = [
+                "Exercise route-level happy path and empty/error states.",
+                "Verify auth, permission, validation, and caching boundaries for this route.",
+            ]
+            checks.extend(QADepartment._framework_route_checks(framework))
+            plan.append(
+                {
+                    "framework": framework,
+                    "method": route.get("method"),
+                    "route": route.get("route"),
+                    "file_path": route.get("file_path"),
+                    "checks": checks,
+                }
+            )
+        return plan
+
+    @staticmethod
+    def _codegraph_routes(context: dict | None) -> list[dict]:
+        if not isinstance(context, dict):
+            return []
+        codegraph = (
+            context.get("codegraph")
+            if isinstance(context.get("codegraph"), dict)
+            else {}
+        )
+        route_sources = []
+        for key in ("impact", "affected_tests"):
+            payload = codegraph.get(key) if isinstance(codegraph, dict) else {}
+            if isinstance(payload, dict):
+                route_sources.extend(payload.get("routes") or [])
+        routes = []
+        seen = set()
+        for route in route_sources:
+            if isinstance(route, dict) and route.get("route"):
+                item = dict(route)
+            elif route:
+                item = {"framework": "route", "method": None, "route": str(route)}
+            else:
+                continue
+            key = (
+                item.get("framework"),
+                item.get("method"),
+                item.get("route"),
+                item.get("file_path"),
+            )
+            if key not in seen:
+                seen.add(key)
+                routes.append(item)
+        return routes
+
+    @staticmethod
+    def _framework_route_checks(framework: str) -> list[str]:
+        checks_by_framework = {
+            "django": [
+                "Run URL resolver/view tests for path converters and middleware behavior."
+            ],
+            "rails": [
+                "Run request/system specs covering routing, controller filters, and redirects."
+            ],
+            "express": [
+                "Run HTTP handler tests for middleware ordering and status/body contracts."
+            ],
+            "javascript": [
+                "Run HTTP handler tests for middleware ordering and status/body contracts."
+            ],
+            "nestjs": [
+                "Run controller/e2e specs for guards, pipes, interceptors, and DTO validation."
+            ],
+            "nextjs": [
+                "Run page/route-handler checks for server/client rendering, params, and redirects."
+            ],
+            "nuxt": [
+                "Run page/navigation checks for route params, middleware, and server data loading."
+            ],
+            "sveltekit": [
+                "Run load/action checks for route params, form actions, and navigation states."
+            ],
+            "python": [
+                "Run API route tests for dependency injection, request validation, and response codes."
+            ],
+        }
+        return checks_by_framework.get(
+            framework.lower(), ["Run framework-specific route smoke checks."]
+        )
+
+    @staticmethod
+    def _codegraph_affected_payload(context: dict | None) -> dict:
+        if not isinstance(context, dict):
+            return {}
+        codegraph = (
+            context.get("codegraph")
+            if isinstance(context.get("codegraph"), dict)
+            else {}
+        )
+        affected = (
+            codegraph.get("affected_tests") if isinstance(codegraph, dict) else {}
+        )
+        return affected if isinstance(affected, dict) else {}
 
     @staticmethod
     def _parse_failed_tests(pytest_output: str) -> list[str]:

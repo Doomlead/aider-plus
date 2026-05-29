@@ -1226,6 +1226,22 @@ Be specific and actionable."""
                 positives.append(
                     "Impacted route(s): " + ", ".join(codegraph_impact["routes"][:5])
                 )
+                concerns.append(
+                    "Route-aware review scope: verify handler/page behavior, auth, "
+                    "validation, redirects, and API contracts for "
+                    + ", ".join(codegraph_impact["routes"][:5])
+                    + "."
+                )
+            if codegraph_impact["tests"]:
+                positives.append(
+                    "Code graph suggested targeted test(s): "
+                    + ", ".join(codegraph_impact["tests"][:5])
+                )
+            if codegraph_impact["commands"]:
+                concerns.append(
+                    "Before QA handoff, run graph-suggested command(s): "
+                    + " ; ".join(codegraph_impact["commands"][:3])
+                )
             concerns.append(
                 "Code graph review scope: validate affected files "
                 + ", ".join(codegraph_impact["files"][:8])
@@ -1272,6 +1288,11 @@ Be specific and actionable."""
         impact = codegraph.get("impact") if isinstance(codegraph, dict) else {}
         files = impact.get("files") if isinstance(impact, dict) else []
         routes = impact.get("routes") if isinstance(impact, dict) else []
+        affected = codegraph.get("affected_tests") if isinstance(codegraph, dict) else {}
+        tests = affected.get("affected_tests") if isinstance(affected, dict) else []
+        commands = (
+            affected.get("suggested_commands") if isinstance(affected, dict) else []
+        )
         impacted_files = []
         for item in files or []:
             if isinstance(item, dict) and item.get("path"):
@@ -1290,6 +1311,8 @@ Be specific and actionable."""
         return {
             "files": sorted(dict.fromkeys(impacted_files)),
             "routes": sorted(dict.fromkeys(impacted_routes)),
+            "tests": sorted(dict.fromkeys(str(test) for test in tests or [] if test)),
+            "commands": [str(command) for command in commands or [] if command],
         }
 
     async def _changed_files(self, metadata: dict) -> list[str]:

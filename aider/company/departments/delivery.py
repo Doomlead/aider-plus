@@ -137,6 +137,7 @@ class DeliveryDepartment(Department):
 
         blocking = bool(plan.critical_blockers)
         status = "failure" if blocking else "success"
+        release_risk_notes = self._release_risk_notes(task.context)
         metadata = {
             "blocking": blocking,
             "project_plan": plan.to_dict(),
@@ -148,6 +149,7 @@ class DeliveryDepartment(Department):
             "critical_blockers": list(plan.critical_blockers),
             "milestones": [m.to_dict() for m in plan.milestones],
             "risks": [r.to_dict() for r in plan.risks],
+            "release_risk_notes": release_risk_notes,
             "context": dict(task.context),
         }
         if handover.ready_for_devops:
@@ -424,6 +426,7 @@ class DeliveryDepartment(Department):
             )
         codegraph_impact = self._codegraph_impact_summary(context)
         if codegraph_impact["files"]:
+            route_labels = ", ".join(codegraph_impact["routes"][:5])
             broad_impact = len(codegraph_impact["files"]) > 8 or bool(
                 codegraph_impact["routes"]
             )
@@ -434,7 +437,7 @@ class DeliveryDepartment(Department):
                         "Code graph impact analysis found "
                         f"{len(codegraph_impact['files'])} impacted file(s)"
                         + (
-                            f" and {len(codegraph_impact['routes'])} route(s)."
+                            f" and impacted externally visible route(s): {route_labels}."
                             if codegraph_impact["routes"]
                             else "."
                         )
@@ -443,11 +446,30 @@ class DeliveryDepartment(Department):
                     probability="medium" if broad_impact else "low",
                     impact="high" if codegraph_impact["routes"] else "medium",
                     mitigation=(
-                        "Use impacted files/routes to scope QA, release notes, and rollback validation."
+                        "Use impacted files/routes to scope QA, release notes, smoke tests, "
+                        "monitoring, and route-specific rollback validation."
                     ),
                     status="monitoring",
                 )
             )
+            if codegraph_impact["routes"]:
+                risks.append(
+                    RiskRegister(
+                        risk_id="RISK-IMPACTED-ROUTES-RELEASE",
+                        description=(
+                            "Release touches route(s) that users or API clients may hit directly: "
+                            f"{route_labels}."
+                        ),
+                        severity="high",
+                        probability="medium",
+                        impact="high",
+                        mitigation=(
+                            "Add route-specific QA evidence, release notes, production smoke checks, "
+                            "and rollback acceptance criteria before DevOps handoff."
+                        ),
+                        status="monitoring",
+                    )
+                )
         if context.get("design_spec_validation_errors"):
             risks.append(
                 RiskRegister(
@@ -488,7 +510,12 @@ class DeliveryDepartment(Department):
         impacted_routes = []
         for route in routes or []:
             if isinstance(route, dict) and route.get("route"):
-                impacted_routes.append(str(route["route"]))
+                method = route.get("method")
+                framework = route.get("framework")
+                prefix = " ".join(str(item) for item in (framework, method) if item)
+                impacted_routes.append(
+                    f"{prefix + ' ' if prefix else ''}{route['route']}"
+                )
             elif route:
                 impacted_routes.append(str(route))
         return {
@@ -529,13 +556,26 @@ class DeliveryDepartment(Department):
                 if ready
                 else f"NO-GO: resolve {', '.join(blockers) if blockers else 'remaining release-readiness gaps'} before DevOps."
             ),
-            release_notes_draft=self._release_notes_draft(plan, payload, release_scope),
-            rollback_plan=self._rollback_plan(plan, payload),
+            release_notes_draft=self._release_notes_draft(
+                plan, payload, release_scope, context
+            ),
+            rollback_plan=self._rollback_plan(plan, payload, context),
             environment=str(context.get("environment", "production")),
             deployment_target=(
                 payload.get("deployment_target") or context.get("deployment_target")
             ),
         )
+
+    def _release_risk_notes(self, context: dict | None) -> list[str]:
+        codegraph_impact = self._codegraph_impact_summary(context or {})
+        if not codegraph_impact["routes"]:
+            return []
+        return [
+            "Impacted route(s) detected by code graph: "
+            + ", ".join(codegraph_impact["routes"][:8])
+            + ".",
+            "Delivery requires route-specific QA evidence, release-note callouts, production smoke checks, and rollback validation before DevOps handoff.",
+        ]
 
     def _executive_summary(self, plan: ProjectPlan) -> str:
         blockers = (
@@ -547,7 +587,11 @@ class DeliveryDepartment(Department):
         )
 
     def _release_notes_draft(
-        self, plan: ProjectPlan, payload: dict, release_scope: str
+        self,
+        plan: ProjectPlan,
+        payload: dict,
+        release_scope: str,
+        context: dict | None = None,
     ) -> str:
         engineering_metadata = (
             payload.get("engineering_metadata") if isinstance(payload, dict) else {}
@@ -562,14 +606,37 @@ class DeliveryDepartment(Department):
         file_note = (
             f"\n\nChanged files: {', '.join(map(str, files[:10]))}." if files else ""
         )
-        return f"Release scope: {release_scope[:500]}\n\nDelivery summary: {plan.executive_summary}{file_note}"
+        codegraph_impact = self._codegraph_impact_summary(context or {})
+        route_note = (
+            "\n\nRelease risk note: impacted route(s) require route-specific QA evidence, "
+            "smoke checks, monitoring, and rollback validation: "
+            + ", ".join(codegraph_impact["routes"][:8])
+            + "."
+            if codegraph_impact["routes"]
+            else ""
+        )
+        return (
+            f"Release scope: {release_scope[:500]}\n\n"
+            f"Delivery summary: {plan.executive_summary}{file_note}{route_note}"
+        )
 
-    def _rollback_plan(self, plan: ProjectPlan, payload: dict) -> str:
+    def _rollback_plan(
+        self, plan: ProjectPlan, payload: dict, context: dict | None = None
+    ) -> str:
+        codegraph_impact = self._codegraph_impact_summary(context or {})
+        route_step = (
+            "\n5. Re-smoke impacted route(s) before resuming rollout: "
+            + ", ".join(codegraph_impact["routes"][:8])
+            + "."
+            if codegraph_impact["routes"]
+            else ""
+        )
         return (
             "1. Pause rollout and notify Delivery, Engineering, QA, and DevOps owners.\n"
             "2. Revert to the previous known-good artifact or commit identified by DevOps.\n"
             "3. Run the QA validation baseline from the Delivery handover.\n"
             "4. Reopen Delivery blockers/risks and keep the project in delayed status until validated."
+            f"{route_step}"
         )
 
     @staticmethod

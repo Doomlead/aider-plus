@@ -98,3 +98,25 @@ def test_codegraph_detects_framework_file_and_decorator_routes(tmp_path):
     assert ("nestjs", "GET", "accounts/:id") in route_pairs
     assert ("nextjs", "GET", "/dashboard") in route_pairs
     assert ("sveltekit", "GET", "/settings") in route_pairs
+
+
+def test_codegraph_infers_affected_tests_and_commands_without_import_edges(tmp_path):
+    write(
+        tmp_path / "src" / "billing" / "service.py",
+        "def charge():\n    return True\n",
+    )
+    write(
+        tmp_path / "tests" / "billing" / "test_service.py",
+        "def test_charge_contract():\n    assert True\n",
+    )
+
+    graph = CodeGraph(tmp_path)
+    graph.index(force=True)
+
+    affected = graph.affected_tests(["src/billing/service.py"])
+
+    assert affected["confidence"] == "medium"
+    assert "tests/billing/test_service.py" in affected["affected_tests"]
+    assert affected["suggested_commands"] == [
+        "pytest tests/billing/test_service.py -v --tb=short"
+    ]

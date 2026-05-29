@@ -147,7 +147,9 @@ aider company templates
   QA uses graph-suggested affected tests, Reviewer and Delivery consume impact
   analysis for review/release risk, and route detection covers decorator routes
   plus Next.js, Nuxt, SvelteKit, Django, Rails, Express, and NestJS patterns.
-- **MCP and adapters:** MCP configuration plus Discord, Slack-compatible,
+- **MCP and adapters:** approval-aware MCP tools list why each operation is
+  read-only or gated, route mutating calls through shared approvals, and emit
+  audit-ready denial messages; MCP configuration plus Discord, Slack-compatible,
   Matrix, headless/bot, and GUI surfaces that reuse the same Company runtime
   contracts and shared surface-message rendering.
 - **Issue-driven daemon:** tracker-backed workspaces, retries, proof-of-work,
@@ -245,7 +247,8 @@ website examples that reflect those model capabilities.
 
 Aider Plus is experimental software. Use Git branches, review generated changes,
 keep approval gates enabled for important work, and treat MCP/deployment actions
-as operations that need human oversight.
+as operations that need human oversight. Use `aider mcp tools` to see each MCP
+tool's permission level and the reason it does or does not require approval.
 
 ## Upstream Aider docs
 

@@ -14,7 +14,12 @@ from typing import Any, Callable
 
 import httpx
 
-from aider.company.tracker import TrackerAdapter, TrackerError, TrackerIssue
+from aider.company.tracker import (
+    TrackerAdapter,
+    TrackerError,
+    TrackerIssue,
+    format_proof_summary,
+)
 
 _OPEN_STATES = {"todo", "ready", "open", "retry"}
 _IN_PROGRESS_LABELS = {"in_progress", "in-progress", "running", "claimed"}
@@ -24,7 +29,9 @@ _RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 _DEFAULT_STATUS_LABELS = {
     "todo": "todo",
     "in_progress": "in_progress",
+    "human_review": "human_review",
     "retry": "retry",
+    "failed": "failed",
     "done": "done",
 }
 
@@ -167,23 +174,9 @@ class GitHubTrackerAdapter(TrackerAdapter):
         if proof is None:
             body = f"Linked pull request: {pr_url}"
         else:
-            proof_link = (
-                getattr(proof, "markdown_path", None)
-                or f"{getattr(proof, 'workspace', '')}/.aider/company/proof-of-work.md"
-            )
-            summary = getattr(proof, "summary", "") or "No summary provided."
-            completed = (
-                ", ".join(getattr(proof, "completed_stages", ()) or ()) or "none"
-            )
-            failed = ", ".join(getattr(proof, "failed_stages", ()) or ()) or "none"
             body = (
                 "Linked pull request with daemon proof-of-work.\n\n"
-                f"Pull request: {pr_url}\n"
-                f"Proof report: [ProofOfWork Markdown]({proof_link})\n"
-                f"Summary: {summary}\n"
-                f"Completed stages: {completed}\n"
-                f"Failed stages: {failed}\n"
-                f"Human review required: {getattr(proof, 'human_review_required', True)}"
+                + format_proof_summary(proof, pr_url)
             )
         self.comment(issue, body)
 
@@ -391,8 +384,6 @@ def _normalize_status(status: str) -> str:
     aliases = {
         "running": "in_progress",
         "claimed": "in_progress",
-        "human_review": "in_progress",
-        "failed": "retry",
         "closed": "done",
         "complete": "done",
         "completed": "done",
@@ -401,8 +392,9 @@ def _normalize_status(status: str) -> str:
         "triage": "todo",
         "backlog": "todo",
         "blocked": "retry",
-        "needs_review": "in_progress",
-        "human_review": "in_progress",
+        "needs_review": "human_review",
+        "review": "human_review",
+        "partial_success": "human_review",
     }
     return aliases.get(normalized, normalized or "todo")
 
@@ -417,10 +409,16 @@ def _status_from_github(
         _label_key(label) for label in _IN_PROGRESS_LABELS
     }:
         return "in_progress"
+    if _label_key(status_labels["human_review"]) in label_set or label_set & {
+        "needs_review",
+        "human_review",
+    }:
+        return "human_review"
+    if _label_key(status_labels["failed"]) in label_set or "failed" in label_set:
+        return "failed"
     if _label_key(status_labels["retry"]) in label_set or label_set & {
         "blocked",
         "needs_retry",
-        "failed",
     }:
         return "retry"
     return "todo"
@@ -454,6 +452,10 @@ def _labels_for_status(
     }
     if status == "in_progress":
         cleaned.add(status_labels["in_progress"])
+    elif status == "human_review":
+        cleaned.add(status_labels["human_review"])
+    elif status == "failed":
+        cleaned.add(status_labels["failed"])
     elif status == "retry":
         cleaned.add(status_labels["retry"])
     elif status in _CLOSED_STATES:

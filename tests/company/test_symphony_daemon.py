@@ -546,3 +546,123 @@ def test_security_scan_safety_fuse_blocks_too_frequent_manual_runs(tmp_path):
 
     assert result["status"] == "skipped"
     assert result["reason"] == "security scan safety fuse has not elapsed"
+
+
+def test_daemon_partial_success_requires_review_status(tmp_path):
+    tracker_path = tmp_path / "issues.json"
+    runs_path = tmp_path / "runs"
+    tracker_path.write_text(
+        json.dumps(
+            {
+                "issues": [
+                    {
+                        "identifier": "AP-7",
+                        "title": "Partial daemon run",
+                        "labels": ["aider-plus"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    workflow = CompanyWorkflow.load(write_workflow(tmp_path, tracker_path, runs_path))
+
+    def runner(prompt, workspace, issue):
+        workspace.joinpath("partial.txt").write_text("partial", encoding="utf-8")
+        return {
+            "summary": "Implemented with QA follow-ups",
+            "changed_files": ["partial.txt"],
+            "checks": [{"command": "pytest", "status": "failed"}],
+            "qa_result": "failure",
+            "review_result": "needs-review",
+            "completed_stages": ["engineering", "qa"],
+            "failed_stages": ["qa"],
+            "partial_success": True,
+            "human_review_required": False,
+            "pr_url": "https://example.test/pr/7",
+        }
+
+    daemon = CompanyDaemon(workflow=workflow, runner=runner)
+    proof = daemon.run_once()[0]
+
+    assert proof.partial_success is True
+    assert proof.human_review_required is False
+    data = json.loads(tracker_path.read_text(encoding="utf-8"))
+    raw = data["issues"][0]
+    assert raw["status"] == "human_review"
+    assert raw["pull_requests"][0]["summary"]
+    assert "Partial success: True" in raw["comments"][0]["body"]
+    state = json.loads(
+        runs_path.joinpath("AP-7", ".aider", "company", "run-state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state["status"] == "human_review"
+
+
+def test_daemon_cleanup_prunes_only_terminal_safe_workspaces(tmp_path):
+    tracker_path = tmp_path / "issues.json"
+    runs_path = tmp_path / "runs"
+    workflow_path = write_workflow(tmp_path, tracker_path, runs_path)
+    text = workflow_path.read_text(encoding="utf-8")
+    text = text.replace(
+        "workspace:\n  root:",
+        "workspace:\n  cleanup_completed: true\n  max_retained_runs: 1\n  max_age_days: 1\n  root:",
+    )
+    workflow_path.write_text(text, encoding="utf-8")
+    workflow = CompanyWorkflow.load(workflow_path)
+    daemon = CompanyDaemon(workflow=workflow)
+
+    old_done = runs_path / "old-done"
+    new_done = runs_path / "new-done"
+    running = runs_path / "running"
+    for path, status, updated in (
+        (old_done, "done", "2000-01-01T00:00:00+00:00"),
+        (new_done, "done", "2999-01-01T00:00:00+00:00"),
+        (running, "running", "2000-01-01T00:00:00+00:00"),
+    ):
+        state_dir = path / ".aider" / "company"
+        state_dir.mkdir(parents=True)
+        state_dir.joinpath("run-state.json").write_text(
+            json.dumps(
+                {
+                    "issue_id": path.name,
+                    "status": status,
+                    "workspace": str(path),
+                    "attempts": 1,
+                    "updated_at": updated,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    result = daemon.cleanup_workspaces()
+
+    assert str(old_done) in result["removed"]
+    assert not old_done.exists()
+    assert new_done.exists()
+    assert running.exists()
+
+
+def test_github_status_transitions_use_review_and_failed_labels():
+    from aider.company.tracker.github import _labels_for_status, _normalize_status
+
+    labels = {
+        "todo": "company:todo",
+        "in_progress": "company:in-progress",
+        "human_review": "company:review",
+        "retry": "company:retry",
+        "failed": "company:failed",
+        "done": "company:done",
+    }
+
+    assert _normalize_status("partial-success") == "human_review"
+    assert _normalize_status("failed") == "failed"
+    assert _labels_for_status({"bug", "company:todo"}, "human_review", labels) == {
+        "bug",
+        "company:review",
+    }
+    assert _labels_for_status({"bug", "company:retry"}, "failed", labels) == {
+        "bug",
+        "company:failed",
+    }

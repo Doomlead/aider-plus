@@ -29,6 +29,9 @@ class TrackerWorkflowConfig:
 class WorkspaceWorkflowConfig:
     root: str | None = None
     clean: bool = False
+    cleanup_completed: bool = False
+    max_retained_runs: int = 50
+    max_age_days: int = 14
 
 
 @dataclass(frozen=True)
@@ -151,6 +154,15 @@ class CompanyWorkflow:
                     else None
                 ),
                 clean=bool(workspace_data.get("clean", False)),
+                cleanup_completed=bool(workspace_data.get("cleanup_completed", False)),
+                max_retained_runs=_positive_int(
+                    workspace_data.get("max_retained_runs", 50),
+                    "workspace.max_retained_runs",
+                ),
+                max_age_days=_positive_int(
+                    workspace_data.get("max_age_days", 14),
+                    "workspace.max_age_days",
+                ),
             ),
             agent=AgentWorkflowConfig(
                 max_concurrent_agents=max_concurrent,

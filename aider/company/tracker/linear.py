@@ -9,7 +9,12 @@ from typing import Any, Callable
 
 import httpx
 
-from aider.company.tracker import TrackerAdapter, TrackerError, TrackerIssue
+from aider.company.tracker import (
+    TrackerAdapter,
+    TrackerError,
+    TrackerIssue,
+    format_proof_summary,
+)
 
 _RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 _STATUS_QUERY = """
@@ -120,11 +125,8 @@ class LinearTrackerAdapter(TrackerAdapter):
         if proof is None:
             body = f"Linked pull request: {pr_url}"
         else:
-            proof_link = getattr(proof, "markdown_path", None) or "proof-of-work.md"
-            body = (
-                f"Linked pull request: {pr_url}\n\n"
-                f"Proof report: [ProofOfWork Markdown]({proof_link})\n"
-                f"Summary: {getattr(proof, 'summary', '') or 'No summary provided.'}"
+            body = f"Linked pull request: {pr_url}\n\n" + format_proof_summary(
+                proof, pr_url
             )
         self.comment(issue, body)
 
@@ -212,6 +214,8 @@ class LinearTrackerAdapter(TrackerAdapter):
         wanted = self.status_states.get(status) or {
             "in_progress": "started",
             "done": "completed",
+            "human_review": "started",
+            "failed": "unstarted",
             "retry": "unstarted",
             "todo": "unstarted",
         }.get(status)
@@ -247,11 +251,17 @@ def _linear_status(value: str) -> str:
     normalized = value.strip().lower().replace(" ", "_")
     if normalized in {"completed", "done", "closed"}:
         return "done"
-    if normalized in {"started", "in_progress", "in_progress"}:
+    if normalized in {"failed", "canceled", "cancelled"}:
+        return "failed"
+    if normalized in {"blocked", "needs_retry", "retry"}:
+        return "retry"
+    if normalized in {"review", "needs_review", "human_review"}:
+        return "human_review"
+    if normalized in {"started", "in_progress"}:
         return "in_progress"
     if normalized in {"backlog", "unstarted", "planned", "triage"}:
         return "todo"
-    return "retry" if normalized in {"failed", "blocked"} else "todo"
+    return "todo"
 
 
 def _linear_retry_delay(

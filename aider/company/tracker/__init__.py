@@ -54,6 +54,46 @@ class TrackerIssue:
         }
 
 
+def format_proof_summary(proof: Any, pr_url: str | None = None) -> str:
+    """Build a compact proof-of-work summary for tracker comments/attachments."""
+
+    proof_link = getattr(proof, "markdown_path", None) or (
+        f"{getattr(proof, 'workspace', '')}/.aider/company/proof-of-work.md"
+        if getattr(proof, "workspace", "")
+        else "proof-of-work.md"
+    )
+    checks = getattr(proof, "checks", ()) or ()
+    check_lines = []
+    for check in checks:
+        if isinstance(check, dict):
+            command = check.get("command") or check.get("name") or "check"
+            status = check.get("status") or check.get("result") or "unknown"
+            check_lines.append(f"{command}: {status}")
+        else:
+            check_lines.append(str(check))
+    changed_files = getattr(proof, "changed_files", ()) or ()
+    risk_notes = getattr(proof, "risk_notes", ()) or ()
+    lines = []
+    if pr_url:
+        lines.append(f"Pull request: {pr_url}")
+    lines.extend(
+        [
+            f"Proof report: [ProofOfWork Markdown]({proof_link})",
+            f"Summary: {getattr(proof, 'summary', '') or 'No summary provided.'}",
+            f"QA: {getattr(proof, 'qa_result', 'not-run')}",
+            f"Review: {getattr(proof, 'review_result', 'not-run')}",
+            f"Partial success: {getattr(proof, 'partial_success', False)}",
+            f"Human review required: {getattr(proof, 'human_review_required', True)}",
+            f"Completed stages: {', '.join(getattr(proof, 'completed_stages', ()) or ()) or 'none'}",
+            f"Failed stages: {', '.join(getattr(proof, 'failed_stages', ()) or ()) or 'none'}",
+            f"Changed files: {', '.join(str(item) for item in changed_files[:8]) or 'none'}",
+            f"Checks: {', '.join(check_lines[:8]) or 'none'}",
+            f"Risks / follow-ups: {', '.join(str(item) for item in risk_notes[:5]) or 'none'}",
+        ]
+    )
+    return "\n".join(lines)
+
+
 class TrackerAdapter(ABC):
     """Abstract issue/control-plane adapter used by the Company daemon."""
 
@@ -143,8 +183,18 @@ class LocalJsonTrackerAdapter(TrackerAdapter):
                         "created_at": now,
                         "url": pr_url,
                         "proof": proof.to_dict() if hasattr(proof, "to_dict") else None,
+                        "summary": (
+                            format_proof_summary(proof, pr_url)
+                            if proof is not None
+                            else ""
+                        ),
                     }
                 )
+                if proof is not None:
+                    comments = raw.setdefault("comments", [])
+                    comments.append(
+                        {"created_at": now, "body": format_proof_summary(proof, pr_url)}
+                    )
                 raw["updated_at"] = now
                 self._write(data)
                 return

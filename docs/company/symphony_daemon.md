@@ -42,6 +42,9 @@ tracker:
 workspace:
   root: ./AiderPlusWarehouse/runs
   clean: false
+  cleanup_completed: false  # true prunes terminal done/failed run workspaces
+  max_retained_runs: 50
+  max_age_days: 14
 agent:
   max_concurrent_agents: 2
   max_attempts: 2
@@ -146,18 +149,22 @@ aider company daemon --workflow AIDER_WORKFLOW.md --tracker github --repo owner/
 ```
 
 GitHub issue state is mapped into daemon states with labels: open issues are
-`todo` by default, `in_progress`/`running`/`claimed`/`needs_review` labels map to
-`in_progress`, `retry`/`blocked`/`failed` map to `retry`, and closed issues or a
-`done` label map to `done`. The optional `tracker.github.labels` mapping lets
-teams use their own label names while keeping the daemon states stable. Claiming
-an issue applies `in_progress`; completing a run applies `done` and closes the
-issue. Comments and PR links are posted back to the issue; PR attachment comments
-include a ProofOfWork Markdown link, an executive summary, completed/failed stage
-counts, and the human-review flag. The adapter caches issue-list results for 5
-minutes by default (configurable up to 10 minutes) and retries rate-limited or
-transient GitHub responses with exponential backoff before surfacing an error.
-Retry counters, the most recent API error, and recent retry events are exposed in
-daemon status.
+`todo` by default, `in_progress`/`running`/`claimed` labels map to
+`in_progress`, `needs_review`/`human_review` labels map to `human_review`,
+`retry`/`blocked` labels map to `retry`, a `failed` label maps to `failed`, and
+closed issues or a `done` label map to `done`. The optional
+`tracker.github.labels` mapping lets teams use their own label names while
+keeping the daemon states stable; it supports `todo`, `in_progress`,
+`human_review`, `retry`, `failed`, and `done`. Claiming an issue applies
+`in_progress`; partial-success runs move to `human_review`; exhausted failures
+move to `failed`; completing a run applies `done` and closes the issue. Comments
+and PR links are posted back to the issue; PR attachment comments include a
+ProofOfWork Markdown link, summary, QA/review status, partial-success flag,
+human-review flag, completed/failed stages, changed files, checks, and risks.
+The adapter caches issue-list results for 5 minutes by default (configurable up
+to 10 minutes) and retries rate-limited or transient GitHub responses with
+exponential backoff before surfacing an error. Retry counters, the most recent
+API error, and recent retry events are exposed in daemon status.
 
 Linear can also be used as a real tracker adapter when `LINEAR_API_KEY` is set:
 
@@ -170,8 +177,10 @@ tracker:
     retry_backoff_seconds: 1.0
     states:
       in_progress: started
+      human_review: started
       done: completed
       retry: unstarted
+      failed: unstarted
 ```
 
 ## CLI
@@ -217,3 +226,9 @@ placing secrets in hook output. External tracker adapters should preserve the
 same approval posture as the existing COO/MCP model: writing comments is low
 risk, but state transitions, PR attachment, deployment, and destructive tools
 should be allowlisted and approval-gated.
+
+Workspace cleanup is opt-in with `workspace.cleanup_completed: true`. Cleanup only
+removes terminal `done` or `failed` workspaces whose `run-state.json` lives under
+the configured runs root, and it applies both `workspace.max_retained_runs` and
+`workspace.max_age_days`. Active, retry, and human-review workspaces are retained
+so operators can inspect partial-success evidence and pending proof-of-work.

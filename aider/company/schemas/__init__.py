@@ -955,6 +955,61 @@ class ProofOfWork:
         def bullets(items: tuple[str, ...] | list[str], empty: str = "None") -> str:
             return "\n".join(f"- {item}" for item in items) if items else f"- {empty}"
 
+        def value_from_devops(*keys: str):
+            current = self.devops_status
+            for key in keys:
+                if not isinstance(current, dict):
+                    return None
+                current = current.get(key)
+            return current
+
+        metadata = (
+            self.devops_status.get("metadata", {})
+            if isinstance(self.devops_status, dict)
+            else {}
+        )
+        deployment = (
+            metadata.get("deployment_result") if isinstance(metadata, dict) else None
+        )
+        if not isinstance(deployment, dict):
+            deployment = {}
+        rollback_metadata = deployment.get("rollback_metadata") or value_from_devops(
+            "metadata", "rollback_metadata"
+        )
+        rollback_metadata = (
+            rollback_metadata if isinstance(rollback_metadata, dict) else {}
+        )
+        dry_preview = deployment.get("dry_run_preview") or value_from_devops(
+            "metadata", "dry_run_preview"
+        )
+        dry_preview = dry_preview if isinstance(dry_preview, dict) else {}
+        rollback_lines = []
+        if rollback_metadata:
+            rollback_lines.extend(
+                [
+                    f"Provider/environment: {rollback_metadata.get('provider', 'unknown')}/{rollback_metadata.get('environment', 'unknown')}",
+                    f"Command: {rollback_metadata.get('command') or 'not recorded'}",
+                    f"Owner: {rollback_metadata.get('owner') or 'DevOps'}",
+                    f"Previous artifact: {rollback_metadata.get('previous_artifact') or 'not recorded'}",
+                    f"Current artifact: {rollback_metadata.get('current_artifact') or 'not recorded'}",
+                ]
+            )
+            validation_steps = rollback_metadata.get("validation_steps") or []
+            if validation_steps:
+                rollback_lines.append(
+                    "Validation steps: "
+                    + "; ".join(str(step) for step in validation_steps)
+                )
+        preview_lines = []
+        if dry_preview:
+            if dry_preview.get("human_summary"):
+                preview_lines.append(str(dry_preview["human_summary"]))
+            if dry_preview.get("approval_gate"):
+                preview_lines.append(f"Approval gate: {dry_preview['approval_gate']}")
+            steps = dry_preview.get("steps") or []
+            if steps:
+                preview_lines.append("Steps: " + "; ".join(str(step) for step in steps))
+
         checks = []
         for check in self.checks:
             command = check.get("command") or check.get("name") or "check"
@@ -1031,6 +1086,12 @@ class ProofOfWork:
 ```json
 {_json.dumps(self.devops_status, indent=2, sort_keys=True)}
 ```
+
+### DevOps Dry-run Preview
+{bullets(preview_lines)}
+
+### DevOps Rollback Metadata
+{bullets(rollback_lines)}
 
 ## Links
 {bullets(links)}

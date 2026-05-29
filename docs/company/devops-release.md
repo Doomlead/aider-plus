@@ -59,7 +59,17 @@ preview or execute recovery safely.
 Set `devops_dry_run` or `dry_run` on a DevOps task to build the artifact and
 return a deployment preview without running provider commands. The preview shows
 the commands that would run, whether approval is required/granted, where logs
-would be captured/uploaded, and which rollback metadata would be attached.
+would be captured/uploaded, and which rollback metadata would be attached. It
+also includes operator-facing `human_summary`, `approval_gate`, `steps`, and
+`rollback_summary` fields so GUI, daemon, and tracker proof-of-work views can
+explain the plan without forcing reviewers to read raw JSON first.
+
+Provider coverage is tested one target at a time. Add or change a provider by
+asserting the exact generated command, the approval-gate behavior, and the
+rollback metadata for that provider before broadening test coverage to adjacent
+targets. AWS S3 dry-run coverage, for example, verifies that no provider command
+runs without approval while the preview still records the planned sync command,
+operator steps, rollback owner, previous artifact, and validation checks.
 
 ## Focused tests
 

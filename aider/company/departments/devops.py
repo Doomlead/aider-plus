@@ -306,6 +306,8 @@ class DevOpsDepartment(Department):
             approval_required=approval_required,
             approval_granted=high_risk_allowed,
             rollback_metadata=rollback_metadata,
+            rollback_command=rollback_command,
+            rollback_url=rollback_url,
         )
         await self._emit_lifecycle_event(
             task.task_id,
@@ -1134,7 +1136,23 @@ class DevOpsDepartment(Department):
         approval_required: bool,
         approval_granted: bool,
         rollback_metadata: dict,
+        rollback_command: str | None = None,
+        rollback_url: str | None = None,
     ) -> dict:
+        will_execute = not self._dry_run_requested(task)
+        log_capture_dir = getattr(
+            self.config, "devops_log_capture_dir", ".aider/company/build-logs"
+        )
+        upload_target = getattr(self.config, "devops_artifact_upload_target", "")
+        human_summary = self._format_dry_run_preview_summary(
+            target,
+            artifact,
+            commands,
+            will_execute=will_execute,
+            approval_required=approval_required,
+            approval_granted=approval_granted,
+            rollback_command=rollback_command,
+        )
         return {
             "task_id": task.task_id,
             "provider": target.provider,
@@ -1143,17 +1161,123 @@ class DevOpsDepartment(Department):
             "artifact": artifact.to_dict(),
             "commands": list(commands),
             "command_count": len(commands),
-            "will_execute": not self._dry_run_requested(task),
+            "will_execute": will_execute,
             "approval_required": approval_required,
             "approval_granted": approval_granted,
-            "rollback": dict(rollback_metadata),
-            "log_capture_dir": getattr(
-                self.config, "devops_log_capture_dir", ".aider/company/build-logs"
+            "approval_gate": self._approval_gate_summary(
+                target,
+                approval_required=approval_required,
+                approval_granted=approval_granted,
             ),
-            "artifact_upload_target": getattr(
-                self.config, "devops_artifact_upload_target", ""
+            "rollback": dict(rollback_metadata),
+            "rollback_summary": self._rollback_summary(
+                rollback_metadata,
+                rollback_command=rollback_command,
+                rollback_url=rollback_url,
+            ),
+            "log_capture_dir": log_capture_dir,
+            "artifact_upload_target": upload_target,
+            "human_summary": human_summary,
+            "steps": self._dry_run_preview_steps(
+                commands,
+                will_execute=will_execute,
+                approval_required=approval_required,
+                approval_granted=approval_granted,
+                log_capture_dir=log_capture_dir,
+                upload_target=upload_target,
             ),
         }
+
+    @staticmethod
+    def _approval_gate_summary(
+        target: DeploymentTarget, *, approval_required: bool, approval_granted: bool
+    ) -> str:
+        if not approval_required:
+            return f"No production approval gate is required for {target.provider}/{target.environment}."
+        if approval_granted:
+            return f"Approval is recorded for {target.provider}/{target.environment}."
+        return f"Approval is required before executing {target.provider}/{target.environment}."
+
+    @staticmethod
+    def _rollback_summary(
+        rollback_metadata: dict,
+        *,
+        rollback_command: str | None,
+        rollback_url: str | None,
+    ) -> str:
+        owner = rollback_metadata.get("owner") or "DevOps"
+        previous = rollback_metadata.get("previous_artifact") or "not recorded"
+        steps = rollback_metadata.get("validation_steps") or []
+        command = rollback_command or "follow the Delivery rollback plan"
+        summary = f"Rollback owner: {owner}; command: {command}; previous artifact: {previous}."
+        if rollback_url:
+            summary += f" Reference: {rollback_url}."
+        if steps:
+            summary += f" Validation: {len(steps)} step(s) captured."
+        return summary
+
+    @staticmethod
+    def _dry_run_preview_steps(
+        commands: list[str],
+        *,
+        will_execute: bool,
+        approval_required: bool,
+        approval_granted: bool,
+        log_capture_dir: str,
+        upload_target: str,
+    ) -> list[str]:
+        mode = "Execute" if will_execute else "Dry run only; skip"
+        steps = [
+            "Confirm the built artifact and target environment.",
+            (
+                f"{mode} {len(commands)} provider command(s)."
+                if commands
+                else "Record a local deployment manifest; no provider command is planned."
+            ),
+        ]
+        if approval_required and not approval_granted:
+            steps.append(
+                "Collect approval before any provider side effects are allowed."
+            )
+        elif approval_required:
+            steps.append(
+                "Use the recorded approval gate when executing provider commands."
+            )
+        steps.append(f"Capture command logs under {log_capture_dir}.")
+        if upload_target:
+            steps.append(f"Upload log artifacts to {upload_target}.")
+        steps.append(
+            "Attach rollback metadata and validation steps to the deployment result."
+        )
+        return steps
+
+    def _format_dry_run_preview_summary(
+        self,
+        target: DeploymentTarget,
+        artifact: BuildArtifact,
+        commands: list[str],
+        *,
+        will_execute: bool,
+        approval_required: bool,
+        approval_granted: bool,
+        rollback_command: str | None,
+    ) -> str:
+        action = "will execute" if will_execute else "would execute"
+        command_text = (
+            f"{action} {len(commands)} provider command(s)"
+            if commands
+            else "will record a local deployment manifest"
+        )
+        approval = self._approval_gate_summary(
+            target,
+            approval_required=approval_required,
+            approval_granted=approval_granted,
+        )
+        rollback = rollback_command or "Delivery rollback plan"
+        return (
+            f"Deploy {artifact.name}:{artifact.tag} to {target.provider}/{target.environment}; "
+            f"{command_text}. {approval} Rollback: {rollback}."
+        )
 
     def _rollback_metadata(
         self,

@@ -4,6 +4,7 @@ from pathlib import Path
 from aider.company.daemon.runner import CompanyDaemonRunner
 from aider.company.runtime import (
     CompanyRunRequest,
+    run_company_department_sequence,
     run_company_task,
     select_company_department_sequence,
     select_company_entry_target,
@@ -32,7 +33,12 @@ def test_run_company_task_contract():
         surface="test",
         session_id="s1",
         task=CompanyTask(
-            task_id="t1", origin="ceo", target="engineering", artifact_type="raw_prompt", payload="hi", blocking=False
+            task_id="t1",
+            origin="ceo",
+            target="engineering",
+            artifact_type="raw_prompt",
+            payload="hi",
+            blocking=False,
         ),
     )
     result = asyncio.run(run_company_task(req, execute=_execute))
@@ -75,8 +81,12 @@ def test_event_parity_cli_daemon_discord(monkeypatch, tmp_path):
                 metadata={},
             )
 
-    runner = CompanyDaemonRunner(orchestrator=OrchestratorStub(), coo=COOStub(), timeout_seconds=2)
-    issue = TrackerIssue(identifier="I1", title="t", description="d", labels=(), url=None)
+    runner = CompanyDaemonRunner(
+        orchestrator=OrchestratorStub(), coo=COOStub(), timeout_seconds=2
+    )
+    issue = TrackerIssue(
+        identifier="I1", title="t", description="d", labels=(), url=None
+    )
     workspace = Path(tmp_path)
     asyncio.run(runner.execute("prompt", workspace, issue))
 
@@ -95,7 +105,9 @@ def test_event_parity_cli_daemon_discord(monkeypatch, tmp_path):
         return StubCoder()
 
     monkeypatch.setattr(bot, "get_or_create_session", _fake_session)
-    asyncio.run(bot.run_instruction(key=key, repo_path=str(tmp_path), user_id=3, prompt="hello"))
+    asyncio.run(
+        bot.run_instruction(key=key, repo_path=str(tmp_path), user_id=3, prompt="hello")
+    )
 
     assert calls["count"] == 1
     assert "daemon_run_progress" in events
@@ -104,6 +116,48 @@ def test_event_parity_cli_daemon_discord(monkeypatch, tmp_path):
 def test_sequence_selection_is_centralized_in_runtime():
     seq = select_company_department_sequence(selected_departments=("engineering", "qa"))
     assert seq == (("engineering", "prd"), ("qa", "code"))
+
+
+def test_department_sequence_executor_carries_payload_and_context():
+    seen = []
+
+    async def _execute(task, metadata):
+        seen.append(
+            (task.target, task.origin, task.payload, task.context.get("handoff"))
+        )
+        return Deliverable(
+            task_id=task.task_id,
+            department=task.target,
+            artifact_type=task.artifact_type,
+            payload=f"{task.payload}->{task.target}",
+            status="success",
+            metadata={"context": {"handoff": task.target}},
+        )
+
+    result = asyncio.run(
+        run_company_department_sequence(
+            surface="daemon",
+            session_id="daemon:I2",
+            task_id_prefix="I2",
+            initial_origin="daemon",
+            initial_payload="prompt",
+            context={"handoff": "start"},
+            execute_department=_execute,
+            selected_departments=("engineering", "qa"),
+            registered_departments={"engineering", "qa"},
+        )
+    )
+
+    assert [deliverable.department for deliverable in result.deliverables] == [
+        "engineering",
+        "qa",
+    ]
+    assert seen == [
+        ("engineering", "daemon", "prompt", "start"),
+        ("qa", "engineering", "prompt->engineering", "engineering"),
+    ]
+    assert result.final_payload == "prompt->engineering->qa"
+    assert result.context["handoff"] == "qa"
 
 
 def test_run_company_task_end_to_end_stubbed_department_flow():
@@ -132,5 +186,9 @@ def test_run_company_task_end_to_end_stubbed_department_flow():
 
 def test_entry_target_selection_is_runtime_owned():
     assert select_company_entry_target(phase="prototyping", has_prd=False) == "product"
-    assert select_company_entry_target(phase="prototyping", has_prd=True) == "engineering"
-    assert select_company_entry_target(phase="development", has_prd=False) == "engineering"
+    assert (
+        select_company_entry_target(phase="prototyping", has_prd=True) == "engineering"
+    )
+    assert (
+        select_company_entry_target(phase="development", has_prd=False) == "engineering"
+    )

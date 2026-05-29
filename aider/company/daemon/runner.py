@@ -12,11 +12,11 @@ from aider.company.coo import NanobotCOO
 from aider.company.orchestrator import CompanyOrchestrator
 from aider.company.schemas import CompanyEvent, CompanyTask, EventMessage
 from aider.company.runtime import (
-    CompanyRunRequest,
-    run_company_task,
+    run_company_department_sequence,
     select_company_department_sequence,
 )
 from aider.company.tracker import TrackerIssue
+
 
 @dataclass(frozen=True)
 class CompanyDaemonRunnerOptions:
@@ -104,7 +104,6 @@ class CompanyDaemonRunner:
         if self.options.dry_run:
             risk_notes.append("Runner dry-run requested; no departments were executed.")
         elif departments and sequence:
-            payload: Any = prompt
             context: dict[str, Any] = {
                 "issue_id": issue.identifier,
                 "issue_title": issue.title,
@@ -112,62 +111,38 @@ class CompanyDaemonRunner:
                 "workspace": str(workspace),
                 "daemon_prompt_path": str(prompt_path),
             }
-            for step_index, (department, artifact_type) in enumerate(sequence, start=1):
-                if department not in departments:
-                    risk_notes.append(
-                        f"Skipped {department}; department is not registered."
-                    )
-                    continue
+
+            async def _execute_department(req_task, _metadata):
+                return await self.coo.run_department_task(req_task)
+
+            async def _stage_start(
+                _step_index, department, _artifact_type, total_stages
+            ):
                 await self._emit_progress(
                     issue,
                     stage=department,
                     status="running",
                     completed_stages=completed_stages,
                     failed_stages=failed_stages,
-                    total_stages=len(sequence),
+                    total_stages=total_stages,
                 )
-                task = CompanyTask(
-                    task_id=f"{issue.identifier}:{department}",
-                    origin=(
-                        "daemon" if not deliverables else deliverables[-1].department
-                    ),
-                    target=department,
-                    artifact_type=artifact_type,  # type: ignore[arg-type]
-                    payload=payload,
-                    blocking=False,
-                    context=dict(context),
+
+            async def _stage_error(_step_index, department, exc, total_stages):
+                failed_stages.append(department)
+                risk_notes.append(f"{department} failed: {exc}")
+                self._record_progress(issue, department, "failed", error=str(exc))
+                await self._emit_progress(
+                    issue,
+                    stage=department,
+                    status="failed",
+                    completed_stages=completed_stages,
+                    failed_stages=failed_stages,
+                    total_stages=total_stages,
+                    error=str(exc),
                 )
-                try:
-                    # TODO(2026-06-30): remove legacy daemon-owned sequencing once
-                    # orchestration sequencing is fully centralized.
-                    async def _execute(req_task, _metadata):
-                        deliverable = await self.coo.run_department_task(req_task)
-                        return {"deliverable": deliverable}
+                return self.options.continue_on_error
 
-                    req = CompanyRunRequest(
-                        surface="daemon",
-                        session_id=f"daemon:{issue.identifier}",
-                        task=task,
-                    )
-                    deliverable = (await run_company_task(req, execute=_execute))["deliverable"]
-                except Exception as exc:
-                    failed_stages.append(department)
-                    risk_notes.append(f"{department} failed: {exc}")
-                    self._record_progress(issue, department, "failed", error=str(exc))
-                    await self._emit_progress(
-                        issue,
-                        stage=department,
-                        status="failed",
-                        completed_stages=completed_stages,
-                        failed_stages=failed_stages,
-                        total_stages=len(sequence),
-                        error=str(exc),
-                    )
-                    if not self.options.continue_on_error:
-                        break
-                    continue
-
-                deliverables.append(deliverable)
+            async def _stage_success(step_index, department, deliverable, total_stages):
                 completed_stages.append(department)
                 self._record_progress(
                     issue,
@@ -175,9 +150,6 @@ class CompanyDaemonRunner:
                     deliverable.status,
                     artifact_type=deliverable.artifact_type,
                 )
-                payload = deliverable.payload
-                if isinstance(deliverable.metadata, dict):
-                    context.update(deliverable.metadata.get("context", {}) or {})
                 if deliverable.department == "engineering":
                     feedback = deliverable.review_feedback or deliverable.metadata.get(
                         "review_feedback"
@@ -197,14 +169,16 @@ class CompanyDaemonRunner:
                         "delivery_handover"
                     ) or deliverable.metadata.get("project_plan")
                     if isinstance(handover, dict):
-                        delivery_handover = handover
+                        delivery_handover.update(handover)
                 if deliverable.department == "devops":
-                    devops_status = {
-                        "status": deliverable.status,
-                        "artifact_type": deliverable.artifact_type,
-                        "metadata": dict(deliverable.metadata),
-                        "summary": str(deliverable.payload)[:1000],
-                    }
+                    devops_status.update(
+                        {
+                            "status": deliverable.status,
+                            "artifact_type": deliverable.artifact_type,
+                            "metadata": dict(deliverable.metadata),
+                            "summary": str(deliverable.payload)[:1000],
+                        }
+                    )
                 if deliverable.status not in {"success", "needs_review"}:
                     failed_stages.append(department)
                     risk_notes.append(f"{department} returned {deliverable.status}")
@@ -215,8 +189,29 @@ class CompanyDaemonRunner:
                         status=deliverable.status,
                         completed_stages=completed_stages,
                         failed_stages=failed_stages,
-                        total_stages=len(sequence),
+                        total_stages=total_stages,
                     )
+
+            sequence_result = await run_company_department_sequence(
+                surface="daemon",
+                session_id=f"daemon:{issue.identifier}",
+                task_id_prefix=issue.identifier,
+                initial_origin="daemon",
+                initial_payload=prompt,
+                context=context,
+                execute_department=_execute_department,
+                selected_departments=self.options.normalized_departments(),
+                max_iterations=self.options.max_iterations,
+                registered_departments=departments.keys(),
+                on_stage_start=_stage_start,
+                on_stage_success=_stage_success,
+                on_stage_error=_stage_error,
+            )
+            deliverables.extend(sequence_result.deliverables)
+            for department in sequence_result.skipped_departments:
+                risk_notes.append(
+                    f"Skipped {department}; department is not registered."
+                )
         elif not departments:
             risk_notes.append(
                 "No Company departments were registered; built-in runner rendered the prompt and captured workspace state."
@@ -262,7 +257,9 @@ class CompanyDaemonRunner:
         try:
             from aider.company.self_improvement import SelfImprovementService
 
-            reinforcement_summary = SelfImprovementService(self.orchestrator.state).apply_reinforcement_and_decay()
+            reinforcement_summary = SelfImprovementService(
+                self.orchestrator.state
+            ).apply_reinforcement_and_decay()
         except Exception:
             reinforcement_summary = {"decayed_records": 0, "review_candidates": []}
         return {

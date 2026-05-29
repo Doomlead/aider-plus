@@ -1,7 +1,7 @@
 # GUI and Chat Adapters
 
 Aider Plus exposes the same repo-native and Company runtime through multiple
-surfaces. The browser GUI, desktop GUI, Discord adapter, and headless/bot mode
+surfaces. The browser GUI, desktop GUI, Discord, Slack-compatible, Matrix, and headless/bot mode
 should reuse shared runtime contracts instead of creating separate workflow
 semantics.
 
@@ -28,9 +28,15 @@ semantics.
 - Adapters should preserve the same Aider args passthrough and Company command
   semantics that CLI users get directly.
 
-## Discord adapter
+## Chat adapters
 
-- Primary module: `aider/integrations/discord.py`.
+- Discord primary module: `aider/integrations/discord.py`.
+- Slack/webhook-compatible primary module: `aider/integrations/slack.py`
+  (also used by Teams and Mattermost shims).
+- Matrix primary module: `aider/integrations/matrix.py`. It extracts Matrix
+  room event identity (`room_id`, `event_id`, `sender`, and `content.body`)
+  into `AdapterMessage`, delegates inbound text through `ThinAdapter`, and
+  forwards shared `EventBus` status messages rather than owning workflow logic.
 - Discord lifecycle behavior is covered by
   `tests/company/test_discord_lifecycle.py` and thin adapter tests in
   `tests/integrations/test_thin_adapters.py`.
@@ -41,7 +47,8 @@ GUI and adapter code should listen to shared Company lifecycle/status/audit data
 instead of scraping department output. Important shared modules include:
 
 - `aider/company/events.py` for lifecycle event contracts;
-- `aider/company/surface_messages.py` for consistent status and approval text;
+- `aider/company/surface_messages.py` for consistent status badges, progress,
+  deployment, approval, and lifecycle text;
 - `aider/company/daemon/` for daemon run status and proof artifact metadata;
 - `aider/company/coo.py` for CEO-facing status questions and routing.
 

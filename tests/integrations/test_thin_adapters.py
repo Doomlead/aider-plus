@@ -11,6 +11,7 @@ from aider.integrations.discord import (
     DiscordAiderBot,
     subscribe_discord_event_forwarder,
 )
+from aider.integrations.matrix import MatrixAdapter
 from aider.integrations.slack import (
     MattermostAdapter,
     SlackAdapter,
@@ -127,15 +128,78 @@ def test_slack_and_webhook_adapter_normalize_slack_events_and_forward_bus():
     assert "AP-24" in messages[0]
 
 
+def test_matrix_adapter_normalizes_room_events_and_uses_event_bus_statuses():
+    bus = EventBus(session_id="matrix-test")
+    messages = []
+
+    def input_handler(message: AdapterMessage):
+        return {"delegated": True, "session_id": message.session_id}
+
+    adapter = MatrixAdapter(
+        event_bus=bus, forward=messages.append, input_handler=input_handler
+    )
+
+    result = asyncio.run(
+        adapter.handle_user_input(
+            {
+                "room_id": "!room:example.org",
+                "event_id": "$event",
+                "sender": "@user:example.org",
+                "content": {"msgtype": "m.text", "body": "  run QA  "},
+            }
+        )
+    )
+    adapter.subscribe_to_bus(event_types={"daemon_run_progress"})
+    bus.publish(DaemonRunProgress(payload={"issue_id": "AP-25", "status": "running"}))
+
+    assert result == {"delegated": True, "session_id": "matrix:$event"}
+    assert len(messages) == 1
+    assert "AP-25" in messages[0]
+    assert "🏃 Running" in messages[0]
+
+
+def test_matrix_adapter_bus_forwarding_does_not_run_workflow_logic():
+    bus = EventBus(session_id="matrix-bus-only")
+    messages = []
+
+    def input_handler(_message: AdapterMessage):
+        raise AssertionError("EventBus forwarding must not call input workflow")
+
+    adapter = MatrixAdapter(
+        event_bus=bus, forward=messages.append, input_handler=input_handler
+    )
+    adapter.subscribe_to_bus(event_types={"coo_action_taken"})
+
+    bus.publish(CooActionTaken(payload={"task_id": "T-25", "status": "needs_review"}))
+
+    assert len(messages) == 1
+    assert "T-25" in messages[0]
+    assert "⚠️ Needs Review" in messages[0]
+
+
 def test_cli_adapter_flag_accepts_repeatable_thin_adapter_choices():
     from aider.args import get_parser
 
     parser = get_parser([], None)
-    args = parser.parse_args(["--adapter", "slack", "--adapter", "webhook", "--adapter", "teams", "--adapter", "mattermost"])
+    args = parser.parse_args(
+        [
+            "--adapter",
+            "slack",
+            "--adapter",
+            "webhook",
+            "--adapter",
+            "teams",
+            "--adapter",
+            "mattermost",
+            "--adapter",
+            "matrix",
+        ]
+    )
 
-    assert args.adapter == ["slack", "webhook", "teams", "mattermost"]
+    assert args.adapter == ["slack", "webhook", "teams", "mattermost", "matrix"]
 
 
-def test_teams_and_mattermost_adapters_override_surface_name():
+def test_chat_adapters_override_surface_name():
     assert TeamsAdapter().surface_name == "teams"
     assert MattermostAdapter().surface_name == "mattermost"
+    assert MatrixAdapter().surface_name == "matrix"

@@ -133,6 +133,7 @@ def test_delivery_handover_to_devops_success_path_records_dashboard_metadata(tmp
         "devops_build_started",
         "devops_build_success",
         "devops_deploy_started",
+        "devops_deploy_preview",
         "devops_deployed",
     ]
 
@@ -429,3 +430,135 @@ def test_rollback_command_generation_and_logging_for_provider_deploy(tmp_path):
         deployed_events[0].payload["deployment"]["rollback_command"]
         == "flyctl releases rollback"
     )
+
+
+@pytest.mark.parametrize(
+    ("provider", "config", "expected_command", "expected_rollback"),
+    [
+        (
+            "netlify",
+            {"site": "release-seam", "dir": "dist"},
+            "netlify deploy --dir dist --prod --site release-seam",
+            "netlify rollback",
+        ),
+        (
+            "kubernetes",
+            {"manifest": "deploy.yaml", "namespace": "prod", "deployment": "web"},
+            "kubectl apply -f deploy.yaml --namespace prod",
+            "kubectl rollout undo deployment/web --namespace prod",
+        ),
+    ],
+)
+def test_additional_providers_generate_preview_and_rollback_metadata(
+    tmp_path, provider, config, expected_command, expected_rollback
+):
+    department = make_department(tmp_path)
+    commands = []
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        department._validate_command(command, high_risk_allowed=high_risk_allowed)
+        commands.append((command, high_risk_allowed))
+        return f"$ {command}\nexit_code=0\nprovider deployed"
+
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(
+        tmp_path,
+        deployment_commands=[],
+        deployment_target={
+            "provider": provider,
+            "environment": "production",
+            "config": config,
+        },
+        previous_artifact="release-seam:v3.2.0",
+        rollback_owner="Release Captain",
+        rollback_validation_steps=["Run production smoke", "Confirm error budget"],
+        devops_production_approved=True,
+    )
+
+    deliverable = run(department.process(task))
+
+    assert deliverable.status == "success"
+    assert commands[-1] == (expected_command, True)
+    deployment = deliverable.payload["deployment_result"]
+    assert deployment["dry_run_preview"]["commands"] == [expected_command]
+    assert deployment["dry_run_preview"]["approval_required"] is True
+    assert deployment["rollback_command"] == expected_rollback
+    assert deployment["rollback_metadata"]["previous_artifact"] == "release-seam:v3.2.0"
+    assert deployment["rollback_metadata"]["owner"] == "Release Captain"
+    assert deployment["rollback_metadata"]["validation_steps"] == [
+        "Run production smoke",
+        "Confirm error budget",
+    ]
+
+
+def test_production_provider_deploy_blocks_before_command_without_approval(tmp_path):
+    department = make_department(tmp_path)
+    commands = []
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        department._validate_command(command, high_risk_allowed=high_risk_allowed)
+        commands.append(command)
+        return f"$ {command}\nexit_code=0\nshould not deploy"
+
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(
+        tmp_path,
+        deployment_commands=[],
+        deployment_target={
+            "provider": "netlify",
+            "environment": "production",
+            "config": {"site": "release-seam", "dir": "dist"},
+        },
+    )
+
+    deliverable = run(department.process(task))
+
+    assert deliverable.status == "failure"
+    assert (
+        "Production DevOps deployment requires approval" in deliverable.payload["error"]
+    )
+    assert commands == ["python -m build"]
+
+
+def test_deployment_dry_run_preview_skips_provider_commands_without_approval(tmp_path):
+    department = make_department(tmp_path)
+    commands = []
+    events = []
+
+    async def capture(event):
+        events.append(event)
+
+    async def fake_run(command: str, *, high_risk_allowed: bool = False) -> str:
+        department._validate_command(command, high_risk_allowed=high_risk_allowed)
+        commands.append(command)
+        return f"$ {command}\nexit_code=0\nbuild only"
+
+    department._on_event = capture
+    department._run_shell = fake_run  # type: ignore[method-assign]
+    task = make_task(
+        tmp_path,
+        deployment_commands=[],
+        deployment_target={
+            "provider": "cloudflare-pages",
+            "environment": "production",
+            "config": {"project": "release-seam", "dir": "public"},
+        },
+        devops_dry_run=True,
+    )
+
+    deliverable = run(department.process(task))
+
+    assert deliverable.status == "success"
+    deployment = deliverable.payload["deployment_result"]
+    assert deployment["status"] == "partial"
+    assert deployment["dry_run_preview"]["will_execute"] is False
+    assert deployment["dry_run_preview"]["approval_required"] is True
+    assert deployment["dry_run_preview"]["commands"] == [
+        "wrangler pages deploy public --project-name release-seam --branch production"
+    ]
+    assert (
+        deployment["deployment_logs"]
+        == "Dry-run preview only; no deployment commands executed."
+    )
+    assert commands == ["python -m build"]
+    assert "devops_deploy_dry_run" in [event.payload["name"] for event in events]

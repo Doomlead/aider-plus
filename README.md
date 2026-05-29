@@ -99,8 +99,10 @@ aider company templates
 - **Delivery** — the coordination and readiness owner. Delivery tracks
   milestones, blockers, validation confidence, and the handoff into DevOps.
 - **DevOps** — the release execution layer. It validates Delivery handoffs, runs
-  approved build/package/deploy steps, captures logs, and records deployment or
-  rollback metadata.
+  approved build/package/deploy steps across local, Vercel, Railway, Fly.io,
+  AWS, Docker Compose, Netlify, Render, Cloudflare Pages, Kubernetes, and Helm
+  targets, captures logs, and records deployment, dry-run preview, and rollback
+  metadata.
 - **Skills vs. playbooks** — skills are role-scoped `SKILL.md` procedures
   retrieved for a task; playbooks are reusable lessons extracted from prior
   successful work.

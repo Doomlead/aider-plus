@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import shlex
@@ -51,6 +52,8 @@ class DevOpsDepartment(Department):
         ("flyctl",),
         ("vercel",),
         ("netlify",),
+        ("render",),
+        ("wrangler",),
         ("railway",),
         ("docker", "compose"),
         ("docker-compose",),
@@ -134,13 +137,24 @@ class DevOpsDepartment(Department):
                 },
             )
 
-        status = "success" if deployment.status == "success" else "failure"
-        summary = (
-            f"Built {build_artifact.name}:{build_artifact.tag} and deployed to "
-            f"{deployment.environment}."
-            if status == "success"
-            else f"Build completed but deployment status is {deployment.status}."
+        dry_run_requested = self._dry_run_requested(task)
+        status = (
+            "success"
+            if deployment.status == "success" or dry_run_requested
+            else "failure"
         )
+        if dry_run_requested:
+            summary = (
+                f"Built {build_artifact.name}:{build_artifact.tag} and prepared "
+                f"a dry-run deployment preview for {deployment.environment}."
+            )
+        elif status == "success":
+            summary = (
+                f"Built {build_artifact.name}:{build_artifact.tag} and deployed to "
+                f"{deployment.environment}."
+            )
+        else:
+            summary = f"Build completed but deployment status is {deployment.status}."
         return Deliverable(
             task_id=task.task_id,
             department=self.name,
@@ -153,6 +167,8 @@ class DevOpsDepartment(Department):
                 "deploy_url": deployment.deployed_url,
                 "logs_url": deployment.logs_url,
                 "rollback_command": deployment.rollback_command,
+                "rollback_metadata": deployment.rollback_metadata,
+                "dry_run_preview": deployment.dry_run_preview,
                 "deployment_notes": deployment.deployment_notes,
                 "deployed_at": deployment.deployed_at,
                 "git_tag": build_artifact.tag,
@@ -174,6 +190,8 @@ class DevOpsDepartment(Department):
                 "deploy_url": deployment.deployed_url,
                 "logs_url": deployment.logs_url,
                 "rollback_command": deployment.rollback_command,
+                "rollback_metadata": deployment.rollback_metadata,
+                "dry_run_preview": deployment.dry_run_preview,
                 "deployment_notes": deployment.deployment_notes,
                 "deployed_at": deployment.deployed_at,
                 "git_tag": build_artifact.tag,
@@ -267,6 +285,73 @@ class DevOpsDepartment(Department):
         )
         commands = self._deployment_commands(task, target, build_artifact)
         high_risk_allowed = self._high_risk_approved(task, target)
+        approval_required = self._deployment_requires_approval(target, commands)
+        rollback_command = self._rollback_command(
+            task, target, build_artifact, handover
+        )
+        rollback_url = self._rollback_url(task, handover)
+        rollback_metadata = self._rollback_metadata(
+            task,
+            target,
+            build_artifact,
+            handover,
+            rollback_command=rollback_command,
+            rollback_url=rollback_url,
+        )
+        dry_run_preview = self._dry_run_preview(
+            task,
+            target,
+            build_artifact,
+            commands,
+            approval_required=approval_required,
+            approval_granted=high_risk_allowed,
+            rollback_metadata=rollback_metadata,
+        )
+        await self._emit_lifecycle_event(
+            task.task_id,
+            "devops_deploy_preview",
+            {
+                "formatted": (
+                    f"DevOps prepared deployment preview for {target.provider} / "
+                    f"{target.environment}."
+                ),
+                "preview": dry_run_preview,
+            },
+        )
+        if self._dry_run_requested(task):
+            deployed_at = self._deployment_timestamp()
+            result = DeploymentResult(
+                environment=target.environment,
+                status="partial",
+                target=target,
+                deployed_url=None,
+                logs_url=None,
+                rollback_url=rollback_url,
+                rollback_command=rollback_command,
+                rollback_metadata=rollback_metadata,
+                dry_run_preview=dry_run_preview,
+                deployment_notes=self._deployment_notes(
+                    task, target, commands, "dry-run", deployed_at
+                ),
+                deployed_at=deployed_at,
+                build_artifact=build_artifact,
+                deployment_logs="Dry-run preview only; no deployment commands executed.",
+                log_artifacts=[],
+            )
+            await self._emit_lifecycle_event(
+                task.task_id,
+                "devops_deploy_dry_run",
+                {
+                    "formatted": "DevOps dry-run preview completed without deployment side effects.",
+                    "deployment": result.to_dict(),
+                },
+            )
+            return result
+        if approval_required and not high_risk_allowed:
+            raise PermissionError(
+                "Production DevOps deployment requires approval: "
+                f"{target.provider}/{target.environment}"
+            )
         logs: list[str] = []
         for command in commands:
             logs.append(
@@ -286,10 +371,10 @@ class DevOpsDepartment(Department):
                 target=target,
                 deployed_url=None,
                 logs_url=self._logs_url(task, target, log_artifacts),
-                rollback_url=self._rollback_url(task, handover),
-                rollback_command=self._rollback_command(
-                    task, target, build_artifact, handover
-                ),
+                rollback_url=rollback_url,
+                rollback_command=rollback_command,
+                rollback_metadata=rollback_metadata,
+                dry_run_preview=dry_run_preview,
                 deployment_notes=self._deployment_notes(
                     task, target, commands, "failed", deployed_at
                 ),
@@ -324,10 +409,10 @@ class DevOpsDepartment(Department):
             target=target,
             deployed_url=deployed_url,
             logs_url=self._logs_url(task, target, log_artifacts),
-            rollback_url=self._rollback_url(task, handover),
-            rollback_command=self._rollback_command(
-                task, target, build_artifact, handover
-            ),
+            rollback_url=rollback_url,
+            rollback_command=rollback_command,
+            rollback_metadata=rollback_metadata,
+            dry_run_preview=dry_run_preview,
             deployment_notes=self._deployment_notes(
                 task, target, commands, "success", deployed_at
             ),
@@ -574,7 +659,85 @@ class DevOpsDepartment(Department):
                 f" -f {shlex.quote(str(cfg['file']))}" if cfg.get("file") else ""
             )
             return [f"docker compose{compose_file} up -d --build{service}"]
+        if provider == "netlify":
+            directory = shlex.quote(
+                str(
+                    cfg.get("dir")
+                    or cfg.get("directory")
+                    or self._artifact_dir(artifact)
+                )
+            )
+            command = f"netlify deploy --dir {directory}"
+            command += (
+                " --prod"
+                if target.environment == "production"
+                else " --alias " + shlex.quote(target.environment)
+            )
+            if cfg.get("site"):
+                command += f" --site {shlex.quote(str(cfg['site']))}"
+            return [command]
+        if provider == "render":
+            service = cfg.get("service_id") or cfg.get("service")
+            if not service:
+                raise PermissionError(
+                    "Render deployments require service_id or service config."
+                )
+            command = f"render deploys create {shlex.quote(str(service))}"
+            if cfg.get("wait", True):
+                command += " --wait"
+            return [command]
+        if provider == "cloudflare-pages":
+            project = (
+                cfg.get("project")
+                or cfg.get("project_name")
+                or (artifact.name if artifact else "app")
+            )
+            directory = shlex.quote(
+                str(
+                    cfg.get("dir")
+                    or cfg.get("directory")
+                    or self._artifact_dir(artifact)
+                )
+            )
+            branch = cfg.get("branch") or target.environment
+            return [
+                "wrangler pages deploy "
+                f"{directory} --project-name {shlex.quote(str(project))} "
+                f"--branch {shlex.quote(str(branch))}"
+            ]
+        if provider == "kubernetes":
+            manifest = shlex.quote(
+                str(cfg.get("manifest") or cfg.get("file") or "k8s.yaml")
+            )
+            namespace = (
+                f" --namespace {shlex.quote(str(cfg['namespace']))}"
+                if cfg.get("namespace")
+                else ""
+            )
+            return [f"kubectl apply -f {manifest}{namespace}"]
+        if provider == "helm":
+            release = shlex.quote(
+                str(cfg.get("release") or (artifact.name if artifact else "app"))
+            )
+            chart = shlex.quote(str(cfg.get("chart") or "."))
+            namespace = (
+                f" --namespace {shlex.quote(str(cfg['namespace']))}"
+                if cfg.get("namespace")
+                else ""
+            )
+            values = (
+                f" -f {shlex.quote(str(cfg['values']))}" if cfg.get("values") else ""
+            )
+            return [f"helm upgrade --install {release} {chart}{namespace}{values}"]
         raise PermissionError(f"Unsupported deployment provider: {target.provider}")
+
+    @staticmethod
+    def _artifact_dir(artifact: BuildArtifact | None) -> str:
+        if not artifact or not artifact.location:
+            return "dist"
+        if artifact.artifact_type in {"static_site", "pypi_package", "source_snapshot"}:
+            return artifact.location
+        return "dist"
 
     def _artifact_location(
         self, task: CompanyTask, commands: list[str], name: str, tag: str
@@ -701,6 +864,11 @@ class DevOpsDepartment(Department):
             "flyio": "fly",
             "compose": "docker-compose",
             "docker": "docker-compose",
+            "k8s": "kubernetes",
+            "kubectl": "kubernetes",
+            "cloudflare": "cloudflare-pages",
+            "cloudflare-pages": "cloudflare-pages",
+            "pages": "cloudflare-pages",
         }
         return aliases.get(normalized, normalized or "local")
 
@@ -755,6 +923,16 @@ class DevOpsDepartment(Department):
         if target and target.provider == "vercel" and target.config.get("project"):
             project = str(target.config["project"]).strip().lower()
             return f"https://{project}.vercel.app"
+        if target and target.provider == "netlify" and target.config.get("site"):
+            site = str(target.config["site"]).strip().lower()
+            return f"https://{site}.netlify.app"
+        if (
+            target
+            and target.provider == "cloudflare-pages"
+            and target.config.get("project")
+        ):
+            project = str(target.config["project"]).strip().lower()
+            return f"https://{project}.pages.dev"
         project_name = (
             str(
                 task.context.get("project_name")
@@ -826,6 +1004,27 @@ class DevOpsDepartment(Department):
             return "flyctl releases rollback"
         if target.provider == "docker-compose":
             return "docker compose down"
+        if target.provider == "netlify":
+            return "netlify rollback"
+        if target.provider == "render":
+            service = target.config.get("service_id") or target.config.get("service")
+            return (
+                f"render deploys rollback {shlex.quote(str(service))}"
+                if service
+                else None
+            )
+        if target.provider == "cloudflare-pages":
+            return "wrangler pages deployment tail --status=failed"
+        if target.provider == "kubernetes":
+            namespace = (
+                f" --namespace {shlex.quote(str(target.config['namespace']))}"
+                if target.config.get("namespace")
+                else ""
+            )
+            return f"kubectl rollout undo deployment/{shlex.quote(str(target.config.get('deployment') or artifact.name))}{namespace}"
+        if target.provider == "helm":
+            release = shlex.quote(str(target.config.get("release") or artifact.name))
+            return f"helm rollback {release}"
         if target.provider == "aws" and previous:
             return (
                 f"aws deploy create-deployment --revision {shlex.quote(str(previous))}"
@@ -900,6 +1099,99 @@ class DevOpsDepartment(Department):
         return approved
 
     @staticmethod
+    def _deployment_requires_approval(
+        target: DeploymentTarget, commands: list[str]
+    ) -> bool:
+        approval_level = str(
+            (target.config or {}).get("approval_level") or "high"
+        ).lower()
+        return bool(
+            commands
+            and (
+                str(target.environment).lower() == "production"
+                or approval_level in {"critical", "production"}
+            )
+        )
+
+    @staticmethod
+    def _dry_run_requested(task: CompanyTask) -> bool:
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        context = task.context if isinstance(task.context, dict) else {}
+        return bool(
+            payload.get("devops_dry_run")
+            or payload.get("dry_run")
+            or context.get("devops_dry_run")
+            or context.get("dry_run")
+        )
+
+    def _dry_run_preview(
+        self,
+        task: CompanyTask,
+        target: DeploymentTarget,
+        artifact: BuildArtifact,
+        commands: list[str],
+        *,
+        approval_required: bool,
+        approval_granted: bool,
+        rollback_metadata: dict,
+    ) -> dict:
+        return {
+            "task_id": task.task_id,
+            "provider": target.provider,
+            "environment": target.environment,
+            "target": target.to_dict(),
+            "artifact": artifact.to_dict(),
+            "commands": list(commands),
+            "command_count": len(commands),
+            "will_execute": not self._dry_run_requested(task),
+            "approval_required": approval_required,
+            "approval_granted": approval_granted,
+            "rollback": dict(rollback_metadata),
+            "log_capture_dir": getattr(
+                self.config, "devops_log_capture_dir", ".aider/company/build-logs"
+            ),
+            "artifact_upload_target": getattr(
+                self.config, "devops_artifact_upload_target", ""
+            ),
+        }
+
+    def _rollback_metadata(
+        self,
+        task: CompanyTask,
+        target: DeploymentTarget,
+        artifact: BuildArtifact,
+        handover: DeliveryHandover | None,
+        *,
+        rollback_command: str | None,
+        rollback_url: str | None,
+    ) -> dict:
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        previous = payload.get("previous_artifact") or task.context.get(
+            "previous_artifact"
+        )
+        validation_steps = payload.get("rollback_validation_steps") or task.context.get(
+            "rollback_validation_steps"
+        )
+        if validation_steps is None and handover and handover.rollback_notes:
+            validation_steps = handover.rollback_notes
+        return {
+            "provider": target.provider,
+            "environment": target.environment,
+            "command": rollback_command,
+            "url": rollback_url,
+            "previous_artifact": previous,
+            "current_artifact": artifact.location,
+            "current_tag": artifact.tag,
+            "owner": payload.get("rollback_owner")
+            or task.context.get("rollback_owner")
+            or "DevOps",
+            "delivery_plan_present": bool(handover and handover.rollback_plan),
+            "delivery_plan": handover.rollback_plan if handover else "",
+            "validation_steps": list(validation_steps or []),
+            "generated_at": self._deployment_timestamp(),
+        }
+
+    @staticmethod
     def _deployment_timestamp() -> str:
         return datetime.now(timezone.utc).isoformat()
 
@@ -942,6 +1234,30 @@ class DevOpsDepartment(Department):
             path = task_dir / f"{phase}-{idx}.log"
             path.write_text(log, encoding="utf-8")
             paths.append(str(path))
+        manifest = task_dir / f"{phase}-manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "task_id": task.task_id,
+                    "phase": phase,
+                    "captured_at": self._deployment_timestamp(),
+                    "artifacts": [
+                        {
+                            "path": path,
+                            "bytes": Path(path).stat().st_size,
+                            "sha256": hashlib.sha256(
+                                Path(path).read_bytes()
+                            ).hexdigest(),
+                        }
+                        for path in paths
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         return paths
 
     @staticmethod

@@ -16,6 +16,50 @@ DEPARTMENTS = ("product", "ux", "engineering", "reviewer", "qa", "devops")
 ONBOARDING_STATE = Path(".aider") / "company" / "onboarding.json"
 WORKFLOW_GUIDE = "AIDER_WORKFLOW.md"
 ENV_EXAMPLE = ".env.example"
+MINIMAL_ONBOARDING_STEPS = 5
+ADVANCED_ONBOARDING_STEPS = 7
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def detect_onboarding_defaults() -> dict[str, object]:
+    """Infer first-run defaults from common environment variables."""
+
+    detected: dict[str, object] = {}
+    for env_name, default_name in (
+        ("AIDER_COMPANY_WAREHOUSE", "warehouse_path"),
+        ("AIDER_COMPANY_TEMPLATE", "template"),
+        ("GITHUB_REPO", "github_repo"),
+        ("GITHUB_TOKEN", "github_token"),
+    ):
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            detected[default_name] = value
+
+    model = os.environ.get("AIDER_MODEL", "").strip()
+    if not model:
+        provider_model_defaults = (
+            ("OPENAI_API_KEY", "gpt-5.5"),
+            ("ANTHROPIC_API_KEY", "anthropic/claude-sonnet-4-5"),
+            ("OPENROUTER_API_KEY", "openrouter/deepseek/deepseek-r1:free"),
+            ("GEMINI_API_KEY", "gemini/gemini-2.5-pro"),
+            ("DEEPSEEK_API_KEY", "deepseek/deepseek-chat"),
+        )
+        for env_name, env_model in provider_model_defaults:
+            if os.environ.get(env_name, "").strip():
+                model = env_model
+                break
+    if model:
+        detected["model"] = model
+
+    if os.environ.get("AIDER_MCP_CONFIG", "").strip() or _env_flag(
+        "AIDER_COMPANY_ENABLE_MCP"
+    ):
+        detected["mcp_enabled"] = True
+
+    return detected
 
 
 @dataclass(frozen=True)
@@ -54,7 +98,7 @@ class CompanyOnboarding:
         self.root = Path(root or Path.cwd()).expanduser().resolve()
         self.input_func = input_func or input
         self.output_func = output_func or print
-        self.defaults = dict(defaults or {})
+        self.defaults = {**detect_onboarding_defaults(), **dict(defaults or {})}
 
     @staticmethod
     def state_path(root: str | Path | None = None) -> Path:
@@ -67,7 +111,28 @@ class CompanyOnboarding:
     def run_onboarding_flow(self) -> CompanyOnboardingResult:
         """Run the guided setup and write Company quickstart artifacts."""
 
+        advanced = bool(self.defaults.get("advanced", False))
+        total_steps = (
+            ADVANCED_ONBOARDING_STEPS if advanced else MINIMAL_ONBOARDING_STEPS
+        )
+        step_index = 0
+
+        def step(label: str) -> None:
+            nonlocal step_index
+            step_index += 1
+            self.output_func(f"Step {step_index} of {total_steps}: {label}")
+
         self.output_func("👋 Welcome to Aider Plus Company Mode setup")
+        if advanced:
+            self.output_func(
+                "Advanced setup is enabled; all optional choices will be shown."
+            )
+        else:
+            self.output_func(
+                "Minimal setup is enabled; daemon, MCP, and per-department overrides can be configured later with `aider company init --advanced`."
+            )
+
+        step("Choose a warehouse")
         warehouse_path = self._prompt_path(
             "Warehouse directory",
             self.defaults.get("warehouse_path") or default_warehouse_path(self.root),
@@ -75,30 +140,56 @@ class CompanyOnboarding:
         WarehouseManager(warehouse_path).init()
         self.output_func(f"✓ Warehouse initialized at {warehouse_path}")
 
+        step("Choose a starter template")
         template = self._prompt_template(
             str(self.defaults.get("template") or DEFAULT_TEMPLATE_KEY)
         )
         self.output_func(f"✓ Default template: {template}")
 
-        github_repo = self._prompt(
-            "GitHub repo for daemon issues (owner/repo, blank to skip)",
-            str(self.defaults.get("github_repo") or ""),
-        ).strip()
-        github_token = self._prompt_secret(
-            "GitHub token for daemon (blank to use GITHUB_TOKEN later)",
-            str(self.defaults.get("github_token") or ""),
-        ).strip()
+        if advanced:
+            step("Configure GitHub issue tracking")
+            github_repo = self._prompt(
+                "GitHub repo for daemon issues (owner/repo, blank to skip)",
+                str(self.defaults.get("github_repo") or ""),
+            ).strip()
+            github_token = self._prompt_secret(
+                "GitHub token for daemon (blank to use GITHUB_TOKEN later)",
+                str(self.defaults.get("github_token") or ""),
+            ).strip()
+        else:
+            github_repo = str(self.defaults.get("github_repo") or "").strip()
+            github_token = str(self.defaults.get("github_token") or "").strip()
+            if github_repo:
+                self.output_func(
+                    f"✓ Detected GitHub repo from defaults/environment: {github_repo}"
+                )
+            else:
+                self.output_func(
+                    "Configure later: add GITHUB_REPO or re-run `aider company init --advanced` for GitHub issue tracking."
+                )
         github_token_configured = bool(github_token or os.environ.get("GITHUB_TOKEN"))
 
-        model_preferences = self._prompt_department_models()
+        step("Choose model defaults")
+        model_preferences = self._prompt_department_models(advanced=advanced)
         api_key_validation = self.validate_api_keys(model_preferences)
         self._report_api_key_validation(api_key_validation)
-        mcp_enabled = self._prompt_bool(
-            "Enable MCP integrations for Company agents?",
-            bool(self.defaults.get("mcp_enabled", False)),
-        )
+
+        if advanced:
+            step("Configure MCP integrations")
+            mcp_enabled = self._prompt_bool(
+                "Enable MCP integrations for Company agents?",
+                bool(self.defaults.get("mcp_enabled", False)),
+            )
+        else:
+            mcp_enabled = bool(self.defaults.get("mcp_enabled", False))
+            self.output_func(
+                "✓ MCP integrations detected from environment."
+                if mcp_enabled
+                else "Configure later: re-run with `--advanced` to enable MCP integrations."
+            )
         mcp_tools = self._prompt_mcp_tools(mcp_enabled)
 
+        step("Write quickstart files")
         company_dir = self.root / ".aider" / "company"
         company_dir.mkdir(parents=True, exist_ok=True)
         daemon_workflow = company_dir / "workflow.yml"
@@ -107,6 +198,7 @@ class CompanyOnboarding:
         config_path = self.root / ONBOARDING_STATE
         state = {
             "version": 1,
+            "onboarding_mode": "advanced" if advanced else "minimal",
             "warehouse_path": str(warehouse_path),
             "default_template": template,
             "default_template_mode": str(
@@ -145,6 +237,7 @@ class CompanyOnboarding:
         self.output_func(f"✓ Wrote {workflow_guide}")
         self.output_func(f"✓ Wrote {env_example}")
 
+        step("Create a first product or configure later")
         first_product_path = self._maybe_create_first_product(warehouse_path, template)
         if first_product_path:
             state["first_product_path"] = first_product_path
@@ -406,13 +499,20 @@ runner:
         )
         return tools
 
-    def _prompt_department_models(self) -> dict[str, dict[str, object]]:
+    def _prompt_department_models(
+        self, *, advanced: bool = True
+    ) -> dict[str, dict[str, object]]:
         default_model = str(self.defaults.get("model") or "")
         configured = self.defaults.get("model_preferences")
         if isinstance(configured, dict):
             return {
                 str(k): dict(v) for k, v in configured.items() if isinstance(v, dict)
             }
+        if not advanced:
+            model = self._prompt(
+                "Default model for Company agents", default_model
+            ).strip()
+            return {dept: {"model": model, "cache": True} for dept in DEPARTMENTS}
         result: dict[str, dict[str, object]] = {}
         for dept in DEPARTMENTS:
             model = self._prompt(f"Model for {dept} department", default_model).strip()

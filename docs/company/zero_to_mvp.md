@@ -37,14 +37,17 @@ aider company init
 
 The `CompanyOnboarding` flow walks through the core studio setup:
 
+The default path is a minimal preset that keeps first run focused on `warehouse + template + one model + quickstart files`. Each interactive phase prints a short `Step N of M` progress indicator. Re-run `aider company init --advanced` when you want the full setup pass.
+
+Minimal setup:
+
 1. Initialize the warehouse that stores Git-backed product repositories.
 2. Pick the default `aider company new --template ...` starter.
-3. Configure a GitHub token/repo pair for the issue daemon, or leave it blank for local tracker use.
-4. Choose preferred department models and prompt caching for Product, UX, Engineering, Reviewer, QA, and DevOps.
-5. Validate whether the provider API keys inferred from those models are already available in the environment.
-6. Decide whether MCP integrations should be enabled for external tools/context.
-7. Generate a tailored `.env.example`, `AIDER_WORKFLOW.md`, and `.aider/company/workflow.yml` with the quickstart commands and daemon entry point.
-8. Optionally create the first Git-backed product repo immediately; `--yes` auto-runs that final step with defaults or `--product-idea`/`--product-name`.
+3. Choose one default model for all Company departments and validate inferred provider keys.
+4. Generate a tailored `.env.example`, `AIDER_WORKFLOW.md`, and `.aider/company/workflow.yml` with quickstart commands.
+5. Optionally create the first Git-backed product repo immediately, or configure it later.
+
+Advanced setup adds prompts to configure a GitHub token/repo pair for the issue daemon, choose per-department models and prompt caching for Product, UX, Engineering, Reviewer, QA, and DevOps, and enable MCP integrations for external tools/context. In either mode, `--yes` can auto-create the first product repo with defaults or `--product-idea`/`--product-name`.
 
 The same helper is exposed in the Streamlit browser UI and the native Tkinter desktop UI under **Onboarding / Quick Start**. Use `--skip-onboarding` on normal `aider` launches when you do not want the first-run offer.
 
@@ -53,14 +56,18 @@ The same helper is exposed in the Streamlit browser UI and the native Tkinter de
 
 If adoption feedback says onboarding feels dense, prioritize defaults over choices:
 
-- Start with a **minimal preset** (`warehouse + template + one model`) and defer advanced options to a post-setup `aider company init --advanced` pass.
-- Auto-detect sensible defaults from environment variables and only ask questions when confidence is low.
+- The default flow now starts with a **minimal preset** (`warehouse + template + one model`) and defers advanced options to a post-setup `aider company init --advanced` pass.
+- Defaults are auto-detected from `AIDER_COMPANY_WAREHOUSE`, `AIDER_COMPANY_TEMPLATE`, `AIDER_MODEL`, provider API keys, `GITHUB_REPO`, `GITHUB_TOKEN`, `AIDER_MCP_CONFIG`, and `AIDER_COMPANY_ENABLE_MCP`.
 - Keep the first run focused on one success outcome: creating the first product repo and shipping a first change.
-- Collapse optional configuration (daemon, MCP, per-department overrides) behind explicit “configure later” toggles.
-- Show a short progress indicator (for example, “Step 2 of 4”) so users understand setup scope before making decisions.
+- Optional daemon, MCP, and per-department overrides are presented as “configure later” choices in the minimal flow.
+- Each phase shows a short progress indicator (for example, “Step 2 of 5”) so users understand setup scope before making decisions.
 
 ```bash
-aider company init --warehouse ~/AiderPlusWarehouse --template nextjs-saas --github-repo owner/repo --model gpt-5.5 --enable-mcp --product-idea "Build my MVP" --product-name my-mvp --yes
+# Minimal first run
+aider company init --warehouse ~/AiderPlusWarehouse --template nextjs-saas --model gpt-5.5
+
+# Full configuration pass
+aider company init --advanced --warehouse ~/AiderPlusWarehouse --template nextjs-saas --github-repo owner/repo --model gpt-5.5 --enable-mcp --product-idea "Build my MVP" --product-name my-mvp --yes
 ```
 
 ## Command

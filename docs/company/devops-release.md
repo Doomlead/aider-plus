@@ -29,6 +29,9 @@ that handoff is approved.
 DevOps changes should preserve these behaviors:
 
 - validate Delivery handoffs before running build or deployment steps;
+- preserve Delivery release-risk notes when codegraph impact identifies
+  externally visible routes, including route-specific QA evidence, release-note
+  callouts, smoke checks, and rollback validation expectations;
 - detect build/package/deploy commands from supported project metadata where
   possible;
 - capture command output, artifact metadata, deployment provider results, and
@@ -54,7 +57,10 @@ Every deployment result records rollback metadata alongside the legacy rollback
 command/url fields. The metadata captures the provider/environment, current and
 previous artifacts, owner, Delivery rollback plan presence, validation steps,
 and generation timestamp so dashboards and operators have enough context to
-preview or execute recovery safely.
+preview or execute recovery safely. When Delivery receives codegraph-impacted
+routes, its handoff release notes and rollback plan call out those routes so
+DevOps and human approvers can smoke, monitor, and re-validate the exact user or
+API surfaces before and after deployment.
 
 Set `devops_dry_run` or `dry_run` on a DevOps task to build the artifact and
 return a deployment preview without running provider commands. The preview shows

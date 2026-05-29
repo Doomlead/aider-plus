@@ -144,9 +144,12 @@ aider company templates
   proposal flows.
 - **Code-intelligence graph:** symbol search, callers/callees, impact analysis,
   affected-test suggestions, route awareness, and graph-aware context. Company
-  QA uses graph-suggested affected tests, Reviewer and Delivery consume impact
-  analysis for review/release risk, and route detection covers decorator routes
-  plus Next.js, Nuxt, SvelteKit, Django, Rails, Express, and NestJS patterns.
+  QA uses graph-suggested and convention-inferred affected tests, carries
+  suggested test commands into the QA report, and builds route-aware QA plans
+  for decorator routes plus Next.js, Nuxt, SvelteKit, Django, Rails, Express,
+  and NestJS patterns. Reviewer and Delivery consume impact analysis for
+  graph-scoped review, route-specific QA expectations, explicit release-risk
+  notes, release-note callouts, smoke checks, and rollback validation.
 - **MCP and adapters:** approval-aware MCP tools list why each operation is
   read-only or gated, route mutating calls through shared approvals, and emit
   audit-ready denial messages; MCP configuration plus Discord, Slack-compatible,

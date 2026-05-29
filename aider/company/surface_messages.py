@@ -125,9 +125,11 @@ def _detail_lines(event: RuntimeCompanyEvent) -> list[str]:
         ("Department", department),
         (
             "Status",
-            format_status_badge(payload.get("status"))
-            if payload.get("status")
-            else None,
+            (
+                format_status_badge(payload.get("status"))
+                if payload.get("status")
+                else None
+            ),
         ),
         ("Stage", payload.get("stage")),
         ("Environment", payload.get("environment")),
@@ -154,6 +156,8 @@ def _detail_lines(event: RuntimeCompanyEvent) -> list[str]:
         details.append(
             f"URL: {payload.get('deploy_url') or payload.get('deployed_url')}"
         )
+    if payload.get("warning"):
+        details.append(f"Warning: {payload.get('warning')}")
     if payload.get("error"):
         details.append(f"Error: {payload.get('error')}")
     return details

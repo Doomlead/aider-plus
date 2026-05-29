@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping, Optional, Set
 
 from aider.company.events import CompanyEvent, EventBus
+from aider.company.runtime import CompanyRunRequest, RunExecutor, run_company_task
+from aider.company.schemas import CompanyTask
 from aider.company.surface_messages import format_runtime_event_message
 
 HIGH_PRIORITY_EVENT_TYPES = {
@@ -60,12 +62,15 @@ class ThinAdapter:
         forward: EventForwarder | None = None,
         input_handler: InputHandler | None = None,
         event_formatter: EventFormatter | None = None,
+        runtime_executor: RunExecutor | None = None,
     ):
         self.event_bus = event_bus
         self.forward = forward
         self.input_handler = input_handler
         self.event_formatter = event_formatter or format_runtime_event_message
+        self.runtime_executor = runtime_executor
         self._unsubscribe: Callable[[], None] | None = None
+        self._task_counter = 0
 
     def normalize_message(self, raw: Any, **overrides: Any) -> AdapterMessage:
         """Normalize string/dict/object transport payloads into AdapterMessage."""
@@ -187,10 +192,56 @@ class ThinAdapter:
         self._unsubscribe = bus.subscribe(handler, replay=replay)
         return self._unsubscribe
 
+    def build_company_run_request(self, message: AdapterMessage) -> CompanyRunRequest:
+        """Convert normalized adapter input into the shared runtime contract."""
+
+        self._task_counter += 1
+        session_id = message.session_id or self.session_id_for(
+            channel_id=message.channel_id,
+            thread_id=message.thread_id,
+            user_id=message.user_id,
+            repo_path=message.repo_path,
+        )
+        task = CompanyTask(
+            task_id=f"{session_id}:{self._task_counter}",
+            origin=message.user_id or message.surface,
+            target="engineering",
+            artifact_type="raw_prompt",
+            payload=message.text,
+            blocking=False,
+            context={"surface": message.surface, **dict(message.metadata)},
+        )
+        metadata = {
+            "user_id": message.user_id,
+            "channel_id": message.channel_id,
+            "thread_id": message.thread_id,
+            "repo_path": message.repo_path,
+            **dict(message.metadata),
+        }
+        return CompanyRunRequest(
+            surface=message.surface,
+            session_id=session_id,
+            task=task,
+            metadata={
+                key: value for key, value in metadata.items() if value is not None
+            },
+        )
+
+    async def run_runtime_input(self, message: AdapterMessage) -> Any:
+        """Run normalized input through ``run_company_task`` when configured."""
+
+        if self.runtime_executor is None:
+            return message
+        return await run_company_task(
+            self.build_company_run_request(message), execute=self.runtime_executor
+        )
+
     async def handle_user_input(self, raw: Any, **overrides: Any) -> Any:
         """Normalize inbound user input and delegate it to the shared runtime."""
 
         message = self.normalize_message(raw, **overrides)
+        if self.runtime_executor is not None:
+            return await self.run_runtime_input(message)
         if not self.input_handler:
             return message
         result = self.input_handler(message)

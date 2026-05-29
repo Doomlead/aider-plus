@@ -177,6 +177,104 @@ def test_matrix_adapter_bus_forwarding_does_not_run_workflow_logic():
     assert "⚠️ Needs Review" in messages[0]
 
 
+def test_slack_and_matrix_lifecycle_events_use_shared_surface_messages():
+    from aider.company.surface_messages import format_runtime_event_message
+
+    lifecycle = LifecycleEvent(
+        session_id="lifecycle-test",
+        payload={
+            "name": "reviewer_forced_approval",
+            "task_id": "task-1",
+            "warning": "Forced approval due to iteration limit",
+            "severity": "warning",
+        },
+        severity="warning",
+    )
+
+    for adapter_cls in (SlackAdapter, MatrixAdapter):
+        messages = []
+        adapter = adapter_cls(forward=messages.append)
+
+        rendered = asyncio.run(adapter.send_event(lifecycle))
+
+        assert rendered == format_runtime_event_message(lifecycle)
+        assert messages == [rendered]
+        assert rendered.startswith("⚠️ **Reviewer Forced Approval**")
+        assert "Warning: Forced approval due to iteration limit" in rendered
+
+
+def test_slack_adapter_inbound_input_uses_runtime_contract(monkeypatch):
+    calls = []
+
+    async def fake_run(request, *, execute):
+        calls.append(request)
+        return await execute(request.task, {"surface": request.surface})
+
+    async def runtime_executor(task, metadata):
+        return {
+            "summary": task.payload,
+            "task_id": task.task_id,
+            "surface": metadata["surface"],
+        }
+
+    monkeypatch.setattr("aider.integrations.adapters.run_company_task", fake_run)
+    adapter = SlackAdapter(runtime_executor=runtime_executor)
+
+    result = asyncio.run(
+        adapter.handle_user_input(
+            {
+                "event": {
+                    "text": "  ship through runtime  ",
+                    "user": "U-runtime",
+                    "channel": "C-runtime",
+                    "thread_ts": "456.7",
+                }
+            }
+        )
+    )
+
+    assert len(calls) == 1
+    assert calls[0].surface == "slack"
+    assert calls[0].session_id == "slack:456.7"
+    assert calls[0].task.target == "engineering"
+    assert calls[0].task.artifact_type == "raw_prompt"
+    assert calls[0].task.payload == "ship through runtime"
+    assert result["summary"] == "ship through runtime"
+    assert result["surface"] == "slack"
+
+
+def test_matrix_adapter_inbound_input_uses_runtime_contract(monkeypatch):
+    calls = []
+
+    async def fake_run(request, *, execute):
+        calls.append(request)
+        return await execute(request.task, {"surface": request.surface})
+
+    async def runtime_executor(task, metadata):
+        return {"summary": task.payload, "surface": metadata["surface"]}
+
+    monkeypatch.setattr("aider.integrations.adapters.run_company_task", fake_run)
+    adapter = MatrixAdapter(runtime_executor=runtime_executor)
+
+    result = asyncio.run(
+        adapter.handle_user_input(
+            {
+                "room_id": "!runtime:example.org",
+                "event_id": "$runtime",
+                "sender": "@runtime:example.org",
+                "content": {"body": "  run through COO/runtime  "},
+            }
+        )
+    )
+
+    assert len(calls) == 1
+    assert calls[0].surface == "matrix"
+    assert calls[0].session_id == "matrix:$runtime"
+    assert calls[0].task.payload == "run through COO/runtime"
+    assert calls[0].metadata["channel_id"] == "!runtime:example.org"
+    assert result == {"summary": "run through COO/runtime", "surface": "matrix"}
+
+
 def test_cli_adapter_flag_accepts_repeatable_thin_adapter_choices():
     from aider.args import get_parser
 
